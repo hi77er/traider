@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TRAIDER — Dashboard</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header>
+    <h1>📈 TRAIDER Dashboard</h1>
+    <div class="header-actions">
+      <button id="open-global-settings" class="ghost small" onclick="openGlobalSettings()" title="Edit global (non-strategy) settings in .env">⚙ Global Settings</button>
+    </div>
+  </header>
+
+  <main class="page">
+    <!-- ── Strategy header bar (whole dashboard is scoped to this) ── -->
+    <div class="card strategy-bar" id="strategy-bar">
+      <div id="header-summary" class="header-summary" hidden></div>
+      <div class="strategy-bar-main">
+        <span class="strategy-bar-title">Strategy</span>
+        <select id="strategy-select" onchange="onStrategySelect()" title="Switch the active strategy — reloads the dashboard"></select>
+        <span id="strategy-context" class="chip strategy-chip"></span>
+        <span id="strategy-msg" class="muted"></span>
+      </div>
+      <div class="strategy-bar-actions">
+        <div id="strategy-new-row" class="strategy-new-row" hidden>
+          <input id="strategy-new-name" type="text" placeholder="New strategy name" />
+          <button id="strategy-create-btn" class="primary small" onclick="createTopStrategy()">Create</button>
+          <button class="ghost small" onclick="cancelTopNew()">Cancel</button>
+        </div>
+        <div id="strategy-rename-row" class="strategy-new-row" hidden>
+          <input id="strategy-rename-name" type="text" placeholder="New strategy name" autocomplete="off" spellcheck="false" />
+          <button id="strategy-rename-btn" class="primary small" onclick="renameTopStrategy()">Rename</button>
+          <button class="ghost small" onclick="cancelTopRename()">Cancel</button>
+        </div>
+        <button id="strategy-add" class="ghost small" onclick="toggleTopNew()" title="Create a new strategy">＋ New</button>
+        <button id="strategy-rename" class="ghost small" onclick="toggleTopRename()" title="Rename the current strategy">✏ Rename</button>
+        <button id="strategy-delete" class="ghost small danger" onclick="deleteActiveStrategy()" title="Delete the current strategy">🗑 Delete</button>
+      </div>
+      <div class="strategy-rules-row">
+        <!-- Left: live strategy signals info (moved out of the dashboard column). -->
+        <section id="signals" class="strategy-signals"></section>
+        <!-- Right: the active strategy's rule summary. -->
+        <div class="strategy-rules-section">
+          <h3 class="strategy-section-title">Rules</h3>
+          <div id="strategy-rules" class="strategy-rules" hidden></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="split">
+      <!-- ── Left: dataset / market data ───────────────────────────── -->
+      <section class="left">
+        <!-- State A: no dataset for this strategy's instrument yet -->
+        <section id="no-data" class="card center" hidden>
+          <h2>No historical data yet</h2>
+          <p id="download-desc">Download the initial history for the active strategy's asset.</p>
+          <button id="download-btn" class="primary" onclick="startBackfill()">⬇ Download initial historical data</button>
+          <p id="download-msg" class="muted"></p>
+        </section>
+
+        <!-- State B: dataset present (left: signals + chart) -->
+        <section id="dashboard" hidden>
+          <div id="chart" class="card">
+            <h2>Price History</h2>
+            <div id="indicator-toggles" class="indicator-toggles"></div>
+            <div id="chart-canvas"></div>
+            <div id="indicator-panes"></div>
+          </div>
+
+          <!-- Backtest: run against the latest saved strategy/rules -->
+          <div id="backtest" class="card">
+            <div class="bt-head">
+              <h2>Backtest</h2>
+              <div class="bt-actions">
+                <span id="bt-spinner" class="bt-spinner" title="Backtest running…" hidden></span>
+                <button id="bt-report" class="ghost small" onclick="openBacktestReport()" hidden
+                        title="Open the full report in a new tab">📊 Open full report</button>
+                <button id="bt-run" class="primary small" onclick="runBacktest()">▶ Run backtest</button>
+              </div>
+            </div>
+            <p id="bt-msg" class="muted"></p>
+            <div id="bt-datawarn" class="bt-warn" hidden></div>
+            <div id="bt-norules" class="bt-warn" hidden>
+              No rules are set for this strategy, so there is nothing to backtest yet — add at least one
+              enabled <b>BUY</b> or <b>SELL</b> rule in the Rules panel and save it, then run the backtest.
+            </div>
+            <div id="bt-guide" class="bt-guide" hidden>
+              <h4>How it works?</h4>
+              <ol>
+                <li><b>Configure the instrument</b> — pick the symbol, historical period and bar size in
+                  <b>Strategy Configuration</b> and press <b>💾 Save</b>. If no data exists yet, download it from the
+                  “Download historical data” panel.</li>
+                <li><b>Define the logic</b> — in the <b>Rules</b> panel add <b>+ Buy</b> / <b>+ Sell</b> conditions on the
+                  price or indicators (SMA, RSI, …) and press <b>💾 Save</b>. Rules reference features that must be
+                  enabled in Strategy Configuration.</li>
+                <li><b>Preview signals</b> — the <b>Strategy Signals</b> section in the strategy header shows when the latest
+                  bar fires BUY/SELL under the saved rules.</li>
+                <li><b>Run the backtest</b> — press <b>▶ Run backtest</b>. It replays the saved rules over the whole
+                  dataset with next-bar fills, slippage and commission.</li>
+                <li><b>Check the Gate</b> — the report must pass every Gate threshold (Sharpe, max drawdown, win rate,
+                  worst week). If it fails, tweak the rules or feature config, save, and run again — iterate until the
+                  strategy passes on data it has not overfit.</li>
+              </ol>
+              <p class="muted note">The backtest always uses the <em>saved</em> rules/config — save before running.</p>
+            </div>
+            <div id="bt-body" hidden>
+              <div id="bt-gate" class="bt-gate"></div>
+              <div id="bt-metrics" class="bt-metrics"></div>
+              <p id="bt-notes" class="muted bt-notes"></p>
+              <h4>Equity curve</h4>
+              <div id="bt-curve" class="bt-curve"></div>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <!-- ── Right: Configuration, Rules, data panels ── -->
+      <aside class="right">
+        <!-- Per-strategy Configuration -->
+        <section class="card collapsible" id="config-card">
+          <div class="card-head" onclick="toggleConfigPanel(event)" title="Collapse / expand configuration">
+            <button id="toggle-pconfig" class="ghost small" onclick="toggleConfigPanel(event)" title="Expand configuration">+</button>
+            <h2>Strategy Configuration</h2>
+            <div class="settings-actions" onclick="event.stopPropagation()">
+              <button id="save-pconfig" class="primary small" onclick="savePConfig()">💾 Save</button>
+            </div>
+          </div>
+          <div class="collapse-body" id="pconfig-body" hidden>
+            <p id="pconfig-msg" class="muted"></p>
+            <p class="muted note">Per-strategy settings for the active strategy (instrument, features, model
+              thresholds). <b>💾 Save</b> records them in this strategy's <code>config</code> object in the
+              JSON file; switching strategy reloads the whole dashboard in that strategy's context.
+              Risk limits live in the <b>Risk Management</b> panel below.</p>
+            <div id="pconfig-groups"></div>
+          </div>
+        </section>
+
+        <!-- Strategy Rules -->
+        <section class="card collapsible" id="rules-card">
+          <div class="card-head" onclick="toggleRules(event)" title="Collapse / expand strategy rules">
+            <button id="toggle-rules" class="ghost small" onclick="toggleRules(event)" title="Expand rules">+</button>
+            <h2>Rules<span id="rules-count"></span></h2>
+            <div class="settings-actions" onclick="event.stopPropagation()">
+              <button id="rules-add-buy" class="ghost small" onclick="addRule('BUY')" title="Add a BUY rule">+ Buy</button>
+              <button id="rules-add-sell" class="ghost small" onclick="addRule('SELL')" title="Add a SELL rule">+ Sell</button>
+              <button id="rules-reset" class="ghost small" onclick="resetRules()" title="Reset only the active strategy's rules to the default example (keeps other strategies)">↺ Default rules</button>
+              <button id="save-rules" class="primary small" onclick="saveRules()">💾 Save</button>
+            </div>
+          </div>
+          <div class="collapse-body" id="rules-body" hidden>
+            <p id="rules-msg" class="muted"></p>
+            <p class="muted note">Rule-based conditions for the active strategy (consumed by the future
+              <code>simple_model</code>). Stored with the strategy in
+              <code id="rules-file">strategies/active.json</code>. Each rule fires when its conditions hold; a
+              condition compares a feature to a number or to another feature.</p>
+            <div id="rules-list"></div>
+          </div>
+        </section>
+
+        <!-- Risk Management: limits that veto or size every signal (its own panel) -->
+        <section class="card collapsible" id="risk-card">
+          <div class="card-head" onclick="toggleRiskPanel(event)" title="Collapse / expand risk management">
+            <button id="toggle-risk" class="ghost small" onclick="toggleRiskPanel(event)"
+                    title="Expand risk management">+</button>
+            <h2>Risk Management</h2>
+            <div class="settings-actions" onclick="event.stopPropagation()">
+              <button id="save-risk" class="primary small" onclick="saveRiskConfig()">💾 Save</button>
+            </div>
+          </div>
+          <div class="collapse-body" id="risk-body" hidden>
+            <p id="risk-msg" class="muted"></p>
+            <p class="muted note">Every signal passes through these limits before an order is placed, and the
+              backtest replays the same rules so the Gate describes the system that will actually trade.
+              Stored with the strategy.</p>
+            <div id="risk-groups"></div>
+          </div>
+        </section>
+
+        <!-- Data panels: Historical Delta + Historical Data -->
+        <section id="right-panels" hidden>
+          <div class="card" id="delta-card">
+            <div class="delta-card-head">
+              <h2>Historical Delta</h2>
+              <div id="delta-actions" class="delta-actions"></div>
+            </div>
+            <div id="delta-body"><p class="muted">Checking dataset…</p></div>
+          </div>
+
+          <div class="card collapsible" id="hist-card">
+            <div class="card-head" onclick="toggleCollapse(this)" title="Collapse / expand">
+              <span class="card-toggle">+</span>
+              <h2>Historical Data</h2>
+            </div>
+            <div class="collapse-body" hidden>
+              <div id="table-wrap">
+                <table id="data-table">
+                  <thead>
+                    <tr><th>Date</th><th>Open</th><th>High</th><th>Low</th><th>Close</th><th>Volume</th></tr>
+                  </thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+              <div class="pager">
+                <button id="prev-btn" onclick="prevPage()">← Prev</button>
+                <span id="page-info" class="muted"></span>
+                <button id="next-btn" onclick="nextPage()">Next →</button>
+              </div>
+            </div>
+          </div>
+        </section>
+      </aside>
+    </div>
+  </main>
+
+  <!-- Global (.env) settings dialog -->
+  <div id="global-settings-backdrop" class="modal-backdrop" hidden>
+    <div class="modal modal-wide modal-scroll" role="dialog" aria-modal="true" aria-labelledby="global-settings-title">
+      <h3 id="global-settings-title">Global Settings (.env)</h3>
+      <p id="config-msg" class="muted"></p>
+      <p class="muted note">Infrastructure / global defaults written to <code>.env</code> on disk. Settings that
+        belong to a strategy (instrument, bar size, features, model thresholds, risk) live in the per-strategy
+        <b>Strategy Configuration</b> panel and are stored in the JSON. Most global settings apply on the next bot
+        restart. Secrets (<code>*_PASSWORD</code>, <code>*_API_KEY</code>…) are masked — leave the field empty to
+        keep the existing value.</p>
+      <div id="settings-fields"></div>
+      <div id="save-errors" class="save-errors" hidden></div>
+      <div class="modal-actions">
+        <button id="global-close" class="ghost" onclick="closeGlobalSettings()">Close</button>
+        <button id="reload-config" class="ghost" onclick="loadConfig()" title="Reload values from .env">↻ Reload</button>
+        <button id="save-config" class="primary" onclick="saveConfig()">💾 Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Instrument-change confirmation dialog -->
+  <div id="modal-backdrop" class="modal-backdrop" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <h3 id="modal-title">Are you sure?</h3>
+      <div id="modal-message" class="modal-message"></div>
+      <div class="modal-actions">
+        <button id="modal-cancel" class="ghost">No</button>
+        <button id="modal-confirm" class="primary">Yes</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Strategy delete confirmation dialog -->
+  <div id="delete-modal-backdrop" class="modal-backdrop" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="delete-modal-title">
+      <h3 id="delete-modal-title">Delete strategy?</h3>
+      <div id="delete-modal-message" class="modal-message"></div>
+      <label class="delete-confirm-label" for="delete-confirm-name">
+        Type the strategy name to confirm:
+      </label>
+      <input id="delete-confirm-name" type="text" autocomplete="off" spellcheck="false"
+             placeholder="strategy name" oninput="onDeleteNameInput()" />
+      <label class="delete-check-label" for="delete-data-check">
+        <input id="delete-data-check" type="checkbox" />
+        <span id="delete-data-text"></span>
+      </label>
+      <p id="delete-modal-error" class="muted" hidden></p>
+      <div class="modal-actions">
+        <button id="delete-cancel" class="ghost" onclick="cancelDeleteStrategy()">Cancel</button>
+        <button id="delete-confirm-btn" class="danger" disabled onclick="confirmDeleteStrategy()">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" hidden></div>
+
+  <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,57 @@
+# Docker build context.
+#
+# The documented build is `docker build -t traider .` — the context is the REPO
+# ROOT, because the Dockerfile copies `src/`. Docker only honours a
+# `.dockerignore` sitting at the context root, so THIS is the file that applies;
+# the one in `docker/` would only count for a build whose context is `docker/`,
+# which cannot work (no `src/` there). Keep the two in sync if that changes.
+#
+# Without this file the context included `.venv` (≈520 MB) on every build.
+
+# --- secrets: never in the context, never in the image -------------------
+.env
+.env.*
+!.env.example
+
+# --- docs / repo metadata: not needed inside the image -------------------
+.git
+.gitignore
+.github
+.vscode
+.idea
+docs
+README.md
+*.md
+
+# --- local environments --------------------------------------------------
+.venv
+venv
+ENV
+env
+
+# --- runtime data & generated output (large, regenerated locally) --------
+data/
+logs/
+tmp/
+*.db
+*.sqlite3
+*.log
+
+# --- Python caches -------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pytype/
+.coverage
+htmlcov/
+
+# --- OS / editor noise ---------------------------------------------------
+.DS_Store
+*.swp
+*.swo
+*~

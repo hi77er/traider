@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TRAIDER — Backtest report</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body class="report-page">
+  <header>
+    <h1>📊 TRAIDER — Backtest report</h1>
+    <div class="header-actions">
+      <span id="rp-strategy" class="chip"></span>
+    </div>
+  </header>
+
+  <main class="report-main">
+    <!-- ── Run selector: every stored run of this strategy, newest first ── -->
+    <aside class="card report-menu">
+      <a id="rp-back" class="rp-backlink" href="/">← Back to dashboard</a>
+      <h2>Runs</h2>
+      <p class="muted note">Every recorded backtest of this strategy, newest first. Click one to
+        open its full report.</p>
+      <div id="rp-runs" class="rp-runs"></div>
+    </aside>
+
+    <section class="report-body">
+      <div id="rp-error" class="bt-warn" hidden></div>
+
+      <div id="rp-empty" class="card center" hidden>
+        <h2>Nothing to report yet</h2>
+        <p id="rp-empty-msg" class="muted"></p>
+        <a class="rp-backlink" href="/">← Back to the dashboard</a>
+      </div>
+
+      <div id="rp-content" hidden>
+        <!-- ── Verdict + headline numbers ── -->
+        <div class="card">
+          <div class="rp-topbar">
+            <div class="rp-head">
+              <h2 class="rp-title" id="rp-title">—</h2>
+              <span id="rp-gate" class="rp-verdict"></span>
+              <p class="muted rp-sub" id="rp-sub"></p>
+            </div>
+            <button id="rp-delete" class="ghost small" hidden
+                    title="Delete this stored report from disk">🗑 Delete report</button>
+          </div>
+          <div id="rp-kpis" class="bt-metrics"></div>
+          <p id="rp-notes" class="muted bt-notes"></p>
+        </div>
+
+        <!-- ── Provenance: what produced this run (collapsed by default) ── -->
+        <div class="card collapsible" id="rp-what-card">
+          <div class="card-head" id="rp-what-head" title="Expand / collapse what was tested">
+            <button id="rp-what-toggle" class="ghost small" title="Expand what was tested">+</button>
+            <h2>What was tested</h2>
+          </div>
+          <div class="collapse-body" id="rp-what-body" hidden>
+            <div id="rp-inputs"></div>
+          </div>
+        </div>
+
+        <!-- ── Risk layer: how positions were actually ended (collapsed by default) ── -->
+        <div class="card collapsible" id="rp-risk-card">
+          <div class="card-head" id="rp-risk-head" title="Expand / collapse the risk layer">
+            <button id="rp-risk-toggle" class="ghost small" title="Expand the risk layer">+</button>
+            <h2>Risk layer</h2>
+          </div>
+          <div class="collapse-body" id="rp-risk-body" hidden>
+            <p class="muted note" id="rp-risk-note"></p>
+            <div id="rp-risk-tiles" class="bt-metrics"></div>
+            <div class="rp-table-wrap"><table class="rp-table" id="rp-exits"></table></div>
+            <div id="rp-vetoed-wrap">
+              <h4 class="rp-sub-head">Entries refused by the circuit breaker</h4>
+              <div class="rp-table-wrap"><table class="rp-table" id="rp-vetoed"></table></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── Equity vs buy & hold ── -->
+        <div class="card">
+          <h2>Equity vs buy &amp; hold</h2>
+          <div id="rp-equity" class="rp-chart"></div>
+          <div class="rp-legend">
+            <span><i class="sw sw-strat"></i> Strategy</span>
+            <span id="rp-legend-bench"><i class="sw sw-bench"></i> Buy &amp; hold</span>
+            <span id="rp-excess" class="muted"></span>
+          </div>
+        </div>
+
+        <!-- ── Drawdown ── -->
+        <div class="card">
+          <h2>Drawdown</h2>
+          <div id="rp-drawdown" class="rp-chart rp-chart-sm"></div>
+          <p class="muted note" id="rp-dd-note"></p>
+        </div>
+
+        <!-- ── Monthly returns ── -->
+        <div class="card">
+          <h2>Monthly returns</h2>
+          <div class="rp-table-wrap"><table class="rp-table" id="rp-monthly"></table></div>
+        </div>
+
+        <div class="rp-two">
+          <div class="card">
+            <h2>Yearly returns</h2>
+            <div class="rp-table-wrap"><table class="rp-table" id="rp-yearly"></table></div>
+          </div>
+          <div class="card">
+            <h2>Trade return distribution</h2>
+            <div id="rp-dist" class="rp-dist"></div>
+          </div>
+        </div>
+
+        <!-- ── Trades ── -->
+        <div class="card">
+          <h2>Trades</h2>
+          <p class="muted note" id="rp-trades-note"></p>
+          <div class="rp-table-wrap rp-table-tall"><table class="rp-table" id="rp-trades"></table></div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- Confirmation dialog for destructive actions (report deletion). -->
+  <div id="rp-confirm-backdrop" class="modal-backdrop" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="rp-confirm-title">
+      <h3 id="rp-confirm-title">Delete this report?</h3>
+      <div id="rp-confirm-message" class="modal-message"></div>
+      <div class="modal-actions">
+        <button id="rp-confirm-cancel" class="ghost">Cancel</button>
+        <button id="rp-confirm-ok" class="primary">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" hidden></div>
+
+  <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+  <script src="/static/report.js"></script>
+</body>
+</html>

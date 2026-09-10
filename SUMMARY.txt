@@ -1,0 +1,353 @@
+╔════════════════════════════════════════════════════════════════════════════╗
+║                     TRAIDER TRADING BOT - MASTER PLAN                      ║
+║                                                                            ║
+║  A Comprehensive Python AI Trading Bot for AAPL (Apple) Stock            ║
+║  OpenBB Platform (Data) • Interactive Brokers (Orders) • AWS Lightsail    ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+
+PROJECT OVERVIEW
+════════════════════════════════════════════════════════════════════════════
+
+📊 Bot Purpose:     Automated AAPL (Apple) stock trading every 4 hours
+🤖 AI Model:        Logistic regression (start simple, iterate later)
+💾 State:           DynamoDB (managed, durable)
+🌐 Deployment:      AWS Lightsail + Docker container
+📱 Dashboard:       Web Portal (progress, charts, config, alerts)
+🧪 Validation:      2+ years backtesting + 1-2 weeks paper trading
+
+
+10 CORE MODULES
+════════════════════════════════════════════════════════════════════════════
+
+1. CONFIG          → Central settings: instrument, trading & data periods, features, risk (all via .env)
+2. DATA LAYER      → Fetch historical candles & live prices from OpenBB Platform
+3. FEATURES        → Transform price → AI-friendly numbers (SMA, RSI, ATR)
+4. MODEL/SIGNAL    → AI core: features → BUY/SELL/HOLD + confidence
+5. RISK MGMT       → Position sizing, circuit breaker, risk validator
+6. EXECUTION       → Place orders on IBKR via Web API (data comes from OpenBB)
+7. STATE TRACKER   → DynamoDB table (positions, P&L, trades)
+8. SCHEDULER       → Main loop every 4 hours (APScheduler)
+9. LOGGING/WEB PORTAL → Structured logs + dashboard (progress, charts, config, alerts)
+10. BACKTESTER     → Validate strategy on historical data before live
+
+
+BUILD PHASES
+════════════════════════════════════════════════════════════════════════════
+
+Phase 1: Setup (Days 1-2, 4 tasks)
+  ✓ Directory structure, dependencies, Dockerfile, AWS docs
+  
+Phase 2: Core Modules (Days 3-8) — COMPLETED
+  ✓ Config, data fetchers, features
+  ➜ state tracker, logging, alerts — MOVED to Phase 5
+  
+Phase 3: Strategy (Days 9-12) — COMPLETED
+  ✓ Backtest framework (long/flat + optional shorts), rule-based model
+  ✓ Report generator — COMPLETE (standalone /report page, run menu, full-fidelity runs)
+  ➜ Gate run — MOVED to Phase 5
+     (Gate check moved to Phase 5: Sharpe ≥ 1.0, DD ≤ 25%, WR ≥ 55%)
+  
+Phase 4: Risk & Execution (Days 13-15, 5 tasks)  ← NEXT
+  ✓ Position sizing, circuit breaker, order execution, retries
+  
+Phase 5: Deferred — Core & Backtest Completion (moved from Phases 2 & 3)
+  ✓ DONE: report generator + standalone report page (/report, run menu, full trade list)
+  ➜ State (DynamoDB schema + tracker), structured logging, alert feed,
+    IBKR connectivity check, model training (only if the ML path is in scope)
+  ➜ GATE CHECK: Backtest metrics (Sharpe ≥ 1.0, DD ≤ 25%, WR ≥ 55%)
+  ➜ Parameter sensitivity (multi-run sweep) — split out of the report task
+  
+Phase 6: Integration (Days 16-17, 3 tasks)
+  ✓ Main scheduler loop, orchestrator, entry point
+  
+Phase 7: Testing (Days 18-21, 4 tasks)
+  ✓ Unit tests, integration tests, paper trading (1-2 weeks)
+  ✓ GATE CHECK: Zero crashes, P&L accuracy ±0.1%
+  
+Phase 8: Deployment (Days 22-25, 5 tasks)
+  ✓ Docker build, AWS Lightsail setup, monitoring, backups
+  
+Phase 9: Live Trading (Ongoing, 3 tasks)
+  ✓ Go live (1% position), monitoring, monthly retraining
+
+
+TIMELINE
+════════════════════════════════════════════════════════════════════════════
+
+Total Tasks:        41 (all tracked in SQL database)
+Development Time:   25-30 days active coding
+Paper Trading:      1-2 weeks (concurrent with Phase 7-8)
+Time to Live:       5-6 weeks calendar time
+Estimated Effort:   200-250 developer hours
+
+
+ARCHITECTURE
+════════════════════════════════════════════════════════════════════════════
+
+┌─────────────────────────────────────────────┐
+│  CONFIG (credentials, intervals, limits)    │
+└────────────┬────────────────────────────────┘
+             │
+    ┌────────┴────────┐
+    │                 │
+    ▼                 ▼
+┌──────────┐  ┌─────────────┐
+│   DATA   │  │  FEATURES   │  ← Same features in backtest & live
+│  LAYER   │  │ ENGINEERING │
+│ (OpenBB) │  │             │
+└────┬─────┘  └──────┬──────┘
+     │               │
+     └───────┬───────┘
+             │
+             ▼
+       ┌─────────────┐
+       │   MODEL     │  (trained offline, versioned)
+       │  /SIGNAL    │
+       └──────┬──────┘
+              │
+              ▼
+       ┌──────────────────┐
+       │  RISK MANAGER    │  (vetoes risky signals)
+       │ • Position size  │
+       │ • Circuit break  │
+       └────────┬─────────┘
+                │
+                ▼
+       ┌──────────────────┐
+       │  EXECUTION       │  (only module placing real orders)
+       │  • IBKR API      │
+       │  • Retry logic   │
+       └────────┬─────────┘
+                │
+                ▼
+       ┌──────────────────┐
+       │  STATE TRACKER   │  (DynamoDB, durable)
+       │  • Positions     │
+       │  • P&L           │
+       │  • Trade history │
+       └──────────────────┘
+
+SCHEDULER (APScheduler)
+  Every 4 hours: Data → Features → Signal → Risk Check → Execute → Update State
+  
+LOGGING & WEB PORTAL
+  Log every decision; the Web Portal surfaces progress, charts, config, alerts
+
+
+DEPENDENCIES & EXECUTION ORDER
+════════════════════════════════════════════════════════════════════════════
+
+CRITICAL PATH (longest chain):
+  setup-env → setup-deps → config-create → config-validation
+    → data-historical → feature-create → backtest-framework
+    → model-simple → model-training → backtest-strategy
+    → test-unit → test-integration → test-paper-trading → test-load
+    → deploy-docker-build → deploy-aws-setup → deploy-monitoring
+    → live-go-live
+
+PARALLELIZATION POINTS:
+  • After config-validation: data, state, logging can run in parallel
+  • While backtesting: risk & execution modules can be built
+  • Paper trading runs parallel to Docker/AWS setup (Phase 7-8)
+  • Load tests can run parallel to paper trading
+
+
+SUCCESS GATES
+════════════════════════════════════════════════════════════════════════════
+
+After Phase 5 (Backtest):
+  ☐ Sharpe ratio ≥ 1.0
+  ☐ Max drawdown ≤ 25%
+  ☐ Win rate ≥ 55%
+  ☐ No week with > 5% loss
+
+After Phase 7 (Paper Trading):
+  ☐ 1-2 weeks without crash
+  ☐ P&L accuracy within 0.1%
+  ☐ Order execution 90%+ on first attempt
+  ☐ All alerts working
+  ☐ Logging complete
+
+After Phase 8 (Deployment):
+  ☐ Docker runs locally
+  ☐ Lightsail deployment stable
+  ☐ Health checks passing
+  ☐ Backups completing daily
+
+
+RISK MITIGATION
+════════════════════════════════════════════════════════════════════════════
+
+✓ Backtest before live (validates edge exists)
+✓ Paper trading 1-2 weeks (catches bugs in real environment)
+✓ DynamoDB state tracking (survives crashes)
+✓ Circuit breaker (stops trading after N losses)
+✓ Position sizing (never risk > configured limit)
+✓ Comprehensive logging (debug any issue post-facto)
+✓ Web Portal alerts (see immediately if something breaks)
+✓ Start with 1% position (easy to exit if needed)
+
+
+RESOURCE REQUIREMENTS
+════════════════════════════════════════════════════════════════════════════
+
+Accounts:
+  • Interactive Brokers (paper or real, free to open) — for order execution
+  • OpenBB Platform (open-source, free) — for market data
+  • AWS account (~$15-50/month for Lightsail)
+  • Web Portal (FastAPI dashboard — free, open-source)
+
+Developer:
+  • 1 FTE for 5-6 weeks
+  • 200-250 hours total
+
+Infrastructure:
+  • Laptop for local development (already have)
+  • Docker (free, open-source)
+  • Python 3.11+ (free)
+  • All libraries free/open-source
+
+
+MONITORING POST-LIVE
+════════════════════════════════════════════════════════════════════════════
+
+Daily:
+  ☐ Bot running? (check AWS Lightsail)
+  ☐ Error logs? (check CloudWatch)
+  ☐ Did it trade? (check IBKR account)
+  ☐ P&L reasonable? (±2% of expected)
+
+Weekly:
+  ☐ Win rate this week
+  ☐ Sharpe ratio this week
+  ☐ Compare to backtest expectations
+
+Monthly:
+  ☐ Retrain model on latest data
+  ☐ Backtest new model before deployment
+  ☐ Check for market regime changes
+  ☐ Update risk limits if needed
+
+
+PERFORMANCE TARGETS
+════════════════════════════════════════════════════════════════════════════
+
+Backtest Targets:
+  Sharpe ratio:        ≥ 1.0
+  Max drawdown:        ≤ 25%
+  Win rate:            ≥ 55%
+  Avg win / avg loss:  ≥ 1.5
+
+Live Trading Targets:
+  Sharpe ratio:        ≥ 1.2 (more conservative in live)
+  Win rate:            ≥ 55%
+  Max drawdown:        ≤ 20%
+  Monthly return:      ≥ 2%
+
+Code Quality Targets:
+  Unit test coverage:  ≥ 80%
+  Bugs in paper trade: 0 (critical)
+  Uptime:              ≥ 99%
+
+
+DOCUMENTATION
+════════════════════════════════════════════════════════════════════════════
+
+Generated Documents:
+  1. TRAIDER_PLAN.md           → Full architectural design
+  2. TIMELINE.md               → Detailed execution timeline
+  3. QUICKSTART.md             → TL;DR for developers
+  4. DEPENDENCY_GRAPH.md       → Task dependencies & parallel work
+  5. SUMMARY.txt               → This file (overview)
+
+
+NEXT STEPS
+════════════════════════════════════════════════════════════════════════════
+
+1. Read QUICKSTART.md (15 min) to understand the overall architecture
+2. Read TRAIDER_PLAN.md (30 min) for detailed module specifications
+3. Review DEPENDENCY_GRAPH.md (10 min) to understand build order
+4. Begin Phase 1: Setup
+   - Create directory structure
+   - Install dependencies
+   - Build Dockerfile
+5. Track progress in SQL database (all 41 tasks with dependencies)
+
+
+KEY DESIGN DECISIONS
+════════════════════════════════════════════════════════════════════════════
+
+✓ Polling (4-hour intervals) vs Websocket
+  → Polling: simpler, no persistent connection, perfect for non-day-trading
+
+✓ DynamoDB (managed) vs PostgreSQL
+  → DynamoDB: managed, durable, scales without ops; supports PITR and export to S3 for archival
+
+✓ OpenBB Platform (data) + IBKR (execution)
+  → OpenBB aggregates market data providers behind one SDK (free providers, no broker auth);
+    IBKR kept only for order placement since OpenBB cannot execute trades
+
+✓ Simple AI (Logistic Regression) vs Neural Nets
+  → Simple: fast, debuggable, good edge, upgrade later if needed
+
+✓ Backtest before live (non-negotiable)
+  → Validates strategy has edge, catches bugs, de-risks real money
+
+✓ Docker + AWS Lightsail
+  → Reproducible, managed, cheap (~$15-20/month), auto-scaling
+
+
+COMMON PITFALLS TO AVOID
+════════════════════════════════════════════════════════════════════════════
+
+❌ Hardcoding credentials anywhere
+   → Use .env + AWS Secrets Manager
+
+❌ Skipping backtesting
+   → Backtest everything before live (non-negotiable)
+
+❌ Starting with huge positions
+   → Start with 1% of capital, prove yourself first
+
+❌ Ignoring comprehensive logging
+   → You'll need logs to debug issues months later
+
+❌ Assuming perfect execution
+   → Network fails, orders rejected, build retry logic
+
+❌ Skipping paper trading
+   → 1-2 weeks on paper catches 80% of bugs before real money
+
+
+GETTING HELP
+════════════════════════════════════════════════════════════════════════════
+
+Resources:
+  • OpenBB Platform Docs: https://docs.openbb.co/platform
+  • OpenBB GitHub: https://github.com/OpenBB-finance/OpenBB
+  • IBKR Web API Docs: https://www.interactivebrokers.com/en/trading/web-api
+  • Client Portal Gateway: https://github.com/InteractiveBrokers/cpapi-web-gateway
+  • APScheduler Docs: https://apscheduler.readthedocs.io/
+  • SQLAlchemy Docs: https://docs.sqlalchemy.org/
+  • Pytest Docs: https://docs.pytest.org/
+
+Key Contacts:
+  • IBKR Support: support.interactivebrokers.com
+  • AWS Support: console.aws.amazon.com/support
+
+
+═══════════════════════════════════════════════════════════════════════════════
+
+READY TO START?
+
+→ Print the planning documents
+→ Read QUICKSTART.md (start here)
+→ Begin Phase 1: Setup (create directories, dependencies)
+→ Target: Have empty bot structure by end of Day 1
+
+Version: 1.0 - Draft Plan Ready to Execute
+Last Updated: 2026-08-20
+Status: ✓ All 41 Tasks Planned, Dependency Graph Complete, Ready to Build
+
+═══════════════════════════════════════════════════════════════════════════════

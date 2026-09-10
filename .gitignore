@@ -1,0 +1,86 @@
+# Environment
+# The real config is never committed; the TEMPLATE is. Both Dockerfiles copy
+# .env.example and the docs tell users to copy it, so excluding it would make a
+# fresh clone unusable.
+.env
+.env.local
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+# NOTE: `venv/` does NOT match `.venv` — the dot-prefixed dir needs its own rule.
+# Without it, `.venv/bin` (incl. a 27 MB ruff binary) leaks in, because the
+# `lib/` pattern below happens to cover `.venv/lib` but nothing else.
+venv/
+.venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Runtime data (fetched market data / cache)
+.cache/
+data/
+
+# Database
+*.db
+*.sqlite3
+traider.db
+
+# Logs
+logs/
+*.log
+
+# Backtest output (full runs + generated reports) lives under
+# data/backtest_results/<strategy>/, which the "Runtime data" rule above already
+# ignores. There is deliberately no separate backtest/reports/ tree.
+
+# Model files
+models/
+*.pkl
+*.joblib
+
+# Temporary
+tmp/
+temp/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pytype/
+.coverage
+htmlcov/
+
+# AWS & Deployment
+.aws/
+*.pem
+
+# Docker
+docker-compose.override.yml

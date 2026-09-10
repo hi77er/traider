@@ -1,0 +1,106 @@
+# Multi-stage Dockerfile for TRAIDER with IBKR Client Portal Gateway
+
+# Stage 1: Base image with Java (IBKR Gateway requires Java 11+)
+FROM debian:bookworm-slim AS base
+
+# Set environment variables
+# ENV DEBIAN_FRONTEND=noninteractive
+# ENV JAVA_HOME=/usr/lib/jvm/java-11-openjdk-amd64
+ENV DEBIAN_FRONTEND=noninteractive
+ENV JAVA_HOME=/usr/lib/jvm/default-java
+
+# Install system dependencies
+# RUN apt-get update && apt-get install -y \
+#     openjdk-11-jdk \
+#     openjdk-11-jre \
+#     python3.11 \
+#     python3.11-venv \
+#     python3.11-dev \
+#     python3-pip \
+#     curl \
+#     wget \
+#     git \
+#     apt-utils \
+#     && rm -rf /var/lib/apt/lists/*
+# Install system dependencies using Debian 12 native packages
+RUN apt-get update && apt-get install -y \
+    default-jre-headless \
+    python3 \
+    python3-venv \
+    python3-dev \
+    python3-pip \
+    curl \
+    wget \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Verify installation
+# RUN java -version
+RUN java -version && python3 --version
+
+# Stage 2: IBKR Client Portal Gateway
+FROM base AS gateway
+
+# Create IBKR gateway directory
+WORKDIR /opt/ibkr
+
+# Note: IBKR Client Portal Gateway needs to be downloaded from:
+# https://www.interactivebrokers.com/docs/web-api/api/web-api/quick-start
+# For now, create a placeholder. In production:
+# 1. Download gateway binary
+# 2. Copy to docker/gateway/ directory
+# 3. Uncomment lines below
+
+# COPY docker/gateway/gateway.tar.gz .
+# RUN tar -xzf gateway.tar.gz && rm gateway.tar.gz
+
+# Create startup script for gateway
+RUN mkdir -p /opt/ibkr/startup
+
+# Stage 3: Python bot environment
+FROM gateway AS bot
+
+# Create app directory
+WORKDIR /app
+
+# Create non-root user for security
+RUN useradd -m -u 1000 traider
+
+# Copy requirements
+COPY requirements.txt .
+
+# Create Python virtual environment
+RUN python3.11 -m venv /app/venv
+ENV PATH="/app/venv/bin:$PATH"
+
+# Upgrade pip and install packages
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir -r requirements.txt
+
+# Copy bot source code
+COPY src/ /app/src/
+COPY src/main.py /app/main.py
+COPY .env.example /app/.env.example
+
+# Copy entrypoint script (will create next)
+COPY docker/entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
+# Create non-root user and set permissions
+RUN chown -R traider:traider /app /opt/ibkr
+
+# Switch to non-root user
+USER traider
+
+# Expose ports
+EXPOSE 5000 8000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD python -c "import sys; sys.exit(0)" || exit 1
+
+# Entry point
+ENTRYPOINT ["/app/entrypoint.sh"]
+
+# Default command
+CMD ["python", "-u", "/app/main.py"]

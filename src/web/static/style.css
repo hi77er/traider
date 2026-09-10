@@ -1,0 +1,1187 @@
+:root {
+  --bg: #0e1116;
+  --card: #161a22;
+  --border: #262b36;
+  --text: #e6eaf2;
+  --muted: #8a93a6;
+  --accent: #4c8dff;
+  --green: #26a69a;
+  --red: #ef5350;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+}
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--border);
+}
+
+header h1 { font-size: 20px; margin: 0; }
+
+.header-actions { display: flex; align-items: center; gap: 10px; }
+
+.chip {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+main { max-width: 1500px; margin: 24px auto; padding: 0 16px; }
+
+/* Two-pane layout: dataset (left) + settings form (right) */
+.split {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+
+.left { min-width: 0; }
+
+.right { min-width: 0; }
+
+@media (max-width: 1080px) {
+  .split { grid-template-columns: 1fr; }
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 20px;
+}
+
+.card h2 { margin: 0 0 12px; font-size: 15px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+
+.center { text-align: center; }
+
+button.primary {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 12px 20px;
+  font-size: 15px;
+  cursor: pointer;
+}
+
+button.primary:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Uniform control height for every button on the dashboard */
+button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 34px;
+  vertical-align: middle;
+}
+
+.muted { color: var(--muted); font-size: 13px; }
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+}
+
+.stats > div {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.label { font-size: 11px; color: var(--muted); text-transform: uppercase; }
+
+#chart-canvas { width: 100%; }
+
+#table-wrap { max-height: 420px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; }
+
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+
+th, td { padding: 8px 12px; text-align: right; white-space: nowrap; }
+
+th { position: sticky; top: 0; background: var(--card); border-bottom: 1px solid var(--border); color: var(--muted); }
+
+th:first-child, td:first-child { text-align: left; }
+
+tbody tr:nth-child(even) { background: rgba(255, 255, 255, 0.02); }
+
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 12px;
+}
+
+.pager button {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.pager button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ---------- Settings (.env) form ---------- */
+.settings-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.settings-head > .settings-actions { margin-left: auto; }
+
+.settings-head h2 { margin: 0; }
+
+.settings-actions { display: flex; gap: 8px; }
+
+button.small { padding: 8px 14px; font-size: 13px; }
+
+button.ghost {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+button.ghost:hover { border-color: var(--accent); color: var(--accent); }
+
+#config-msg { margin: 4px 0 10px; }
+
+/* Validation feedback pinned just above the dialog's action buttons */
+.save-errors { margin: 2px 0 10px; font-size: 12.5px; line-height: 1.45; color: #ff9a94; }
+.save-errors.warn { color: #ffd28a; }
+.save-errors[hidden] { display: none; }
+
+.note { line-height: 1.5; margin: 0 0 16px; }
+
+.note code { background: var(--bg); padding: 1px 5px; border-radius: 4px; font-size: 12px; color: var(--muted); }
+
+#settings-fields { display: flex; flex-direction: column; gap: 14px; }
+
+.cfg-section {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px 4px;
+  margin: 0;
+  background: var(--bg);
+}
+
+.cfg-section legend {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--accent);
+  padding: 0 6px;
+}
+
+.field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
+
+.field label {
+  font-size: 12px;
+  color: var(--text);
+  font-weight: 500;
+}
+
+.field label.secret::after {
+  content: " 🔒";
+  font-size: 11px;
+}
+
+.field input, .field select {
+  background: var(--card);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  width: 100%;
+}
+
+.field input:focus, .field select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.field .hint {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.field input.invalid {
+  border-color: #ff9a94;
+}
+.field input.invalid:focus {
+  border-color: #ff9a94;
+}
+
+/* ---------- Collapsible cards ---------- */
+.card.collapsible { padding: 0; overflow: hidden; }
+
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  padding: 12px 16px;
+}
+
+.card-head > .settings-actions { margin-left: auto; }
+
+.card-head h2 { margin: 0; }
+
+.card-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 15px;
+  user-select: none;
+}
+
+.collapse-body { padding: 0 20px 20px; }
+/* The risk panel is collapsed by default; guard against any display override. */
+#risk-body[hidden] { display: none; }
+
+/* ---------- Chart indicator toggles + oscillator panes ---------- */
+.indicator-toggles { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px; }
+
+button.chip-ind {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 4px 11px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+button.chip-ind .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+
+button.chip-ind.active { border-color: var(--accent); color: var(--accent); background: rgba(76, 141, 255, 0.08); }
+
+.osc-pane {
+  margin-top: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  padding: 8px 10px 4px;
+}
+
+.osc-title { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 2px; }
+.osc-canvas { width: 100%; }
+
+.field input[type="checkbox"].switch {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 40px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--border);
+  border: 1px solid #3a4150;
+  position: relative;
+  cursor: pointer;
+  transition: background 0.15s ease;
+  flex: none;
+  padding: 0;
+  margin: 0;
+}
+
+.field input[type="checkbox"].switch::before {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #e6eaf2;
+  transition: left 0.15s ease;
+}
+
+.field input[type="checkbox"].switch:checked { background: var(--accent); }
+.field input[type="checkbox"].switch:checked::before { left: 20px; }
+
+/* ---------- Read-only fields (INSTRUMENT) ---------- */
+.field label.locked::after { content: " 🔒"; font-size: 11px; }
+.field.readonly input.ro { background: rgba(255, 255, 255, 0.02); color: var(--muted); cursor: not-allowed; }
+.hint.ro-note { color: var(--accent); }
+
+/* ---------- Collapsible settings ---------- */
+.settings-head { cursor: pointer; user-select: none; }
+
+/* ---------- Historical Delta panel ---------- */
+/* The status row (synced badge + coverage, or the warning variant) gets air
+   above and below it instead of butting against the card head / table title. */
+#delta-body .delta-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 14px 0 14px;
+}
+
+/* Delta card header: title on the left, its action button top-right (matches
+   the other panels). */
+#delta-card .delta-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+#delta-card .delta-card-head h2 { margin: 0; }
+/* The delta card is a plain .card (20px padding) while the other panels' Save
+   buttons live in a 16px-padded .card-head — pull the action in so it lines up
+   with those Save buttons. */
+.delta-actions { margin-left: auto; margin-right: -4px; }
+
+.delta-badge {
+  display: inline-block;
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  border: 1px solid var(--border);
+}
+
+.delta-badge.ok { color: #7ce7c2; border-color: rgba(38, 166, 154, 0.5); background: rgba(38, 166, 154, 0.12); }
+
+.delta-badge.warn { color: #ffd28a; border-color: rgba(255, 193, 7, 0.5); background: rgba(255, 193, 7, 0.1); }
+
+.delta-title { margin: 8px 0 6px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+
+.delta-table { max-height: 220px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; }
+
+.missing-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 12px; }
+
+.chip.date-chip { font-variant-numeric: tabular-nums; }
+
+#delta-msg { margin: 8px 0 0; }
+
+/* ---------- Confirm dialog (instrument change) ---------- */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 8, 12, 0.72);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 16px;
+}
+
+.modal-backdrop[hidden] { display: none; }
+
+.modal {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 22px 24px;
+  max-width: 480px;
+  width: 100%;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+}
+
+.modal-wide { max-width: 720px; }
+.modal-scroll { max-height: 84vh; overflow-y: auto; }
+
+.modal h3 { margin: 0 0 12px; font-size: 16px; color: var(--text); text-transform: none; }
+
+.modal-message { font-size: 13px; line-height: 1.55; color: var(--text); }
+
+.modal-message p { margin: 0 0 10px; }
+
+.modal-message p:last-child { margin-bottom: 0; }
+
+.modal-message .muted { font-size: 12px; }
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.modal-actions button { min-width: 100px; }
+
+/* danger (delete) buttons */
+button.danger {
+  color: #ff8a85;
+  border-color: rgba(255, 120, 115, 0.45);
+  background: rgba(255, 90, 86, 0.08);
+}
+button.danger:hover { border-color: #ff6b66; color: #ffb3b0; background: rgba(255, 90, 86, 0.16); }
+button.danger:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* strategy delete confirmation dialog */
+.delete-confirm-label {
+  display: block;
+  margin: 14px 0 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.delete-confirm-label code {
+  background: var(--bg);
+  color: var(--text);
+  padding: 1px 6px;
+  border-radius: 5px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+}
+
+#delete-confirm-name {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-family: inherit;
+}
+
+#delete-confirm-name:focus { border-color: var(--accent); outline: none; }
+
+#delete-modal-error { margin: 10px 0 0; font-size: 12px; color: #ff9a94; }
+
+/* opt-in: also delete the dataset file(s) when deleting a strategy */
+.delete-check-label {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 12px 0 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text);
+  cursor: pointer;
+}
+.delete-check-label input { flex: none; margin-top: 2px; accent-color: var(--accent); }
+.delete-check-label code {
+  background: var(--bg);
+  color: var(--muted);
+  padding: 0 5px;
+  border-radius: 5px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+}
+
+/* transient toast (e.g. "dataset kept — still used by ...") */
+#toast {
+  position: fixed;
+  bottom: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 90vw;
+  z-index: 1000;
+  background: #1c212b;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 16px;
+  font-size: 13px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+}
+#toast[hidden] { display: none; }
+#toast.warn { border-color: #f0b429; color: #ffd28a; }
+#toast.ok { border-color: #26a69a; color: #7fe0c8; }
+
+/* ---------- Strategy Rules panel ---------- */
+#rules-body { display: flex; flex-direction: column; gap: 16px; }
+#rules-body[hidden] { display: none; }
+#rules-body p { margin: 0; }
+#rules-body p.note { margin-bottom: 2px; }
+
+#rules-workbench { display: flex; flex-direction: column; gap: 14px; }
+
+#rules-list { display: flex; flex-direction: column; gap: 14px; }
+
+.rule-card {
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-radius: 10px;
+  background: var(--bg);
+  padding: 12px 14px;
+}
+
+.rule-card[data-side="BUY"] { border-left-color: var(--green); }
+.rule-card[data-side="SELL"] { border-left-color: var(--red); }
+
+.rule-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.rule-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+
+.rule-mode { color: var(--muted); font-size: 12px; display: flex; align-items: center; gap: 5px; }
+
+.rule-controls { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+
+.rule-controls label {
+  font-size: 12px;
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.rule-card select, .rule-card input {
+  background: var(--card);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 7px;
+  font-size: 12px;
+  font-family: inherit;
+}
+
+.rule-card[data-side="BUY"] select.r-side { color: #7ce7c2; }
+.rule-card[data-side="SELL"] select.r-side { color: #ff9a94; }
+
+.r-conf { width: 64px; }
+
+.cond-list { display: flex; flex-direction: column; gap: 10px; }
+
+.cond-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+.cond-row .c-feature { flex: 2 1 110px; }
+.cond-row .c-op { flex: 0 1 110px; }
+.cond-row .c-target { flex: 2 1 130px; }
+.cond-row .c-num { flex: 1 1 110px; min-width: 70px; }
+.cond-row select, .cond-row input { min-width: 0; }
+
+.btn-x { padding: 4px 7px; font-size: 12px; flex: 0 0 auto; }
+
+.cond-add { align-self: flex-start; margin-top: 12px; }
+
+/* per-strategy configuration section (under the rules) */
+.rules-config {
+  border-top: 1px solid var(--border);
+  margin-top: 6px;
+  padding-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.rules-config h3 {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+#rules-config-fields { display: flex; flex-direction: column; gap: 14px; margin-top: 8px; }
+
+/* strategy switcher + create-first form */
+.rules-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: nowrap;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+}
+
+.rules-top-label {
+  font-size: 12px;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+.rules-top select, .rules-top input {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.rules-top select {
+  flex: 0 0 auto;
+  width: 120px;
+  min-width: 0;
+}
+
+#new-strategy-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: nowrap;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+#new-strategy-row input {
+  min-width: 70px;
+  width: 120px;
+  flex: 0 1 120px;
+}
+
+#new-strategy-row button {
+  flex: 0 0 auto;
+  padding: 8px 10px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+/* the flex display above would defeat the hidden attribute — hide it explicitly */
+#new-strategy-row[hidden] { display: none; }
+
+/* visually separate the “add new” group from the switcher */
+#new-strategy-row::before {
+  content: "";
+  width: 1px;
+  align-self: stretch;
+  background: var(--border);
+  margin: 2px;
+  flex: 0 0 auto;
+}
+
+.strat-create {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+  padding: 12px 14px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  background: var(--card);
+}
+
+.strat-create input {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+button.primary.small:disabled, button.ghost.small:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* ---------- Strategy header bar ---------- */
+.strategy-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+
+.strategy-bar-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.strategy-bar-title {
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+}
+
+.strategy-bar select, .strategy-new-row input {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-family: inherit;
+}
+
+.strategy-bar select { min-width: 170px; }
+
+.strategy-chip { font-variant-numeric: tabular-nums; }
+
+.strategy-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* Hover explanation on a disabled “＋ New” button (strategy limit reached). */
+.strategy-bar-actions [data-tip] { position: relative; }
+.strategy-bar-actions [data-tip]:hover::after {
+  content: attr(data-tip);
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 60;
+  white-space: normal;
+  width: max-content;
+  max-width: 250px;
+  background: #1b1e26;
+  color: #cfd6e4;
+  border: 1px solid var(--border);
+  padding: 5px 9px;
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.4;
+  pointer-events: none;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+}
+
+.strategy-new-row { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; }
+.strategy-new-row[hidden] { display: none; }
+.strategy-new-row input { min-width: 160px; }
+.strategy-new-row button { white-space: nowrap; }
+
+/* Human-readable summary of the active strategy's rules (header bar, under
+   the strategy name) — a full-width row below the select/actions. Each rule
+   sits on its own line (BUY group, then SELL group). */
+.strategy-rules {
+  flex-basis: 100%;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text);
+  opacity: 0.9;
+  word-break: break-word;
+}
+.strategy-rules[hidden] { display: none; }
+.strategy-rule-line { display: block; }
+/* A rule whose referenced feature is disabled in the active config never
+   fires — tint it to make that visible in the header and the Rules panel. */
+.strategy-rule-line.feature-off { color: #ffd28a; opacity: 1; }
+.rule-off-tag {
+  color: #ffd28a;
+  font-style: italic;
+  font-size: 11px;
+  opacity: 0.95;
+  margin-left: 4px;
+}
+.rule-card.feature-off { border-left-color: #ffd28a; }
+
+/* Dataset summary moved into the header, above the strategy selector. A thin
+   hairline keeps the summary subsection visually apart from the strategy one. */
+.header-summary {
+  flex-basis: 100%;
+  min-width: 0;
+  padding-bottom: 14px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+}
+.header-summary[hidden] { display: none; }
+
+/* per-strategy Configuration panel */
+#pconfig-body { display: flex; flex-direction: column; gap: 14px; }
+#pconfig-body[hidden] { display: none; }
+#pconfig-body p { margin: 0; }
+#pconfig-groups { display: flex; flex-direction: column; gap: 14px; }
+
+/* ---------- Strategy Signals panel ---------- */
+/* Strategy header — second row: two EQUAL subpanels — signals fills the left
+   half, the rule summary fills the right half. */
+.strategy-rules-row {
+  flex-basis: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: stretch;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.strategy-signals,
+.strategy-rules-section {
+  /* flex-basis 0 + equal grow = exactly half each (a 50% basis + the gap would
+     overflow the row and wrap the panels instead of splitting it). */
+  flex: 1 1 0;
+  min-width: 0;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+/* Both section labels echo the small uppercase strategy-bar title. */
+.strategy-section-title,
+.strategy-signals .signal-head h2 {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin: 0 0 8px;
+}
+.signal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.signal-head h2 { margin: 0; }
+.signal-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+}
+.signal-toggles {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+.signal-latest {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.signal-badge {
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  padding: 6px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+.signal-badge.buy { color: #7ce7c2; border-color: rgba(38, 166, 154, 0.5); background: rgba(38, 166, 154, 0.12); }
+.signal-badge.sell { color: #ff9a94; border-color: rgba(239, 83, 80, 0.5); background: rgba(239, 83, 80, 0.12); }
+.signal-badge.hold { color: var(--muted); background: rgba(138, 147, 166, 0.08); }
+.signal-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+.signal-reason { margin: 8px 0 0; }
+.signal-counts { margin: 4px 0 0; }
+
+
+
+/* ---------- Backtest panel (below the chart) ---------- */
+#backtest .bt-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+#backtest .bt-head h2 { margin: 0; }
+#backtest .bt-actions { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+#bt-msg { margin: 0 0 14px; font-size: 13px; }
+#bt-gate { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 8px 12px; border-radius: 8px; margin: 0 0 14px; font-size: 13px; background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); }
+#bt-gate .bt-gate-title { display: inline-flex; align-items: baseline; gap: 6px; font-weight: 700; }
+#bt-gate .bt-gate-name { color: var(--muted); font-weight: 600; }
+#bt-gate .bt-gate-result { font-weight: 700; }
+#bt-gate .bt-gate-result.pass { color: #7fe0c8; }
+#bt-gate .bt-gate-result.fail { color: #ff9a94; }
+#bt-metrics { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 8px; margin: 0 0 14px; }
+.bt-stat { display: flex; flex-direction: column; gap: 2px; background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border); border-radius: 8px; padding: 6px 9px; }
+/* Gate-corresponding metric boxes are tinted by the gate result; hovering shows
+   the passing condition (native title). */
+.bt-stat.gate-pass { background: rgba(38, 166, 154, 0.14); border-color: rgba(38, 166, 154, 0.45); }
+.bt-stat.gate-fail { background: rgba(239, 83, 80, 0.14); border-color: rgba(239, 83, 80, 0.45); }
+/* Hover hint on a gate box: the short passing condition. A CSS tooltip (not
+   the native title attribute, which the embedded browser does not show). */
+.bt-stat[data-tip] { position: relative; cursor: help; }
+.bt-stat[data-tip]:hover::after {
+  content: attr(data-tip);
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 60;
+  white-space: normal;
+  width: max-content;
+  max-width: 220px;
+  background: #1b1e26;
+  color: #cfd6e4;
+  border: 1px solid var(--border);
+  padding: 5px 9px;
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.4;
+  pointer-events: none;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+}
+.bt-stat .label { font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+.bt-stat .value { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.bt-stat .value.pos { color: #7fe0c8; }
+.bt-stat .value.neg { color: #ff9a94; }
+.bt-notes { margin: 0 0 14px; font-size: 12px; }
+#backtest h4 { margin: 10px 0 6px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+#bt-curve { width: 100%; height: 140px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+/* NOTE: the global `button { display: inline-flex }` rule beats the UA
+   `[hidden] { display: none }`, so the attribute alone would NOT hide it. */
+#bt-report[hidden] { display: none; }
+
+/* backtest: warnings (amber) + inline how-it-works guide */
+.bt-warn { margin: 0 0 14px; padding: 8px 10px; border: 1px solid #f0b429; background: rgba(240, 180, 41, 0.08); border-radius: 8px; font-size: 12px; color: #ffd28a; line-height: 1.4; }
+.bt-warn[hidden] { display: none; }
+.bt-guide { margin: 4px 0 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: rgba(255, 255, 255, 0.02); }
+.bt-guide[hidden] { display: none; }
+.bt-guide h4 { margin: 0 0 8px; font-size: 13px; color: var(--text); }
+.bt-guide ol { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 8px; }
+.bt-guide li { font-size: 12.5px; line-height: 1.5; color: var(--text); }
+.bt-guide .note { margin-top: 10px; font-size: 12px; }
+
+/* backtest: running spinner + dataset-currency warning */
+#backtest .bt-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: bt-spin 0.8s linear infinite;
+}
+#backtest .bt-spinner[hidden] { display: none; }
+@keyframes bt-spin { to { transform: rotate(360deg); } }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Standalone backtest report page (/report)
+   ══════════════════════════════════════════════════════════════════════════ */
+.report-main {
+  max-width: 1500px;
+  margin: 24px auto;
+  padding: 0 16px;
+  display: grid;
+  grid-template-columns: minmax(220px, 270px) minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+@media (max-width: 1080px) {
+  .report-main { grid-template-columns: 1fr; }
+}
+.report-menu { position: sticky; top: 16px; }
+.report-body { min-width: 0; }
+
+/* "Back to dashboard" — sits at the TOP of the run menu (and on the empty
+   state). `button.ghost` only styles buttons, so the anchor needs its own rule. */
+.rp-backlink {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 10px;
+  margin-bottom: 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  text-decoration: none;
+}
+.rp-backlink:hover { border-color: var(--accent); color: var(--accent); }
+/* In the menu it spans the full content width, so its left/right edges line up
+   with the run items below it (the empty-state link stays inline). */
+.report-menu .rp-backlink { display: flex; justify-content: center; }
+#rp-empty .rp-backlink { margin-bottom: 0; }
+/* The global `button { display: inline-flex }` beats the UA [hidden] rule, so
+   hiding a button needs an explicit rule. */
+#rp-delete[hidden] { display: none; }
+
+/* run selector */
+#rp-runs { display: flex; flex-direction: column; gap: 6px; max-height: 70vh; overflow-y: auto; }
+.rp-menu-empty { font-size: 12px; margin: 0; }
+.rp-run {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  height: auto;
+  padding: 8px 10px;
+  text-align: left;
+  align-items: stretch;
+  justify-content: flex-start;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+}
+.rp-run:hover { border-color: var(--accent); background: rgba(76, 141, 255, 0.08); }
+.rp-run.active { border-color: var(--accent); background: rgba(76, 141, 255, 0.14); }
+.rp-run-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.rp-run-right { display: inline-flex; align-items: center; gap: 6px; }
+.rp-run-when { font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.rp-run-sub { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+/* In normal flow inside the item's first row — an absolutely positioned tag
+   used to sit ABOVE the box (it escaped the item it labels). */
+.rp-run-tag {
+  font-size: 9px; letter-spacing: 0.05em; text-transform: uppercase;
+  background: var(--accent); color: #08101f; font-weight: 700;
+  padding: 1px 6px; border-radius: 999px;
+}
+.rp-badge { font-size: 10px; font-weight: 700; letter-spacing: 0.04em; padding: 1px 6px; border-radius: 999px; }
+.rp-badge.pass { color: #7fe0c8; background: rgba(38, 166, 154, 0.18); }
+.rp-badge.fail { color: #ff9a94; background: rgba(239, 83, 80, 0.18); }
+
+/* Exit-reason badges (risk layer): red stop, green take, muted otherwise. */
+.rp-exit {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  padding: 1px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.rp-exit.stop { color: #ff9a94; background: rgba(239, 83, 80, 0.18); border-color: rgba(239, 83, 80, 0.45); }
+.rp-exit.take { color: #7fe0c8; background: rgba(38, 166, 154, 0.18); border-color: rgba(38, 166, 154, 0.45); }
+.rp-exit.signal { color: #cbd3e1; background: rgba(138, 147, 166, 0.14); }
+.rp-exit.forced { color: #ffd28a; background: rgba(240, 180, 41, 0.16); border-color: rgba(240, 180, 41, 0.42); }
+
+#rp-risk-tiles { margin-top: 14px; }
+#rp-risk-card .rp-table-wrap { margin-top: 16px; }
+#rp-vetoed-wrap { margin-top: 20px; }
+
+/* report header: title, verdict badge, then the run detail line below */
+/* First panel: the title/verdict block on the left, so the destructive
+   "delete this report" action can own the top-right corner. */
+.rp-topbar { display: flex; align-items: flex-start; gap: 12px; }
+.rp-topbar .rp-head { flex: 1 1 auto; min-width: 0; }
+.rp-topbar #rp-delete { flex: 0 0 auto; }
+.rp-head { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; }
+.rp-title { margin: 0; font-size: 17px; color: var(--text); text-transform: none; letter-spacing: 0; }
+.rp-verdict {
+  font-size: 11.5px; font-weight: 700; letter-spacing: 0.05em;
+  padding: 2px 10px; border-radius: 999px; border: 1px solid transparent;
+}
+.rp-verdict[hidden] { display: none; }
+.rp-verdict.pass { color: #7fe0c8; background: rgba(38, 166, 154, 0.18); border-color: rgba(38, 166, 154, 0.45); }
+.rp-verdict.fail { color: #ff9a94; background: rgba(239, 83, 80, 0.18); border-color: rgba(239, 83, 80, 0.45); }
+.rp-sub { flex-basis: 100%; margin: 0; font-size: 12px; line-height: 1.5; }
+/* The dashboard's KPI grid is `#bt-metrics` (an ID), so re-declare it here for
+   `#rp-kpis` — otherwise the tiles stack as a single-column list. */
+#rp-kpis { display: grid; grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); gap: 10px; margin: 0 0 14px; }
+#rp-kpis .bt-stat { padding: 7px 10px; }
+/* Same box grid as the first panel — the shared `.bt-metrics` rule is ID-scoped
+   to `#bt-metrics`, so this needs its own declaration or the tiles stack. */
+#rp-risk-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(148px, 1fr)); gap: 10px; }
+#rp-risk-tiles .bt-stat { padding: 7px 10px; }
+
+/* charts */
+.rp-chart { width: 100%; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.rp-chart-sm { border: none; }
+.rp-legend { display: flex; align-items: center; gap: 16px; margin-top: 8px; font-size: 12px; color: var(--muted); }
+.rp-legend .sw { display: inline-block; width: 14px; height: 0; border-top-width: 2px; border-top-style: solid; margin-right: 6px; vertical-align: middle; }
+.sw-strat { border-top-color: #4c8dff; }
+.sw-bench { border-top-color: #8a93a6; border-top-style: dashed !important; }
+
+/* tables */
+.rp-table-wrap { overflow-x: auto; }
+.rp-table-tall { max-height: 520px; overflow-y: auto; }
+.rp-table { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+.rp-table th, .rp-table td { padding: 4px 8px; text-align: right; white-space: nowrap; border-bottom: 1px solid rgba(255, 255, 255, 0.04); }
+.rp-table thead th { position: sticky; top: 0; background: var(--card); color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; z-index: 1; }
+.rp-table tbody tr:hover { background: rgba(255, 255, 255, 0.03); }
+.rp-th-year { text-align: left !important; font-weight: 600; color: var(--muted); }
+.rp-th-total { color: var(--text) !important; }
+.rp-cell { font-weight: 600; }
+.rp-cell.muted { font-weight: 400; }
+.rp-total { border-left: 1px solid var(--border); }
+.rp-cells .pos, .rp-cell.pos, .pos { color: #7fe0c8; }
+.rp-cell.neg, .neg { color: #ff9a94; }
+.rp-table .muted { color: var(--muted); }
+
+/* distribution */
+.rp-dist { display: flex; flex-direction: column; gap: 5px; }
+.rp-dist-sum { font-size: 11.5px; color: var(--muted); margin-bottom: 4px; line-height: 1.5; }
+.rp-dist-row { display: grid; grid-template-columns: 92px minmax(0, 1fr) 84px; align-items: center; gap: 8px; }
+.rp-dist-label { font-size: 11px; color: var(--muted); }
+.rp-dist-track { background: rgba(255, 255, 255, 0.05); border-radius: 3px; height: 12px; overflow: hidden; }
+.rp-dist-bar { display: block; height: 100%; background: #26a69a; }
+.rp-dist-bar.neg { background: #ef5350; }
+.rp-dist-count { font-size: 11px; text-align: right; font-variant-numeric: tabular-nums; }
+
+/* two-column section: keep the same bottom gap as the other cards (the row of
+   shorter/taller panels otherwise butts straight against the next panel) */
+.rp-two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; align-items: start; margin-bottom: 20px; }
+@media (max-width: 900px) { .rp-two { grid-template-columns: 1fr; } }
+.rp-two > .card { margin-bottom: 0; }
+
+/* provenance: collapsible panel at the top of the report (reuses the
+   dashboard's .card.collapsible / .card-head / .collapse-body pattern) */
+#rp-what-body { padding-top: 14px; }
+#rp-what-body[hidden] { display: none; }
+#rp-what-card .card-head h2 { font-size: 13px; }
+#rp-risk-body { padding-top: 14px; }
+#rp-risk-body[hidden] { display: none; }
+#rp-risk-card .card-head h2 { font-size: 13px; }
+/* breathing room above the rules-fingerprint line */
+#rp-inputs .note { margin: 14px 0 0; }
+
+/* provenance */
+.rp-sub-head { margin: 14px 0 6px; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+.rp-sub-head:first-child { margin-top: 0; }
+.rp-rules { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; }
+.rp-side { font-weight: 700; font-size: 10.5px; letter-spacing: 0.04em; padding: 1px 6px; border-radius: 999px; text-transform: uppercase; }
+.rp-side.long { color: #7fe0c8; background: rgba(38, 166, 154, 0.16); }
+.rp-side.short { color: #ffb37a; background: rgba(240, 180, 41, 0.16); }
+.rp-kv-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 4px 16px; font-size: 12px; }
+.rp-kv { display: flex; justify-content: space-between; gap: 10px; padding: 3px 0; border-bottom: 1px solid rgba(255, 255, 255, 0.04); }
+.rp-kv .label { color: var(--muted); font-size: 11px; }
+.rp-details { margin-top: 14px; font-size: 12px; }
+.rp-details summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+.rp-details[open] summary { margin-bottom: 8px; }
+.rp-details .rp-kv .label { font-variant-numeric: tabular-nums; }
+
