@@ -3,8 +3,9 @@
 The rule set is the strategy artifact a human tunes while building the bot.
 It is deliberately NOT stored as scalar ``.env`` keys: a rule set is a tree of
 conditions that serializes cleanly to structured JSON. It lives in its own
-file (``strategies/active.json`` by default, path from ``STRATEGY_RULES_FILE``)
-so it can be:
+file - the *store* (``strategies/store.json`` by default, path from
+``STRATEGY_RULES_FILE``) - which holds EVERY strategy plus the name of the
+active one, so it can be:
 
 - edited by the Web Portal Rules panel (atomic write, same pattern as .env),
 - read by the backtester and by ``simple_model.py`` through ONE loader, and
@@ -103,11 +104,13 @@ class RuleSet(BaseModel):
 
 
 class StrategyStore(BaseModel):
-    """The rules file: one JSON object wrapping many named strategies.
+    """The strategy store: one JSON object wrapping many named strategies.
 
     ``strategies`` maps a strategy name -> its ``RuleSet``; ``active`` names the
     strategy currently shown in the panel. Stored in the file referenced by
-    ``STRATEGY_RULES_FILE`` (default ``strategies/active.json``).
+    ``STRATEGY_RULES_FILE`` (default ``strategies/store.json``). The file is
+    local data - it is gitignored, and an absent file simply means an empty
+    store (the portal then asks for a first strategy).
     """
 
     model_config = ConfigDict(extra="ignore")

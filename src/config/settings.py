@@ -120,8 +120,8 @@ class Settings(BaseSettings):
     model_sell_threshold: float = Field(default=0.6, ge=0.0, le=1.0)
     model_retrain_interval_days: int = Field(default=30, ge=1)
     strategy_rules_file: str = Field(
-        default="strategies/active.json",
-        description="JSON file with the rule-based strategy (MODEL_TYPE=rule_based)",
+        default="strategies/store.json",
+        description="JSON file holding the strategy store (all strategies + which one is active; MODEL_TYPE=rule_based)",
     )
 
     # ── Risk management ──────────────────────────────────────────────

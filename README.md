@@ -130,7 +130,7 @@ src/
   logging/     structured logging, alerts (not implemented)
   web/         FastAPI app, routes, services, templates, static assets
 tests/         pytest suite (offline)
-strategies/    active.json - the strategy store edited through the portal
+strategies/    the strategy store - LOCAL DATA, gitignored, created on first save
 data/          generated at runtime: historical Parquet + backtest results
 ```
 
@@ -152,10 +152,14 @@ costs, risk config) that makes a result reproducible and attributable.
 Three layers, in increasing priority:
 
 1. `.env` - global defaults (see `.env.example`)
-2. per-strategy overrides - stored inside `strategies/active.json`, edited
-   through the portal's panels
+2. per-strategy overrides - stored inside the strategy store
+   (`strategies/store.json`, gitignored), edited through the portal's panels
 3. process environment - wins over both, which is why a stray exported
    variable can silently override `.env`
+
+A fresh clone has **no strategy store**: the app starts with an empty one and
+the portal shows its "create your first strategy" form. Point
+`STRATEGY_RULES_FILE` somewhere else if you keep yours outside the repo.
 
 The Gate thresholds (`GATE_MIN_SHARPE`, `GATE_MAX_DRAWDOWN_PERCENT`,
 `GATE_MIN_WIN_RATE_PERCENT`, `GATE_MAX_WEEKLY_LOSS_PERCENT`) are part of the

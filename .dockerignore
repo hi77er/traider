@@ -37,6 +37,9 @@ tmp/
 *.sqlite3
 *.log
 
+# The live strategy store is your own data; the container creates its own.
+strategies/store.json
+
 # --- Python caches -------------------------------------------------------
 __pycache__/
 *.py[cod]

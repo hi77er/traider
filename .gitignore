@@ -50,6 +50,13 @@ env/
 .cache/
 data/
 
+# The strategy store is LOCAL DATA, not source: it holds your own strategies
+# (rules + per-strategy settings) and is written by the portal on every save.
+# A missing file is fine - the app starts with an empty store and the portal
+# shows its "create your first strategy" form. Change STRATEGY_RULES_FILE and
+# move this rule with it.
+strategies/store.json
+
 # Database
 *.db
 *.sqlite3
