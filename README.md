@@ -98,28 +98,39 @@ The portal is the whole interface:
   stop/take exits
 - **Strategy Configuration / Rules / Risk Management** - three collapsible
   panels; the risk panel leads with the two master switches
+- **Account Settings** (🏦 header popup) - broker (Trading Account), the single
+  data folder, backtest defaults and cloud/state storage; shared by all strategies
+- **Global Settings** (⚙ header popup) - the data provider + keys in `.env`
 - **Backtest panel** - run the engine, read the Gate and the metrics
 - **Historical Delta** - gap-check the dataset against the provider and refill
   missing bars
 - **Report page** - the full picture for any stored run: equity vs buy & hold,
   drawdown, monthly/yearly returns, the trade distribution, the exit-reason
   breakdown and the entries the circuit breaker refused
+- **Market page** (`/market`, 🌎 header button) - whole-market screening from
+  Yahoo Finance: a preset screener, the whole US market, top gainers, highest
+  volume, top losers and the small-cap gainers/volume lists. The two long tables
+  are collapsible and start collapsed so the page opens as an overview
 
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest tests/ -q      # 262 passed
+.venv/bin/python -m pytest tests/ -q      # 360 passed
 ```
 
 The suite is offline: OpenBB, the broker and the clock are all stubbed, so it
-runs without credentials or market data.
+runs without credentials or market data. The dashboard's and report page's
+crosshair-sync logic is exercised by running the real `app.js` / `report.js`
+blocks under `node` against fake charts that reproduce lightweight-charts'
+actual event semantics (see `tests/test_web/test_crosshair_sync.py`), so it needs
+`node` on `PATH`; those tests skip themselves when it is absent.
 
 ## Project layout
 
 ```
 src/
   config/      settings (pydantic) + per-strategy effective settings
-  data/        OpenBB client, provider session, Parquet dataset, delta backfill
+  data/        OpenBB client, provider session, screener (Yahoo), dataset, delta backfill
   features/    indicators + feature engineering (no lookahead)
   model/       rule store and rule-based signal generator
   risk/        position sizing, stop/take levels, circuit breaker, validator
@@ -130,7 +141,7 @@ src/
   logging/     structured logging, alerts (not implemented)
   web/         FastAPI app, routes, services, templates, static assets
 tests/         pytest suite (offline)
-strategies/    the strategy store - LOCAL DATA, gitignored, created on first save
+settings/      LOCAL DATA (gitignored): strategies/store.json + account/account.json
 data/          generated at runtime: historical Parquet + backtest results
 ```
 
@@ -149,13 +160,17 @@ costs, risk config) that makes a result reproducible and attributable.
 
 ## Configuration
 
-Three layers, in increasing priority:
+Three layers, each with its own editor in the dashboard:
 
-1. `.env` - global defaults (see `.env.example`)
-2. per-strategy overrides - stored inside the strategy store
-   (`strategies/store.json`, gitignored), edited through the portal's panels
-3. process environment - wins over both, which is why a stray exported
-   variable can silently override `.env`
+| Layer | File | Edited from | Holds |
+|-------|------|-------------|-------|
+| **Global** | `.env` | ⚙ Global Settings | data provider + keys, the paths of the two JSON stores |
+| **Account** | `settings/account/account.json` | 🏦 Account Settings | broker (Trading Account), the data folder, backtest defaults, cloud/state storage |
+| **Strategy** | `settings/strategies/store.json` | Strategy Configuration / Rules / Risk panels | instrument, bar size, features, model, gates, schedule, risk limits, rules |
+
+Precedence is **strategy > account > .env**, and the process environment still
+wins over `.env` (which is why a stray exported variable can silently override
+it). Both JSON files are LOCAL DATA: gitignored, and created on first save.
 
 A fresh clone has **no strategy store**: the app starts with an empty one and
 the portal shows its "create your first strategy" form. Point

@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TRAIDER — Market</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header>
+    <h1>🌎 Market</h1>
+    <div class="header-actions">
+      <span id="mkt-updated" class="chip">loading…</span>
+      <button id="mkt-refresh" class="ghost small" onclick="refreshAll()" title="Refetch every panel now (bypasses the short cache)">🔄 Refresh</button>
+      <a class="btn-link" href="/" title="Strategy dashboard — charts, rules, backtest">📈 Dashboard</a>
+    </div>
+  </header>
+
+  <main class="page">
+    <p class="muted note" id="mkt-source">
+      Whole-market screens from Yahoo Finance. <b>Volume here is raw share volume, not relative
+      volume</b> — a small cap trading 100M shares has moved, but that is not by itself an
+      abnormal-volume signal. Penny stocks are excluded by default (price &gt; $1) and the list is
+      limited to the US primary tape (OTC/pink sheets are dropped).
+    </p>
+    <div id="mkt-error" class="mkt-alert" hidden></div>
+
+    <!-- ── 1. Screener: pick a Yahoo preset, apply your own filters ── -->
+    <section class="card collapsible" id="mkt-screener">
+      <div class="card-head" onclick="toggleMarketCard('screener')" title="Expand / collapse the screener">
+        <span class="card-toggle" id="toggle-screener">+</span>
+        <h2>Top Screener</h2>
+        <div class="settings-actions" onclick="event.stopPropagation()">
+          <button id="mkt-run" class="primary small" onclick="runScreenerFromButton()">▶ Run screener</button>
+        </div>
+      </div>
+      <div class="collapse-body" id="scr-body" hidden>
+        <p class="muted note">A library of Yahoo's predefined screens (<span id="scr-count">…</span>) with your own
+          filters applied on top. Yahoo ranks these server-side and returns up to 25 rows.</p>
+        <div class="mkt-filters">
+          <label>Preset
+            <select id="scr-preset" onchange="runScreener()"></select>
+          </label>
+          <label>Market cap ≥&nbsp;$M
+            <input id="scr-cap-min" type="number" min="0" step="100" placeholder="any" />
+          </label>
+          <label>Market cap ≤&nbsp;$M
+            <input id="scr-cap-max" type="number" min="0" step="100" placeholder="any" />
+          </label>
+          <label>Min price&nbsp;$
+            <input id="scr-min-price" type="number" min="0" step="0.5" value="1" />
+          </label>
+          <label>Min volume
+            <input id="scr-min-volume" type="number" min="0" step="100000" placeholder="any" />
+          </label>
+        </div>
+        <p id="scr-msg" class="muted"></p>
+        <p id="scr-criteria" class="mkt-meta"></p>
+        <div class="mkt-table-wrap tall">
+          <table id="scr-table">
+            <thead><tr><th>Symbol</th><th>Price</th><th>Chg %</th><th>Volume</th><th>Mkt Cap</th><th>$ Vol</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── 2..7. Whole market, gainers, volume, losers, small-cap gainers/volume ── -->
+    <div id="mkt-cards" class="mkt-grid">
+      <p class="muted">Loading panels…</p>
+    </div>
+  </main>
+
+  <script src="/static/market.js"></script>
+</body>
+</html>

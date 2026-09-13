@@ -1,20 +1,25 @@
-"""Effective-settings resolver: global .env defaults + the ACTIVE strategy's config.
+"""Effective-settings resolver: .env defaults + the account file + the ACTIVE strategy.
 
-The strategy JSON file (see ``STRATEGY_RULES_FILE``) is the source of truth for
-everything that belongs to a strategy (instrument, bar size, features, model
-thresholds, risk, rules). ``resolve_effective()`` returns a plain ``Settings``
-object equal to the global ``.env`` settings OVERLAID with the active
-strategy's ``config`` (env KEY -> raw string). Nothing is written to ``.env``.
+Three layers are merged into the ONE ``Settings`` object every module consumes:
 
-Because every data/feature/chart module already consumes a ``Settings`` object,
-this is the single seam that makes the whole bot (web, scheduler, backtest)
-run "in the context of" the currently active strategy:
+| Layer | File | Example keys |
+|-------|------|--------------|
+| Global | ``.env`` | ``OPENBB_PROVIDER``, ``OPENBB_API_KEY`` |
+| Account | ``settings/account/account.json`` | ``DATA_DIR``, ``IBKR_ACCOUNT_ID``, ``BACKTEST_SLIPPAGE_PERCENT`` |
+| Strategy | ``settings/strategies/store.json`` | ``INSTRUMENT``, ``FEATURE_*``, ``MODEL_*``, ``GATE_*``, ``RISK_*`` |
 
-    base = Settings()                 # .env + schema defaults
-    eff  = Settings(**active_config)  # strategy overrides those keys
+**Precedence: strategy > account > .env > schema default.** Both JSON files are
+flat ``KEY -> raw value`` maps, so one loop overlays them onto the model:
 
-Precedence: strategy config > .env > schema default. No active strategy (or
-none of its keys present) -> plain global Settings.
+    base = Settings()                  # .env + schema defaults
+    eff  = Settings(**account, **strategy)
+
+Because the gates, model thresholds and schedule now live in the strategy file,
+a backtest and the live loop automatically evaluate each strategy with ITS own
+these values — nothing else has to thread a strategy through.
+
+The process-level cache is keyed on the mtimes of (.env, account file, strategy
+file), so editing any layer invalidates it implicitly.
 """
 
 from __future__ import annotations
@@ -26,6 +31,7 @@ from typing import Dict, Optional
 from pydantic import ValidationError
 
 from src.config.settings import Settings, get_settings
+from src.config import account as account_mod
 from src.model import rules as rules_mod
 
 logger = logging.getLogger(__name__)
@@ -64,30 +70,44 @@ def strategy_config_for(name: Optional[str] = None) -> Dict[str, str]:
 
 
 def resolve_effective(strategy_name: Optional[str] = None) -> Settings:
-    """Return ``Settings`` = global .env overlaid with the strategy's config."""
-    overlay = strategy_config_for(strategy_name)
-    if not overlay:
-        return Settings()  # no strategy context -> plain global settings
+    """Return ``Settings`` = .env overlaid with the account file, then the strategy.
+
+    Applied in that order, so a strategy value wins over an account value, which
+    wins over ``.env``.
+    """
+    base = get_settings()
+    layers = (
+        ("account", account_mod.account_values(base)),
+        ("strategy", strategy_config_for(strategy_name)),
+    )
+    if not any(overlay for _, overlay in layers):
+        return Settings()  # no overrides anywhere -> plain global settings
 
     field_map = _field_by_env_key()
     kwargs: Dict[str, str] = {}
-    for key, raw in overlay.items():
-        field = field_map.get(str(key).strip().upper())
-        if field is None:
-            logger.debug("Ignoring non-Settings key in strategy config: %s", key)
-            continue
-        kwargs[field] = str(raw).strip()
+    for source, overlay in layers:
+        for key, raw in overlay.items():
+            field = field_map.get(str(key).strip().upper())
+            if field is None:
+                logger.debug("Ignoring non-Settings key in %s settings: %s", source, key)
+                continue
+            kwargs[field] = str(raw).strip()
 
     if not kwargs:
         return Settings()
-    if "instrument" in kwargs:
+    # DATA_DIR is the single folder the account configures; the two subfolders are
+    # derived from it. Set them explicitly so a stale HISTORICAL_DATA_DIR left in
+    # .env cannot pin the dataset somewhere other than the account's folder.
+    if kwargs.get("data_dir") and not {"historical_data_dir", "backtest_dir"} & set(kwargs):
+        kwargs.update(account_mod.derived_dirs(kwargs["data_dir"]))
+    if kwargs.get("instrument"):
         kwargs["instrument"] = str(kwargs["instrument"]).strip().upper()
     try:
         eff = Settings(**kwargs)  # merges on top of .env + schema defaults
-        logger.info("Effective settings resolved for strategy context")
+        logger.info("Effective settings resolved (account + strategy layers)")
         return eff
     except ValidationError as exc:
-        logger.warning("Active strategy config invalid — falling back to global settings: %s", exc)
+        logger.warning("Stored settings invalid — falling back to global defaults: %s", exc)
         return Settings()
 
 
@@ -103,9 +123,13 @@ def _strategy_file_path() -> Path:
     return rules_mod.rules_file_path(get_settings())
 
 
+def _account_file_path() -> Path:
+    return account_mod.account_file_path(get_settings())
+
+
 def get_effective_settings() -> Settings:
-    """Cached effective Settings; recomputed automatically when .env or the
-    strategy file changes (mtime signature), or after ``invalidate()``."""
+    """Cached effective Settings; recomputed automatically when .env, the account
+    file or the strategy file changes (mtime signature), or after ``invalidate()``."""
     global _cache, _cache_key, _env_sig
 
     env_path = _ENV_PATH
@@ -116,8 +140,9 @@ def get_effective_settings() -> Settings:
         get_settings.cache_clear()
         _cache = None
 
+    account_sig = _file_signature(_account_file_path())
     store_sig = _file_signature(_strategy_file_path())
-    key = (_env_sig, store_sig)
+    key = (_env_sig, account_sig, store_sig)
     if _cache is None or _cache_key != key:
         try:
             _cache = resolve_effective()

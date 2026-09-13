@@ -46,16 +46,21 @@ env/
 *~
 .DS_Store
 
-# Runtime data (fetched market data / cache)
+# Runtime data (fetched market data / cache). The leading slash is ON PURPOSE:
+# it anchors the rule to the repository root. A bare "data/" also matches any
+# nested directory called data - which silently ignored src/data/, keeping the
+# whole data-layer SOURCE package (openbb_client, dataset, delta, screener, ...)
+# out of the repository.
 .cache/
-data/
+/data/
 
-# The strategy store is LOCAL DATA, not source: it holds your own strategies
-# (rules + per-strategy settings) and is written by the portal on every save.
-# A missing file is fine - the app starts with an empty store and the portal
-# shows its "create your first strategy" form. Change STRATEGY_RULES_FILE and
-# move this rule with it.
-strategies/store.json
+# The strategy store and the account settings are LOCAL DATA, not source: they
+# hold your own strategies (rules + per-strategy settings) and your broker /
+# storage configuration, and are written by the portal on every save. Missing
+# files are fine - the app starts with defaults and the portal creates them.
+# Keep these rules in step with STRATEGY_RULES_FILE / ACCOUNT_SETTINGS_FILE.
+settings/strategies/*.json
+settings/account/*.json
 
 # Database
 *.db

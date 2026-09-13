@@ -10,6 +10,8 @@
   <header>
     <h1>📈 TRAIDER Dashboard</h1>
     <div class="header-actions">
+      <a class="btn-link" href="/market" title="Whole-market screens: screener, gainers, volume, losers, small caps">🌎 Market</a>
+      <button id="open-account-settings" class="ghost small" onclick="openAccountSettings()" title="Account-wide settings: broker (Trading Account), data folders, backtest defaults">🏦 Account Settings</button>
       <button id="open-global-settings" class="ghost small" onclick="openGlobalSettings()" title="Edit global (non-strategy) settings in .env">⚙ Global Settings</button>
     </div>
   </header>
@@ -154,7 +156,7 @@
             <p id="rules-msg" class="muted"></p>
             <p class="muted note">Rule-based conditions for the active strategy (consumed by the future
               <code>simple_model</code>). Stored with the strategy in
-              <code id="rules-file">strategies/active.json</code>. Each rule fires when its conditions hold; a
+              <code id="rules-file">settings/strategies/store.json</code>. Each rule fires when its conditions hold; a
               condition compares a feature to a number or to another feature.</p>
             <div id="rules-list"></div>
           </div>
@@ -214,6 +216,28 @@
       </aside>
     </div>
   </main>
+
+  <!-- Account settings dialog (settings/account/account.json) -->
+  <div id="account-settings-backdrop" class="modal-backdrop" hidden>
+    <div class="modal modal-wide modal-scroll" role="dialog" aria-modal="true" aria-labelledby="account-settings-title">
+      <h3 id="account-settings-title">Account Settings</h3>
+      <p id="account-msg" class="muted"></p>
+      <p class="muted note">Settings for your <b>trading account</b> — the broker it trades through
+        (<b>Trading Account</b>), where its data and backtest results are stored, and the backtest defaults.
+        They apply to every strategy and live in <code id="account-file">settings/account/account.json</code>;
+        a strategy's own values override them. <b>Data folder</b> is the single folder on this computer that
+        holds the <code>historical/</code> and <code>backtest_results/</code> subfolders. Secrets
+        (<code>*_PASSWORD</code>, <code>*_API_KEY</code>…) are masked — leave the field empty to keep the
+        existing value.</p>
+      <div id="account-fields"></div>
+      <div id="account-errors" class="save-errors" hidden></div>
+      <div class="modal-actions">
+        <button id="account-close" class="ghost" onclick="closeAccountSettings()">Close</button>
+        <button id="account-reload" class="ghost" onclick="loadAccount()" title="Reload values from the file">↻ Reload</button>
+        <button id="account-save" class="primary" onclick="saveAccount()">💾 Save</button>
+      </div>
+    </div>
+  </div>
 
   <!-- Global (.env) settings dialog -->
   <div id="global-settings-backdrop" class="modal-backdrop" hidden>

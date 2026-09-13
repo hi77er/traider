@@ -1,17 +1,29 @@
 """Central configuration for the TRAIDER bot.
 
-Every value is loaded from the environment / `.env` file via Pydantic
-(BaseSettings). There are NO hardcoded values anywhere else in the bot —
-all modules read from this object. See `.env.example` for the full
-reference of variables and their defaults.
+Configuration has THREE layers, and this class is the single merged view of all
+of them (see ``account.py``, ``effective.py`` and ``model/rules.py``):
+
+1. **Global** (``.env``) — how this machine reaches the outside world: the data
+   provider and its keys, plus internal file paths.
+2. **Account** (``settings/account/account.json``) — what is true of this trading
+   account: broker credentials (Trading Account), backtest defaults and where
+   data/results are stored.
+3. **Strategy** (``settings/strategies/store.json``) — how each strategy trades:
+   instrument, bar size, features, model, gates, risk limits and schedule.
+
+Precedence: **strategy > account > .env > schema default**. Every module reads a
+``Settings`` object, so which layer a value came from never leaks into the rest
+of the bot. See ``.env.example`` for the global reference and the two JSON files
+for the per-account / per-strategy values.
 """
 
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
 from typing import List, Optional
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -59,9 +71,21 @@ class Settings(BaseSettings):
         default=10, ge=1,
         description="Lookback window (days) fetched by the daily live poll; should cover FEATURES_MIN_LOOKBACK",
     )
+    # ── Where the data lives (account setting) ───────────────────────
+    # ONE folder per account; the two subfolders are derived from it so the user
+    # configures a single path in Account Settings. Explicit values still win, so
+    # a caller (or a test) can point either directory at a scratch location.
+    data_dir: str = Field(
+        default="data",
+        description="Root folder for this account's data; holds the historical/ and backtest/ subfolders",
+    )
     historical_data_dir: str = Field(
-        default="data/historical",
-        description="Canonical Parquet dataset directory (one file per symbol/interval)",
+        default="",
+        description="Canonical Parquet dataset directory (one file per symbol/interval); empty = <DATA_DIR>/historical",
+    )
+    backtest_dir: str = Field(
+        default="",
+        description="Backtest runs + reports directory; empty = <DATA_DIR>/backtest_results",
     )
     # Optional S3 sync: the dataset is written locally, then uploaded to S3 as
     # the durable source of truth. Disabled (local-only) until deployment.
@@ -76,6 +100,14 @@ class Settings(BaseSettings):
     # section; the FEATURES_* keys below are the window/period parameters.
     feature_sma_enabled: bool = Field(
         default=True, description="Trend indicator over FEATURES_SMA_PERIODS windows"
+    )
+    feature_ema_enabled: bool = Field(
+        default=True,
+        description="Trend indicator over FEATURES_EMA_PERIODS windows (weights recent bars more than an SMA)",
+    )
+    feature_macd_enabled: bool = Field(
+        default=True,
+        description="MACD — EMA(fast) − EMA(slow), plus its signal line and histogram",
     )
     feature_rsi_enabled: bool = Field(
         default=True, description="Momentum oscillator (0-100)"
@@ -104,6 +136,10 @@ class Settings(BaseSettings):
 
     # ── Feature parameters (windows/periods) ─────────────────────────
     features_sma_periods: str = Field(default="10,20,50", description="Comma-separated SMA windows")
+    features_ema_periods: str = Field(default="9,21,50", description="Comma-separated EMA windows")
+    features_macd_fast_period: int = Field(default=12, ge=2, description="MACD fast EMA window")
+    features_macd_slow_period: int = Field(default=26, ge=2, description="MACD slow EMA window")
+    features_macd_signal_period: int = Field(default=9, ge=2, description="MACD signal-line EMA window")
     features_rsi_period: int = Field(default=14, ge=2)
     features_atr_period: int = Field(default=14, ge=2)
     features_bollinger_period: int = Field(default=20, ge=2)
@@ -120,8 +156,12 @@ class Settings(BaseSettings):
     model_sell_threshold: float = Field(default=0.6, ge=0.0, le=1.0)
     model_retrain_interval_days: int = Field(default=30, ge=1)
     strategy_rules_file: str = Field(
-        default="strategies/store.json",
+        default="settings/strategies/store.json",
         description="JSON file holding the strategy store (all strategies + which one is active; MODEL_TYPE=rule_based)",
+    )
+    account_settings_file: str = Field(
+        default="settings/account/account.json",
+        description="JSON file holding the account-wide settings (broker, backtest defaults, data folder)",
     )
 
     # ── Risk management ──────────────────────────────────────────────
@@ -201,6 +241,11 @@ class Settings(BaseSettings):
         return self._parse_int_list(self.features_sma_periods)
 
     @property
+    def ema_periods(self) -> List[int]:
+        """EMA windows parsed from `FEATURES_EMA_PERIODS`."""
+        return self._parse_int_list(self.features_ema_periods)
+
+    @property
     def backup_providers(self) -> List[str]:
         """Fallback OpenBB providers parsed from `OPENBB_BACKUP_PROVIDERS`."""
         return [x.strip() for x in self.openbb_backup_providers.split(",") if x.strip()]
@@ -215,6 +260,45 @@ class Settings(BaseSettings):
         return [int(x.strip()) for x in value.split(",") if x.strip()]
 
     # ── Validation ───────────────────────────────────────────────────
+
+    @model_validator(mode="after")
+    def _derive_data_dirs(self) -> "Settings":
+        """Fill the two data subfolders from DATA_DIR unless set explicitly.
+
+        The Account Settings popup asks for ONE folder; ``historical/`` and
+        ``backtest_results/`` are then fixed subfolders of it, so the dataset and
+        its backtest runs can never drift into two unrelated places. An explicit
+        ``HISTORICAL_DATA_DIR`` (tests, advanced setups) still wins and keeps the
+        results beside it.
+        """
+        root = (self.data_dir or "data").strip().rstrip("/") or "data"
+        hist = (self.historical_data_dir or "").strip()
+        back = (self.backtest_dir or "").strip()
+        if not hist and not back:
+            hist, back = f"{root}/historical", f"{root}/backtest_results"
+        elif hist and not back:
+            back = str(Path(hist).parent / "backtest_results")
+        elif back and not hist:
+            hist = f"{root}/historical"
+        self.historical_data_dir = hist
+        self.backtest_dir = back
+        return self
+
+    @model_validator(mode="after")
+    def _validate_macd_periods(self) -> "Settings":
+        """MACD is a fast-minus-slow spread, so fast must be the shorter window.
+
+        Swapping them silently inverts the histogram (and every rule built on
+        it), so reject it at load time instead of charting a mirrored indicator.
+        """
+        fast = self.features_macd_fast_period
+        slow = self.features_macd_slow_period
+        if fast >= slow:
+            raise ValueError(
+                "FEATURES_MACD_FAST_PERIOD must be smaller than "
+                f"FEATURES_MACD_SLOW_PERIOD (got fast={fast}, slow={slow})"
+            )
+        return self
 
     @field_validator("model_type")
     @classmethod
@@ -261,7 +345,8 @@ class Settings(BaseSettings):
         return v
 
     @field_validator(
-        "feature_sma_enabled", "feature_rsi_enabled", "feature_atr_enabled",
+        "feature_sma_enabled", "feature_ema_enabled", "feature_macd_enabled",
+        "feature_rsi_enabled", "feature_atr_enabled",
         "feature_bollinger_enabled", "feature_momentum_enabled", "feature_volatility_enabled",
         "feature_vwap_enabled", "feature_volume_enabled", "feature_volume_abs_enabled",
         mode="before",

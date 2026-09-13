@@ -12,11 +12,34 @@ from typing import List
 
 from src.config.settings import Settings
 
-__all__ = ["active_feature_columns", "allowed_series"]
+__all__ = ["active_feature_columns", "allowed_series", "macd_columns", "macd_tag"]
 
 # Raw OHLCV bar fields that are ALWAYS available to a rule, in addition to the
 # engineered feature columns (mirrors the Rules panel's series picker).
 RAW_SERIES = ("open", "high", "low", "close", "volume")
+
+# The three columns a MACD parameter set produces, in output order.
+MACD_PARTS = ("macd", "macd_signal", "macd_hist")
+
+
+def macd_tag(settings: Settings) -> str:
+    """The ``fast_slow_signal`` suffix shared by every MACD column."""
+    return (
+        f"{settings.features_macd_fast_period}_"
+        f"{settings.features_macd_slow_period}_"
+        f"{settings.features_macd_signal_period}"
+    )
+
+
+def macd_columns(settings: Settings) -> List[str]:
+    """MACD line / signal / histogram columns, e.g. ``macd_12_26_9``.
+
+    All three are exposed as features: the histogram is what most MACD rules
+    reference (zero crossovers), but the line and signal are what a crossover
+    rule compares, so hiding them would make the indicator half-usable.
+    """
+    tag = macd_tag(settings)
+    return [f"{part}_{tag}" for part in MACD_PARTS]
 
 
 def allowed_series(settings: Settings) -> List[str]:
@@ -33,6 +56,10 @@ def active_feature_columns(settings: Settings) -> List[str]:
     cols: List[str] = []
     if settings.feature_sma_enabled:
         cols.extend(f"sma_{p}" for p in settings.sma_periods)
+    if settings.feature_ema_enabled:
+        cols.extend(f"ema_{p}" for p in settings.ema_periods)
+    if settings.feature_macd_enabled:
+        cols.extend(macd_columns(settings))
     if settings.feature_rsi_enabled:
         cols.append(f"rsi_{settings.features_rsi_period}")
     if settings.feature_atr_enabled:

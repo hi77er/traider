@@ -156,6 +156,7 @@
   }
   function clearCharts() {
     state.charts.forEach((c) => {
+      crossAnchors.delete(c); // a disposed chart must never be synced again
       try { c.remove(); } catch (_) { /* noop */ }
     });
     state.charts = [];
@@ -434,6 +435,73 @@
         `0 — ${on ? "every entry was taken" : "the risk layer was off"}.</td></tr></tbody>`);
   }
 
+  /* ---------- crosshair sync (both report charts) ----------
+     Hovering either chart shows the same vertical TIME line (and a horizontal
+     value line) on the other, so the drawdown at an instant lines up with the
+     equity at that same instant. lightweight-charts only draws a crosshair on
+     the chart under the pointer, so the other is positioned with
+     `setCrosshairPosition`, anchored on its OWN series value at that time.
+
+     VERIFIED against 4.1.3: `setCrosshairPosition` emits no crosshair event, so
+     the guard must expire on the next task rather than keying off the time just
+     pushed — a stationary mouse repeats one bar time, and swallowing those
+     repeats would freeze the crosshair on whichever chart was hovered first. */
+  const crossAnchors = new Map(); // chart -> {series, values: Map, times, fallback}
+  let crossSyncing = false;
+
+  function registerCrosshair(chart, series, data) {
+    if (!chart || !series) return;
+    const values = new Map();
+    const times = [];
+    let fallback = null;
+    (data || []).forEach((p) => {
+      if (p == null || p.value == null) return;
+      if (!values.has(p.time)) times.push(p.time);
+      values.set(p.time, p.value);
+      if (fallback == null) fallback = p.value;
+    });
+    // The Map is built in chronological order, so its keys are the ascending
+    // time axis the nearest-previous lookup binary-searches.
+    crossAnchors.set(chart, {
+      series: series, values: values, times: times, fallback: fallback,
+    });
+    chart.subscribeCrosshairMove((param) => onCrosshairMove(chart, param));
+  }
+
+  function crosshairValueAt(anchor, time) {
+    const exact = anchor.values.get(time);
+    if (exact != null) return exact;
+    const times = anchor.times || [];
+    let lo = 0;
+    let hi = times.length - 1;
+    let found = null;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (times[mid] <= time) { found = times[mid]; lo = mid + 1; } else { hi = mid - 1; }
+    }
+    return found == null ? anchor.fallback : anchor.values.get(found);
+  }
+
+  function onCrosshairMove(source, param) {
+    if (!source || !crossAnchors.size || crossSyncing) return;
+    const time = param && param.time != null ? param.time : null;
+    crossSyncing = true;
+    try {
+      crossAnchors.forEach((anchor, chart) => {
+        if (chart === source) return; // the hovered chart tracks the mouse itself
+        try {
+          if (time == null) {
+            chart.clearCrosshairPosition();
+          } else {
+            chart.setCrosshairPosition(crosshairValueAt(anchor, time), time, anchor.series);
+          }
+        } catch (_) { /* series or point vanished in a rebuild — skip it */ }
+      });
+    } finally {
+      setTimeout(() => { crossSyncing = false; }, 0);
+    }
+  }
+
   function chart(host, height) {
     const c = LightweightCharts.createChart(host, {
       height,
@@ -441,6 +509,9 @@
       grid: { vertLines: { color: "#22262f" }, horzLines: { color: "#22262f" } },
       rightPriceScale: { borderColor: "#333a46" },
       timeScale: { borderColor: "#333a46" },
+      // Free-floating crosshair, so the synced horizontal line is not snapped to
+      // a sample's extremes (same mode the dashboard uses).
+      crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
     });
     state.charts.push(c);
     return c;
@@ -511,7 +582,11 @@
       const strat = c.addLineSeries({
         color: "#4c8dff", lineWidth: 2, priceLineVisible: false, lastValueVisible: true,
       });
-      strat.setData(equity.map((p) => ({ time: p.time, value: p.equity })));
+      const eqPoints = equity.map((p) => ({ time: p.time, value: p.equity }));
+      strat.setData(eqPoints);
+      // Anchor the synced horizontal line on the strategy's equity, so hovering
+      // the drawdown chart reads the equity of that instant (and vice versa).
+      registerCrosshair(c, strat, eqPoints);
       const bench = rep.benchmark_curve || [];
       if (bench.length) {
         const b = c.addLineSeries({
@@ -542,7 +617,9 @@
         priceLineVisible: false,
         lastValueVisible: true,
       });
-      area.setData(dd.map((p) => ({ time: p.time, value: p.dd_pct })));
+      const ddPoints = dd.map((p) => ({ time: p.time, value: p.dd_pct }));
+      area.setData(ddPoints);
+      registerCrosshair(c, area, ddPoints);
       linked.push(c);
     } else {
       ddHost.textContent = "No drawdown series.";

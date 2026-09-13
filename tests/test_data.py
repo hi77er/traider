@@ -91,6 +91,77 @@ def test_normalize_missing_columns_raises():
         OpenBBClient._normalize(bad)
 
 
+def test_normalize_drops_bars_without_a_price():
+    """A placeholder bar (open/high but no close) is not a bar — drop it."""
+    raw = make_raw_df(3)
+    raw.loc[raw.index[-1], "Close"] = float("nan")
+    df = OpenBBClient._normalize(raw)
+    assert len(df) == 2
+    assert not df[["open", "high", "low", "close"]].isna().any().any()
+
+
+def test_normalize_keeps_bars_without_volume():
+    """Volume is optional: a bar can legitimately carry none."""
+    raw = make_raw_df(3)
+    raw.loc[raw.index[-1], "Volume"] = float("nan")
+    assert len(OpenBBClient._normalize(raw)) == 3
+
+
+def test_trailing_bar_without_a_price_is_recovered(tmp_path):
+    """A placeholder FINAL row is re-requested on its own, not silently lost.
+
+    yfinance returns the last row of a multi-day range with a NaN close while a
+    request starting on that date returns the settled close — so the newest bar
+    is recoverable instead of leaving the dataset permanently a day short.
+    """
+    settings = Settings(
+        openbb_provider="yfinance",
+        openbb_backup_providers="yfinance,polygon,fmp",
+        data_cache_enabled=False,
+        cache_dir=str(tmp_path),
+    )
+    partial = make_raw_df(3)
+    partial.loc[partial.index[-1], "Close"] = float("nan")
+    last_date = partial["Date"].iloc[-1]
+    settled = pd.DataFrame(
+        {
+            "Date": [last_date],
+            "Open": [500.0],
+            "High": [505.0],
+            "Low": [499.0],
+            "Close": [504.0],
+            "Volume": [7.0],
+        }
+    )
+    client = OpenBBClient(settings)
+    client._obb = FakeOBB(FakePrice([partial, settled]))
+
+    df = client.fetch_historical("AAPL", "2024-01-01", interval="4h")
+    assert len(df) == 3  # the trailing bar was recovered, not dropped
+    assert df["close"].notna().all()
+    assert df["close"].iloc[-1] == 504.0
+    # Same provider asked twice: the wide range, then that single day.
+    assert client._obb.equity.price.calls == ["yfinance", "yfinance"]
+
+
+def test_trailing_bar_is_dropped_when_the_retry_has_no_price(tmp_path):
+    """If the day has no settled bar at all, drop it (never store a null)."""
+    settings = Settings(
+        openbb_provider="yfinance",
+        openbb_backup_providers="yfinance,polygon,fmp",
+        data_cache_enabled=False,
+        cache_dir=str(tmp_path),
+    )
+    partial = make_raw_df(3)
+    partial.loc[partial.index[-1], "Close"] = float("nan")
+    client = OpenBBClient(settings)
+    client._obb = FakeOBB(FakePrice([partial, partial.tail(1)]))
+
+    df = client.fetch_historical("AAPL", "2024-01-01", interval="4h")
+    assert len(df) == 2
+    assert df["close"].notna().all()
+
+
 # ---------------------------------------------------------------------------
 # fetch_historical + caching + failover
 # ---------------------------------------------------------------------------
@@ -137,6 +208,22 @@ def test_fetch_historical_all_providers_fail(tmp_path):
     )
     with pytest.raises(OpenBBError):
         client.fetch_historical("AAPL", "2024-01-01", interval="4h")
+
+
+def test_failover_continues_past_an_empty_provider(tmp_path):
+    """An empty primary response must not abort the chain (backups still run)."""
+    settings = Settings(
+        openbb_provider="yfinance",
+        openbb_backup_providers="yfinance,polygon,fmp",
+        data_cache_enabled=False,
+        cache_dir=str(tmp_path),
+    )
+    client = OpenBBClient(settings)
+    client._obb = FakeOBB(FakePrice([pd.DataFrame(), make_raw_df()]))
+
+    df = client.fetch_historical("AAPL", "2024-01-01", interval="4h")
+    assert not df.empty
+    assert client._obb.equity.price.calls == ["yfinance", "polygon"]
 def test_resample_4h_from_1h():
     # 12 x 1h bars starting on a day boundary -> 3 x 4h bars
     dates = pd.date_range("2024-01-01 00:00", periods=12, freq="1h", tz="UTC")
@@ -282,6 +369,45 @@ def test_dataset_merge_dedupes(tmp_path):
     assert len(loaded) == 4  # 3 original + 1 new (01-03 deduped, last-write-wins)
     assert loaded.loc["2024-01-03"]["close"] == 9.5
     assert loaded.index.is_monotonic_increasing
+
+
+def test_load_dataset_drops_bars_with_missing_price(tmp_path):
+    """A bad bar already at rest is filtered on read (self-healing)."""
+    settings = Settings(historical_data_dir=str(tmp_path))
+    df = OpenBBClient._normalize(make_raw_df(3))
+    df.loc[df.index[-1], "close"] = float("nan")
+    path = dataset_path(settings, "AAPL", "1d")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(path)  # written straight to disk, bypassing save_dataset
+
+    loaded = load_dataset(settings, "AAPL", "1d")
+    assert len(loaded) == 2
+    assert loaded["close"].notna().all()
+
+
+def test_save_dataset_never_persists_a_bar_without_a_price(tmp_path):
+    settings = Settings(historical_data_dir=str(tmp_path))
+    df = OpenBBClient._normalize(make_raw_df(3))
+    df.loc[df.index[-1], "close"] = float("nan")
+    save_dataset(settings, df, "AAPL", "1d")
+    assert len(load_dataset(settings, "AAPL", "1d")) == 2
+
+
+def test_bad_refetch_cannot_overwrite_a_good_bar(tmp_path):
+    """Dedupe keeps the LAST row per timestamp — so a price-less re-fetch of a
+    bar we already hold must be dropped instead of clobbering the good value."""
+    settings = Settings(historical_data_dir=str(tmp_path))
+    good = OpenBBClient._normalize(make_raw_df(3))
+    save_dataset(settings, good, "AAPL", "1d")
+
+    placeholder = good.copy()
+    placeholder.loc[placeholder.index[-1], "close"] = float("nan")
+    save_dataset(settings, placeholder, "AAPL", "1d")
+
+    loaded = load_dataset(settings, "AAPL", "1d")
+    assert len(loaded) == 3
+    assert loaded["close"].notna().all()
+    assert loaded.loc[loaded.index[-1], "close"] == float(good["close"].iloc[-1])
 
 
 def test_fetch_candles_persists_dataset(tmp_path):

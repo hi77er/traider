@@ -4,6 +4,8 @@ The service reads/writes the project-root ``.env``; tests redirect it to a
 temp directory so nothing in the repo is touched.
 """
 
+import json
+
 from fastapi.testclient import TestClient
 
 from src.web.app import app
@@ -23,50 +25,66 @@ def _point_env_to(tmp_path):
 # ---------------------------------------------------------------------------
 def test_get_config_schema_returns_sections(tmp_path):
     path = _point_env_to(tmp_path)
-    path.write_text("DECISION_TIME=08:15\n", encoding="utf-8")
+    path.write_text("OPENBB_PROVIDER=polygon\n", encoding="utf-8")
     cfg = config_service.get_config_schema()
     assert cfg["file_exists"] is True
     assert cfg["file"]
-    names = [s["name"] for s in cfg["sections"]]
-    assert "Trading" in names and "Model" in names and "Web Portal" in names
-    trading = next(s for s in cfg["sections"] if s["name"] == "Trading")
-    decision = next(f for f in trading["fields"] if f["key"] == "DECISION_TIME")
-    assert decision["value"] == "08:15"
-    assert decision["set"] is True
-    assert decision["type"] == "str"
+    # Only the machine-level settings stay global.
+    assert [s["name"] for s in cfg["sections"]] == ["Market Data"]
+    market = next(s for s in cfg["sections"] if s["name"] == "Market Data")
+    provider = next(f for f in market["fields"] if f["key"] == "OPENBB_PROVIDER")
+    assert provider["value"] == "polygon"
+    assert provider["set"] is True
+    assert provider["type"] == "str"
+
+
+def test_moved_settings_are_not_in_the_global_form(tmp_path):
+    """Trading/model/gates/scheduler moved to the strategy layer; broker,
+    folders, backtest and cloud storage to the account layer."""
+    _point_env_to(tmp_path)
+    keys = {f["key"] for s in config_service.get_config_schema()["sections"] for f in s["fields"]}
+    assert keys == {"OPENBB_PROVIDER", "OPENBB_API_KEY", "OPENBB_BACKUP_PROVIDERS"}
+    for moved in ("DECISION_TIME", "DATA_DELTA_PULL_TIME", "TRADING_START_HOUR",
+                  "MARKET_TIMEZONE", "MODEL_TYPE", "GATE_MIN_SHARPE",
+                  "SCHEDULER_ENABLED", "IBKR_ACCOUNT_ID", "DATA_DIR",
+                  "CACHE_DIR", "TRAIN_TEST_SPLIT", "S3_BUCKET", "DYNAMODB_TABLE"):
+        assert moved not in keys, moved
 
 
 def test_get_config_uses_defaults_when_unset(tmp_path):
     _point_env_to(tmp_path)  # no .env file yet
     cfg = config_service.get_config_schema()
     assert cfg["file_exists"] is False
-    trading = next(s for s in cfg["sections"] if s["name"] == "Trading")
-    decision = next(f for f in trading["fields"] if f["key"] == "DECISION_TIME")
-    assert decision["value"] == "09:45"
-    assert decision["set"] is False
+    market = next(s for s in cfg["sections"] if s["name"] == "Market Data")
+    provider = next(f for f in market["fields"] if f["key"] == "OPENBB_PROVIDER")
+    assert provider["value"] == "yfinance"
+    assert provider["set"] is False
 
 
 def test_get_config_masks_secrets(tmp_path):
     path = _point_env_to(tmp_path)
-    path.write_text("OPENBB_API_KEY=supersecret123\nWEB_PORTAL_PASSWORD=hunter2\n", encoding="utf-8")
+    path.write_text("OPENBB_API_KEY=supersecret123\n", encoding="utf-8")
     cfg = config_service.get_config_schema()
     fields = [f for s in cfg["sections"] for f in s["fields"]]
     key = next(f for f in fields if f["key"] == "OPENBB_API_KEY")
     assert key["sensitive"] is True
     assert key["value"] == config_service.MASK
-    pwd = next(f for f in fields if f["key"] == "WEB_PORTAL_PASSWORD")
-    assert pwd["sensitive"] is True
-    assert pwd["value"] == config_service.MASK
 
 
 def test_get_config_types(tmp_path):
     _point_env_to(tmp_path)
     cfg = config_service.get_config_schema()
     fields = {f["key"]: f for s in cfg["sections"] for f in s["fields"]}
-    assert fields["DECISION_INTERVAL_HOURS"]["type"] == "int"
-    assert fields["TRAIN_TEST_SPLIT"]["type"] == "float"
-    assert fields["PAPER_TRADING"]["type"] == "bool"
-    assert fields["MODEL_TYPE"]["options"] == ["logistic_regression", "rule_based"]
+    assert fields["OPENBB_PROVIDER"]["type"] == "str"
+    # The typed fields now live in the strategy / account schemas.
+    from src.config.settings import Settings as S
+
+    sg = {f["key"]: f for g in config_service.strategy_config_groups(S(_env_file=None)) for f in g["fields"]}
+    assert sg["DECISION_INTERVAL_HOURS"]["type"] == "int"
+    assert sg["MODEL_TYPE"]["options"] == ["logistic_regression", "rule_based"]
+    ag = {f["key"]: f for g in config_service.account_sections(S(_env_file=None)) for f in g["fields"]}
+    assert ag["TRAIN_TEST_SPLIT"]["type"] == "float"
+    assert ag["PAPER_TRADING"]["type"] == "bool"
 
 
 # ---------------------------------------------------------------------------
@@ -74,46 +92,48 @@ def test_get_config_types(tmp_path):
 # ---------------------------------------------------------------------------
 def test_update_config_writes_values_and_keeps_secret(tmp_path):
     path = _point_env_to(tmp_path)
-    path.write_text("# header\nCACHE_DIR=.cache\nOPENBB_API_KEY=oldsecret\n", encoding="utf-8")
+    path.write_text("# header\nOPENBB_PROVIDER=yfinance\nOPENBB_API_KEY=oldsecret\n", encoding="utf-8")
 
     res = config_service.update_config(
-        {"CACHE_DIR": ".alt_cache", "OPENBB_API_KEY": "", "GATE_MIN_SHARPE": "1.5"}
+        {"OPENBB_PROVIDER": "polygon", "OPENBB_API_KEY": "",
+         "OPENBB_BACKUP_PROVIDERS": "yfinance,fmp"}
     )
     assert res["ok"] is True
-    assert "CACHE_DIR" in res["updated"]
-    assert "GATE_MIN_SHARPE" in res["updated"]
+    assert "OPENBB_PROVIDER" in res["updated"]
+    assert "OPENBB_BACKUP_PROVIDERS" in res["updated"]
 
     content = path.read_text(encoding="utf-8")
     assert "# header" in content              # comments preserved
-    assert "CACHE_DIR=.alt_cache" in content  # value updated in place
+    assert "OPENBB_PROVIDER=polygon" in content  # value updated in place
     assert "OPENBB_API_KEY=oldsecret" in content  # empty submission kept secret
-    assert "GATE_MIN_SHARPE=1.5" in content   # new key appended
+    assert "OPENBB_BACKUP_PROVIDERS=yfinance,fmp" in content  # new key appended
 
 
 def test_update_config_replaces_masked_secret(tmp_path):
     path = _point_env_to(tmp_path)
-    path.write_text("WEB_PORTAL_PASSWORD=hunter2\n", encoding="utf-8")
-    res = config_service.update_config({"WEB_PORTAL_PASSWORD": "newpass"})
+    path.write_text("OPENBB_API_KEY=hunter2\n", encoding="utf-8")
+    res = config_service.update_config({"OPENBB_API_KEY": "newpass"})
     assert res["ok"] is True
-    assert "WEB_PORTAL_PASSWORD=newpass" in path.read_text(encoding="utf-8")
+    assert "OPENBB_API_KEY=newpass" in path.read_text(encoding="utf-8")
 
 
 def test_update_config_invalid_value(tmp_path):
+    """Unchanged file values are validated too, so a bad one blocks the save."""
     path = _point_env_to(tmp_path)
-    path.write_text("INSTRUMENT=AAPL\n", encoding="utf-8")
-    res = config_service.update_config({"MODEL_TYPE": "not_a_real_model"})
+    path.write_text("MODEL_BUY_THRESHOLD=1.5\n", encoding="utf-8")  # out of 0..1
+    res = config_service.update_config({"OPENBB_PROVIDER": "yfinance"})
     assert res["ok"] is False
     assert res["errors"]
     # file untouched on validation failure
-    assert "MODEL_TYPE=" not in path.read_text(encoding="utf-8").replace("INSTRUMENT=AAPL", "")
+    assert path.read_text(encoding="utf-8") == "MODEL_BUY_THRESHOLD=1.5\n"
 
 
 def test_update_config_creates_file_when_missing(tmp_path):
     path = _point_env_to(tmp_path)
-    res = config_service.update_config({"CACHE_DIR": ".cache"})
+    res = config_service.update_config({"OPENBB_BACKUP_PROVIDERS": "yfinance"})
     assert res["ok"] is True
     assert path.exists()
-    assert "CACHE_DIR=.cache" in path.read_text(encoding="utf-8")
+    assert "OPENBB_BACKUP_PROVIDERS=yfinance" in path.read_text(encoding="utf-8")
 
 
 def test_instrument_is_strategy_scoped_not_global(tmp_path):
@@ -159,6 +179,7 @@ def test_strategy_config_groups_schema(tmp_path):
     assert by_key["FEATURE_RSI_ENABLED"]["type"] == "bool"
     assert by_key["FEATURE_RSI_ENABLED"]["value"] == "True"
     assert by_key["FEATURE_SMA_ENABLED"]["label"] == "Simple Moving Average (SMA)"
+    assert by_key["FEATURE_EMA_ENABLED"]["label"] == "Exponential Moving Average (EMA)"
     assert by_key["FEATURES_RSI_PERIOD"]["type"] == "int"
     assert by_key["MODEL_BUY_THRESHOLD"]["type"] == "float"
     assert by_key["POSITION_SIZING_MODE"]["options"] == ["fixed_risk", "volatility_target"]
@@ -178,16 +199,97 @@ def test_update_config_ignores_strategy_scoped_keys(tmp_path):
 
 
 def test_validate_strategy_config():
-    from src.config.settings import Settings as S
-
     ok, errs = config_service.validate_strategy_config({"MODEL_BUY_THRESHOLD": "0.5"})
     assert ok and not errs
     ok, errs = config_service.validate_strategy_config({"MODEL_BUY_THRESHOLD": "1.5"})  # out of 0..1
     assert not ok and errs
-    ok, errs = config_service.validate_strategy_config({"MODEL_TYPE": "rule_based"})  # not scoped
+    # MODEL_TYPE moved INTO the strategy scope, so it is accepted now...
+    ok, errs = config_service.validate_strategy_config({"MODEL_TYPE": "rule_based"})
+    assert ok and not errs
+    # ...while a machine/account key is still refused here.
+    ok, errs = config_service.validate_strategy_config({"OPENBB_PROVIDER": "yfinance"})
     assert not ok and errs
     ok, errs = config_service.validate_strategy_config({"FEATURE_RSI_ENABLED": "off"})  # bool spelling
     assert ok and not errs
+
+
+def test_strategy_scope_carries_trading_model_gates_scheduler():
+    """Everything a strategy needs is editable per strategy (previously global)."""
+    from src.config.settings import Settings as S
+
+    by_key = {f["key"]: f for g in config_service.strategy_config_groups(S(_env_file=None))
+              for f in g["fields"]}
+    for key in ("DECISION_INTERVAL_HOURS", "MARKET_TIMEZONE", "TRADING_START_HOUR",
+                "TRADING_END_HOUR", "DECISION_TIME", "DATA_DELTA_PULL_TIME",
+                "MODEL_TYPE", "GATE_MIN_SHARPE", "GATE_MAX_DRAWDOWN_PERCENT",
+                "GATE_MIN_WIN_RATE_PERCENT", "GATE_MAX_WEEKLY_LOSS_PERCENT",
+                "SCHEDULER_ENABLED", "SCHEDULER_TIMEZONE"):
+        assert key in by_key, key
+        assert config_service.validate_strategy_config({key: by_key[key]["value"]})[0], key
+
+
+# ---------------------------------------------------------------------------
+# account settings (settings/account/account.json)
+# ---------------------------------------------------------------------------
+def test_account_schema_groups_and_derived_folders(tmp_path):
+    from src.config.settings import Settings as S
+
+    groups = config_service.account_sections(S(_env_file=None))
+    names = [g["name"] for g in groups]
+    assert names == ["Trading Account", "Data & Folders", "Backtest",
+                     "Cloud Storage", "State Storage"]
+    by_key = {f["key"]: f for g in groups for f in g["fields"]}
+    assert by_key["IBKR_PASSWORD"]["sensitive"] is True
+    assert by_key["IBKR_ACCOUNT_ID"]["type"] == "str"
+    assert by_key["PAPER_TRADING"]["type"] == "bool"
+    assert by_key["PAPER_TRADING"]["value"] == "True"
+    assert by_key["DATA_DIR"]["value"] == "data"
+    # One folder for both subfolders, which are derived and not editable.
+    assert by_key["HISTORICAL_DATA_DIR"]["readonly"] is True
+    assert by_key["BACKTEST_DIR"]["readonly"] is True
+    assert by_key["HISTORICAL_DATA_DIR"]["value"] == "data/historical"
+    assert by_key["BACKTEST_DIR"]["value"] == "data/backtest_results"
+
+
+def test_update_account_persists_json_and_drives_folders(tmp_path, monkeypatch):
+    monkeypatch.setattr(config_service.account_mod, "account_file_path",
+                        lambda settings: tmp_path / "account.json")
+
+    res = config_service.update_account({
+        "DATA_DIR": "srv/data", "IBKR_ACCOUNT_ID": "U123",
+        "IBKR_PASSWORD": "s3cret", "PAPER_TRADING": "True",
+    })
+    assert res["ok"] is True, res
+    # Only what the user configures is stored — the two subfolders are derived.
+    assert json.loads((tmp_path / "account.json").read_text())["settings"] == {
+        "DATA_DIR": "srv/data",
+        "IBKR_ACCOUNT_ID": "U123",
+        "IBKR_PASSWORD": "s3cret",
+        "PAPER_TRADING": "True",
+    }
+    by_key = {f["key"]: f for g in res["groups"] for f in g["fields"]}
+    assert by_key["HISTORICAL_DATA_DIR"]["value"] == "srv/data/historical"
+    assert by_key["IBKR_PASSWORD"]["value"] == config_service.MASK  # never echoed back
+
+    # An empty secret field keeps the stored credential; unknown keys are refused.
+    res2 = config_service.update_account({"DATA_DIR": "srv/data", "IBKR_PASSWORD": ""})
+    assert res2["ok"] is True
+    assert json.loads((tmp_path / "account.json").read_text())["settings"]["IBKR_PASSWORD"] == "s3cret"
+    res3 = config_service.update_account({"INSTRUMENT": "TSLA"})
+    assert res3["ok"] is False and res3["errors"]
+
+
+def test_account_api_roundtrip(tmp_path, monkeypatch):
+    monkeypatch.setattr(config_service.account_mod, "account_file_path",
+                        lambda settings: tmp_path / "account.json")
+    got = client.get("/api/v1/account")
+    assert got.status_code == 200
+    assert [g["name"] for g in got.json()["groups"]][0] == "Trading Account"
+    posted = client.post("/api/v1/account", json={"values": {"IBKR_ACCOUNT_ID": "DU999",
+                                                          "PAPER_TRADING": "False"}})
+    assert posted.status_code == 200
+    assert posted.json()["ok"] is True
+    assert (tmp_path / "account.json").exists()
 
 
 def test_feature_toggle_on_off_parsing():

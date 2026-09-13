@@ -118,12 +118,19 @@ def jsonable(obj):
 # paths
 # ---------------------------------------------------------------------------
 def results_root(settings) -> Path:
-    """Root of all backtest output: next to the dataset dir.
+    """Root of all backtest output — the account's configured backtest folder.
 
-    ``data/historical`` -> ``data/backtest_results`` (its parent)."""
-    base = getattr(settings, "historical_data_dir", None)
+    ``BACKTEST_DIR`` (derived from the account's data folder, see
+    ``Settings._derive_data_dirs``) is authoritative. The fallbacks keep a plain
+    ``historical_data_dir``-only settings object working: results sit beside the
+    dataset, which is how the layout worked before the account layer existed.
+    """
+    base = getattr(settings, "backtest_dir", None)
     if base:
-        return Path(str(base)).resolve().parent / "backtest_results"
+        return Path(str(base))
+    hist = getattr(settings, "historical_data_dir", None)
+    if hist:
+        return Path(str(hist)).resolve().parent / "backtest_results"
     return Path("data/backtest_results")
 
 

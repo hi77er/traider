@@ -112,6 +112,10 @@ button {
 
 #chart-canvas { width: 100%; }
 
+/* Empty-chart notice: shown instead of a silent blank pane when the dataset
+   has no usable bars (e.g. after deleting the data, before re-downloading). */
+#chart-canvas .chart-empty { padding: 32px 6px; text-align: center; }
+
 #table-wrap { max-height: 420px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; }
 
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -1184,4 +1188,103 @@ button.primary.small:disabled, button.ghost.small:disabled {
 .rp-details summary { cursor: pointer; color: var(--muted); font-size: 12px; }
 .rp-details[open] summary { margin-bottom: 8px; }
 .rp-details .rp-kv .label { font-variant-numeric: tabular-nums; }
+
+/* ---------- Market landing page (/market) ---------- */
+/* Header link that looks like the ghost buttons next to it. */
+.btn-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 13px;
+  text-decoration: none;
+}
+.btn-link:hover { border-color: var(--accent); color: var(--accent); }
+
+/* `.mkt-alert` is a block element, so [hidden] must be re-asserted: a class
+   selector outranks the UA's `[hidden] { display: none }`. */
+.mkt-alert {
+  display: block;
+  margin: 0 0 16px;
+  padding: 10px 14px;
+  border: 1px solid #f0b429;
+  border-radius: 10px;
+  background: rgba(240, 180, 41, 0.08);
+  color: #ffd28a;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.mkt-alert[hidden] { display: none; }
+
+.mkt-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(430px, 1fr));
+  gap: 20px;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .mkt-grid { grid-template-columns: 1fr; }
+}
+
+.mkt-card { margin-bottom: 0; min-width: 0; }
+.mkt-card.span-2 { grid-column: 1 / -1; }
+.mkt-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.mkt-card-head h2 { margin: 0; }
+.mkt-desc { margin: 0 0 4px; font-size: 12.5px; color: var(--muted); line-height: 1.45; }
+.mkt-meta { margin: 0 0 10px; font-size: 11.5px; color: var(--muted); line-height: 1.45; }
+
+.mkt-table-wrap {
+  max-height: 420px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.mkt-table-wrap.tall { max-height: 520px; }
+.mkt-empty { text-align: center; color: var(--muted); font-size: 12.5px; padding: 18px 12px; }
+.mkt-empty.error { color: #ffd28a; white-space: normal; }
+td.mkt-sym { font-weight: 600; }
+
+.pos { color: var(--green); }
+.neg { color: var(--red); }
+#mkt-updated.warn { border-color: #f0b429; color: #ffd28a; }
+#mkt-source { margin-bottom: 16px; }
+
+/* Screener filter row (the settings form styles are scoped to `.field`). */
+.mkt-filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px 14px;
+  margin: 12px 0 6px;
+}
+.mkt-filters label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.mkt-filters input,
+.mkt-filters select {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 9px;
+  font-size: 13px;
+  font-family: inherit;
+  width: 100%;
+}
+.mkt-filters input:focus,
+.mkt-filters select:focus { outline: none; border-color: var(--accent); }
 

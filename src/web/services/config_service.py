@@ -25,6 +25,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from pydantic import ValidationError
 
+from src.config import account as account_mod
+from src.config.effective import invalidate
 from src.config.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -42,31 +44,13 @@ _SENSITIVE_SUFFIXES = ("_PASSWORD", "_API_KEY", "_SECRET", "_TOKEN")
 
 # (prefixes / exact keys, section name). Order here groups the fields that are
 # defined on ``Settings``; fields themselves render in model-definition order.
+#
+# Only MACHINE-level settings stay global. Everything else moved to one of the
+# two JSON layers: trading/storage/broker defaults live in Account Settings
+# (``settings/account/account.json``) and anything a strategy needs lives in the
+# strategy store (``settings/strategies/store.json``).
 _SECTION_RULES: List[Tuple[Tuple[str, ...], str]] = [
-    (
-        (
-            "INSTRUMENT", "DECISION_INTERVAL_HOURS", "TRADING_START_HOUR", "TRADING_END_HOUR",
-            "MARKET_TIMEZONE", "DECISION_TIME", "DATA_DELTA_PULL_TIME",
-        ),
-        "Trading",
-    ),
-    (("OPENBB_", "DATA_CACHE_ENABLED", "CACHE_DIR"), "Market Data"),
-    (("HISTORICAL_", "BACKTEST_START_DATE", "BACKTEST_END_DATE", "TRAIN_TEST_SPLIT", "LIVE_LOOKBACK_DAYS"), "Data & Storage"),
-    (("FEATURE_",), "Features"),
-    (("FEATURES_",), "Feature Parameters"),
-    (("MODEL_", "STRATEGY_"), "Model"),
-    (
-        (
-            "RISK_", "MAX_LOSS_PERCENT", "MAX_CONSECUTIVE_LOSSES", "MAX_EXPOSURE_PERCENT",
-            "POSITION_SIZING_MODE", "STOP_LOSS_PERCENT", "TAKE_PROFIT_PERCENT",
-            "CIRCUIT_BREAKER_ENABLED", "APPLY_RISK_LAYER",
-        ),
-        "Risk Management",
-    ),
-    (("GATE_", "BACKTEST_SLIPPAGE_PERCENT", "BACKTEST_COMMISSION_PER_TRADE"), "Backtest Gates"),
-    (("IBKR_", "PAPER_TRADING", "EXECUTION_"), "Execution (IBKR)"),
-    (("SCHEDULER_",), "Scheduler"),
-    (("WEB_PORTAL_",), "Web Portal"),
+    (("OPENBB_",), "Market Data"),
 ]
 
 # Keys rendered as a dropdown instead of a free-text field. Options may be a
@@ -97,6 +81,8 @@ _LABELS: Dict[str, str] = {
     "HISTORICAL_LOOKBACK_YEARS": "Historical Period",
     "HISTORICAL_BAR_SIZE": "Historical Bar Size",
     "FEATURE_SMA_ENABLED": "Simple Moving Average (SMA)",
+    "FEATURE_EMA_ENABLED": "Exponential Moving Average (EMA)",
+    "FEATURE_MACD_ENABLED": "MACD (moving average convergence/divergence)",
     "FEATURE_RSI_ENABLED": "Relative Strength Index (RSI)",
     "FEATURE_ATR_ENABLED": "Average True Range (ATR)",
     "FEATURE_BOLLINGER_ENABLED": "Bollinger Bands (%B)",
@@ -115,6 +101,47 @@ _LABELS: Dict[str, str] = {
     "MAX_LOSS_PERCENT": "Max daily loss before halt (%)",
     "MAX_CONSECUTIVE_LOSSES": "Max consecutive losses",
     "CIRCUIT_BREAKER_ENABLED": "Circuit breaker enabled",
+    # ── Account settings (settings/account/account.json) ──────────
+    "DATA_DIR": "Data folder",
+    "HISTORICAL_DATA_DIR": "Historical data subfolder",
+    "BACKTEST_DIR": "Backtest data subfolder",
+    "PAPER_TRADING": "Paper trading (no real orders)",
+    "IBKR_API_URL": "IBKR Client Portal Gateway URL",
+    "IBKR_ACCOUNT_ID": "IBKR account id",
+    "IBKR_USERNAME": "IBKR username",
+    "IBKR_PASSWORD": "IBKR password",
+    "BACKTEST_START_DATE": "Backtest window start",
+    "BACKTEST_END_DATE": "Backtest window end",
+    "TRAIN_TEST_SPLIT": "Train/test split",
+    "BACKTEST_SLIPPAGE_PERCENT": "Slippage per fill (%)",
+    "BACKTEST_COMMISSION_PER_TRADE": "Commission per trade (USD)",
+    "DATA_CACHE_ENABLED": "Cache fetched candles",
+    "CACHE_DIR": "Cache folder",
+    "HISTORICAL_START_DATE": "History fetch start",
+    "HISTORICAL_END_DATE": "History fetch end",
+    "LIVE_LOOKBACK_DAYS": "Live poll lookback (days)",
+    "S3_ENABLED": "Sync dataset to S3",
+    "S3_BUCKET": "S3 bucket",
+    "S3_PREFIX": "S3 key prefix",
+    "S3_ENDPOINT_URL": "S3 endpoint (MinIO)",
+    "AWS_REGION": "AWS region",
+    "DYNAMODB_TABLE": "State table",
+    "DYNAMODB_TTL_DAYS": "State TTL (days)",
+    "DYNAMODB_ENDPOINT_URL": "DynamoDB endpoint (local)",
+    # ── Strategy settings that moved out of the global form ───────
+    "DECISION_INTERVAL_HOURS": "Decision interval (hours)",
+    "TRADING_START_HOUR": "Trading window start",
+    "TRADING_END_HOUR": "Trading window end",
+    "MARKET_TIMEZONE": "Market timezone",
+    "DECISION_TIME": "Daily decision time",
+    "DATA_DELTA_PULL_TIME": "Daily delta pull time",
+    "MODEL_TYPE": "Model type",
+    "GATE_MIN_SHARPE": "Gate: min Sharpe",
+    "GATE_MAX_DRAWDOWN_PERCENT": "Gate: max drawdown (%)",
+    "GATE_MIN_WIN_RATE_PERCENT": "Gate: min win rate (%)",
+    "GATE_MAX_WEEKLY_LOSS_PERCENT": "Gate: max weekly loss (%)",
+    "SCHEDULER_ENABLED": "Scheduler enabled",
+    "SCHEDULER_TIMEZONE": "Scheduler timezone",
 }
 
 # ── Numeric bounds surfaced to the UI ──────────────────────────────────────
@@ -149,6 +176,8 @@ def _field_bounds(field) -> Dict[str, Any]:
 # for keys whose description is thin or missing. Keep them short.
 _HINTS: Dict[str, str] = {
     "MODEL_RETRAIN_INTERVAL_DAYS": "Ignored by the rule-based model.",
+    "FEATURES_EMA_PERIODS": "An EMA weights recent bars more than an SMA, so it turns faster "
+    "(9 = fast, 21 = medium, 50 = slow).",
     "BACKTEST_SLIPPAGE_PERCENT": "Order slippage as a % of price, charged on each fill (e.g. 0.05 = 0.05%).",
     "IBKR_API_URL": "Base URL of the IBKR Client Portal Gateway you connect to.",
     "IBKR_ACCOUNT_ID": "Your Interactive Brokers account id.",
@@ -224,11 +253,27 @@ _STRATEGY_SCOPE: List[Tuple[str, Tuple[str, ...]]] = [
             "HISTORICAL_BAR_SIZE",
         ),
     ),
-    ("Model", ("MODEL_BUY_THRESHOLD", "MODEL_SELL_THRESHOLD")),
+    (
+        "Trading",
+        (
+            # The trading window + decision cadence belong to the strategy: two
+            # strategies on the same instrument can trade different sessions.
+            "DECISION_INTERVAL_HOURS", "MARKET_TIMEZONE", "TRADING_START_HOUR",
+            "TRADING_END_HOUR", "DECISION_TIME", "DATA_DELTA_PULL_TIME",
+        ),
+    ),
+    (
+        "Model",
+        (
+            "MODEL_TYPE", "MODEL_BUY_THRESHOLD", "MODEL_SELL_THRESHOLD",
+            "MODEL_RETRAIN_INTERVAL_DAYS",
+        ),
+    ),
     (
         "Features",
         (
-            "FEATURE_SMA_ENABLED", "FEATURE_RSI_ENABLED", "FEATURE_ATR_ENABLED",
+            "FEATURE_SMA_ENABLED", "FEATURE_EMA_ENABLED", "FEATURE_MACD_ENABLED",
+            "FEATURE_RSI_ENABLED", "FEATURE_ATR_ENABLED",
             "FEATURE_BOLLINGER_ENABLED", "FEATURE_MOMENTUM_ENABLED",
             "FEATURE_VOLATILITY_ENABLED", "FEATURE_VWAP_ENABLED",
             "FEATURE_VOLUME_ENABLED", "FEATURE_VOLUME_ABS_ENABLED",
@@ -237,12 +282,26 @@ _STRATEGY_SCOPE: List[Tuple[str, Tuple[str, ...]]] = [
     (
         "Feature Parameters",
         (
-            "FEATURES_SMA_PERIODS", "FEATURES_RSI_PERIOD", "FEATURES_ATR_PERIOD",
+            "FEATURES_SMA_PERIODS", "FEATURES_EMA_PERIODS",
+            "FEATURES_MACD_FAST_PERIOD", "FEATURES_MACD_SLOW_PERIOD",
+            "FEATURES_MACD_SIGNAL_PERIOD",
+            "FEATURES_RSI_PERIOD", "FEATURES_ATR_PERIOD",
             "FEATURES_BOLLINGER_PERIOD", "FEATURES_BOLLINGER_STD",
             "FEATURES_MOMENTUM_PERIODS", "FEATURES_VOLATILITY_PERIOD",
             "FEATURES_VWAP_PERIOD", "FEATURES_VOLUME_PERIOD", "FEATURES_MIN_LOOKBACK",
         ),
     ),
+    (
+        "Backtest Gates",
+        (
+            # Thresholds a backtest must clear — evaluated per strategy, so a
+            # scalping strategy can hold itself to a different Sharpe bar than
+            # a swing strategy.
+            "GATE_MIN_SHARPE", "GATE_MAX_DRAWDOWN_PERCENT",
+            "GATE_MIN_WIN_RATE_PERCENT", "GATE_MAX_WEEKLY_LOSS_PERCENT",
+        ),
+    ),
+    ("Scheduler", ("SCHEDULER_ENABLED", "SCHEDULER_TIMEZONE")),
     (
         "Risk Management",
         (
@@ -260,16 +319,62 @@ _STRATEGY_SCOPE: List[Tuple[str, Tuple[str, ...]]] = [
 ]
 STRATEGY_SCOPED_KEYS = frozenset(k for _, keys in _STRATEGY_SCOPE for k in keys)
 
-# Keys that are NOT shown in the global .env form right now:
-# - ``S3_*`` / ``AWS_*`` / ``DYNAMODB_*`` — sync/storage parts not implemented
-#   yet (surface them again once those features land).
-# - ``WEB_PORTAL_ENABLED`` — the dashboard is essential while it is the only
-#   UI, so its on/off switch must not be reachable from the form.
-_HIDDEN_FROM_GLOBAL_PREFIXES = ("S3_", "AWS_", "DYNAMODB_")
+# ── Account settings (settings/account/account.json) ──────────────────────
+# What is true of this trading ACCOUNT: the broker it trades through, where its
+# data and backtest runs are stored, and the backtest defaults. One file shared
+# by every strategy; precedence is strategy > account > .env.
+_ACCOUNT_SECTIONS: List[Tuple[str, Tuple[str, ...]]] = [
+    (
+        "Trading Account",
+        (
+            "PAPER_TRADING",
+            "IBKR_API_URL", "IBKR_ACCOUNT_ID", "IBKR_USERNAME", "IBKR_PASSWORD",
+            "EXECUTION_MAX_RETRIES", "EXECUTION_RETRY_BASE_DELAY_SECONDS",
+            "EXECUTION_ORDER_TIMEOUT_SECONDS",
+        ),
+    ),
+    (
+        "Data & Folders",
+        (
+            # DATA_DIR is the single folder the user picks; the two subfolders
+            # below are DERIVED from it (read-only in the popup).
+            "DATA_DIR", "HISTORICAL_DATA_DIR", "BACKTEST_DIR",
+            "DATA_CACHE_ENABLED", "CACHE_DIR",
+            "HISTORICAL_START_DATE", "HISTORICAL_END_DATE", "LIVE_LOOKBACK_DAYS",
+        ),
+    ),
+    (
+        "Backtest",
+        (
+            "BACKTEST_START_DATE", "BACKTEST_END_DATE", "TRAIN_TEST_SPLIT",
+            "BACKTEST_SLIPPAGE_PERCENT", "BACKTEST_COMMISSION_PER_TRADE",
+        ),
+    ),
+    ("Cloud Storage", ("S3_ENABLED", "S3_BUCKET", "S3_PREFIX", "S3_ENDPOINT_URL")),
+    (
+        "State Storage",
+        ("AWS_REGION", "DYNAMODB_TABLE", "DYNAMODB_TTL_DAYS", "DYNAMODB_ENDPOINT_URL"),
+    ),
+]
+ACCOUNT_SCOPED_KEYS = frozenset(k for _, keys in _ACCOUNT_SECTIONS for k in keys)
+
+# Derived from DATA_DIR — shown so the layout is visible, never stored.
+_DERIVED_ACCOUNT_KEYS = frozenset({"HISTORICAL_DATA_DIR", "BACKTEST_DIR"})
+
+# Keys that are NOT shown in the global .env form:
+# - ``WEB_PORTAL_*`` — the portal is being reworked; its switches are parked.
+# - internal file paths — implied by the folder layout, not user-editable.
+# - ``S3_*`` / ``AWS_*`` / ``DYNAMODB_*`` — now edited in Account Settings.
+_HIDDEN_FROM_GLOBAL_PREFIXES = ("WEB_PORTAL_",)
 _HIDDEN_FROM_GLOBAL_KEYS = frozenset({
+    # Paths to the two JSON stores (see ACCOUNT_SETTINGS_FILE / STRATEGY_RULES_FILE).
+    "STRATEGY_RULES_FILE",
+    "ACCOUNT_SETTINGS_FILE",
+    # The dashboard is essential while it is the only UI, so its on/off switch
+    # must not be reachable from the form.
     "WEB_PORTAL_ENABLED",
-    # Historical window is now a years/bar-size choice in the strategy panel,
-    # not free-text dates in the global .env form.
+    # Historical window is a years/bar-size choice in the strategy panel, and a
+    # fetch-window default in Account Settings — not free-text in the global form.
     "HISTORICAL_START_DATE",
     "HISTORICAL_END_DATE",
 })
@@ -382,8 +487,8 @@ def get_config_schema() -> dict:
     order: List[str] = []
     for field_name, info in Settings.model_fields.items():
         key = _env_key(field_name)
-        if key in STRATEGY_SCOPED_KEYS or _hidden_from_global(key):
-            continue  # per-strategy / not-yet-exposed settings are not in the global form
+        if key in STRATEGY_SCOPED_KEYS or key in ACCOUNT_SCOPED_KEYS or _hidden_from_global(key):
+            continue  # per-strategy / per-account / parked settings are not in the global form
         sensitive = _is_sensitive(key)
         section = _section_for(key)
         if section not in sections:
@@ -442,6 +547,8 @@ def update_config(values: Dict[str, str]) -> dict:
             continue  # protected keys are never changed via the API
         if key in STRATEGY_SCOPED_KEYS:
             continue  # per-strategy keys are managed in the strategy panel only
+        if key in ACCOUNT_SCOPED_KEYS:
+            continue  # account keys are managed in the Account Settings popup only
         if _hidden_from_global(key):
             continue  # not editable through the global form (yet)
         if _is_sensitive(key) and submitted in ("", MASK):
@@ -473,6 +580,8 @@ def update_config(values: Dict[str, str]) -> dict:
             continue
         if key in STRATEGY_SCOPED_KEYS:
             continue  # never written to .env — per strategy only
+        if key in ACCOUNT_SCOPED_KEYS:
+            continue  # never written to .env — per account only
         if _hidden_from_global(key):
             continue  # not editable through the global form (yet)
         if _is_sensitive(key) and submitted in ("", MASK):
@@ -591,6 +700,121 @@ def _section_for(key: str) -> str:
         if any(key == p or key.startswith(p) for p in prefixes):
             return name
     return "Other"
+
+
+# ---------------------------------------------------------------------------
+# Account settings (settings/account/account.json)
+# ---------------------------------------------------------------------------
+def account_sections(settings: Optional[Settings] = None) -> List[dict]:
+    """Sections/fields of the account settings, with the value in force for each.
+
+    Mirrors ``strategy_config_groups``: a stored account value wins, otherwise
+    the current ``.env`` / schema default is shown — so the popup never displays
+    a value the bot is not actually using.
+    """
+    settings = settings or Settings()
+    stored = account_mod.account_values(settings)
+    field_by_key = _field_by_env_key()
+    # Show values as the bot would USE them: the account layer applied on top of
+    # the .env defaults, so the derived folders reflect the account's own DATA_DIR.
+    try:
+        shown_kwargs: Dict[str, str] = {
+            field_by_key[k]: v for k, v in stored.items()
+            if k in ACCOUNT_SCOPED_KEYS and k in field_by_key
+        }
+        if shown_kwargs.get("data_dir") and not {"historical_data_dir", "backtest_dir"} & set(shown_kwargs):
+            shown_kwargs.update(account_mod.derived_dirs(shown_kwargs["data_dir"]))
+        shown = Settings(**shown_kwargs)
+    except ValidationError:
+        shown = settings
+    groups: List[dict] = []
+    for name, keys in _ACCOUNT_SECTIONS:
+        fields: List[dict] = []
+        for key in keys:
+            field_name = field_by_key[key]
+            info = Settings.model_fields[field_name]
+            default_value = _format_value(getattr(shown, field_name))
+            raw = stored.get(key)
+            sensitive = _is_sensitive(key)
+            field = {
+                "key": key,
+                "label": _LABELS.get(key, _human_label(key)),
+                "type": _field_type(info.annotation),
+                # A set secret is never sent to the browser.
+                "value": (MASK if sensitive and raw else (raw if raw is not None else default_value)),
+                "default_value": default_value,
+                "set": raw is not None,
+                "sensitive": sensitive,
+                "readonly": key in _DERIVED_ACCOUNT_KEYS,
+                "readonly_note": (
+                    "Derived from the data folder above" if key in _DERIVED_ACCOUNT_KEYS else None
+                ),
+                "description": info.description or "",
+                "options": _OPTIONS.get(key),
+                "hints": _field_hints(key, info),
+            }
+            field.update(_field_bounds(info))
+            fields.append(field)
+        groups.append({"name": name, "fields": fields})
+    return groups
+
+
+def get_account_schema() -> dict:
+    """Payload for the Account Settings popup."""
+    settings = Settings()
+    path = account_mod.account_file_path(settings)
+    return {
+        "file": str(path),
+        "file_exists": path.exists(),
+        "groups": account_sections(settings),
+        "error": account_mod.account_error(settings),
+    }
+
+
+def update_account(values: Dict[str, str]) -> dict:
+    """Validate + persist the account settings into ``account.json``.
+
+    Secret fields submitted empty / masked keep their stored value, exactly like
+    the global form, so an unedited password field can never wipe a credential.
+    """
+    settings = Settings()
+    stored = {k: v for k, v in account_mod.account_values(settings).items() if k in ACCOUNT_SCOPED_KEYS}
+    field_by_key = _field_by_env_key()
+
+    merged: Dict[str, str] = dict(stored)
+    errors: List[str] = []
+    for key, submitted in values.items():
+        env_key = str(key).strip().upper()
+        if env_key not in ACCOUNT_SCOPED_KEYS or env_key not in field_by_key:
+            errors.append(f"{env_key}: not an account setting")
+            continue
+        if env_key in _DERIVED_ACCOUNT_KEYS:
+            continue  # derived from DATA_DIR, never stored
+        if _is_sensitive(env_key) and submitted in ("", MASK):
+            continue  # keep the stored secret
+        merged[env_key] = str(submitted).strip()
+
+    if not errors:
+        try:
+            Settings(**{field_by_key[k]: v for k, v in merged.items()})
+        except ValidationError as exc:
+            for err in exc.errors():
+                loc = ".".join(map(str, err["loc"]))
+                errors.append(f"{loc.upper()}: {err['msg']}")
+    if errors:
+        logger.warning("Account settings rejected: %s", errors)
+        return {"ok": False, "message": "Invalid account settings", "errors": errors}
+
+    path = account_mod.save_account(settings, merged)
+    invalidate()  # the account layer feeds resolve_effective()
+    logger.info("Account settings saved to %s", path)
+    return {
+        "ok": True,
+        "message": f"Saved {len(merged)} setting(s) to {path.name}",
+        "errors": [],
+        "file": str(path),
+        "groups": account_sections(Settings()),
+    }
 
 
 def _human_label(key: str) -> str:

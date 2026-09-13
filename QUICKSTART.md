@@ -81,7 +81,7 @@ Build a modular Python trading bot for AAPL (Apple) stock that:
    └─ Live: Current price every 4 hours
 
 3. FEATURES → Converts price → AI-friendly numbers
-   └─ (SMA, RSI, momentum, volatility, etc.)
+   └─ (SMA, EMA, MACD, RSI, momentum, volatility, etc.)
 
 4. MODEL → The "AI" - takes features, outputs BUY/SELL/HOLD
    └─ Trained offline, saved to file, loaded at startup
@@ -156,7 +156,8 @@ traider/
 → Reproducible, manageable, ~$15/month
 
 ✅ **Web Portal (FastAPI) for monitoring** not Telegram  
-→ Dashboard shows status, candlestick chart, and data table; no external messenger
+→ Dashboard shows status, candlestick chart, and data table; a separate `/market`
+page screens the whole US market (gainers, volume, losers, small caps)
 
 ---
 
@@ -177,20 +178,53 @@ Endpoints:
 - `GET /api/v1/dataset/status` — dataset summary + backfill job state
 - `GET /api/v1/dataset/data?start=&end=&limit=&offset=` — paginated OHLCV rows (`limit=0` = all for the chart)
 - `POST /api/v1/dataset/backfill` — start the background initial download
-- `GET  /api/v1/chart/indicators` — overlay-ready indicator series (price SMA/Bollinger overlays + RSI/ATR/momentum/volatility oscillator panes); memoized server-side
+- `GET  /api/v1/chart/indicators` — overlay-ready indicator series (price SMA/EMA/Bollinger overlays + MACD/RSI/ATR/momentum/volatility oscillator panes); memoized server-side
 - `GET  /api/v1/delta/status` — dataset sync state (missing completed days + last 5 bars)
 - `POST /api/v1/delta/sync` — fetch the missing days into the dataset (Daily Delta panel)
 - `GET  /api/v1/config` — editable config schema (sections/fields, secrets masked)
 - `POST /api/v1/config` — save form values to `.env` (atomic, revalidated)
+- `GET  /market` — market landing page (see below)
+- `GET  /api/v1/market/overview?size=&force=` — every market panel in one payload (90 s in-process cache)
+- `GET  /api/v1/market/panel/{key}?size=&offset=` — a single panel, paged (browse the whole market)
+- `GET  /api/v1/market/presets` — the Yahoo preset screeners available to the screener panel
+- `GET  /api/v1/market/screen?preset=&size=&market_cap_min=&market_cap_max=&min_price=&min_volume=` — run one preset with filters
+- `POST /api/v1/market/refresh` — drop the cached market overview
 
-The right-hand **Settings (.env)** pane shows every config var grouped by section and is
-collapsed by default (toggle `+` to expand). `INSTRUMENT` is **read-only** — it only reflects
-`.env` and must be changed there manually, so the trading symbol can't be switched in-flight.
-Booleans render as on/off switches. The **Features** section lists the Feature Engineering indicators
-(`FEATURE_*_ENABLED`: SMA, RSI, ATR, Bollinger, Momentum, Volatility) to turn each on or off; their
-window/period parameters live under **Feature Parameters** (`FEATURES_*`). Secrets (`*_PASSWORD`, `*_API_KEY`, …) are masked — leave the field empty to keep
-the existing value. Saving writes `.env` (created if missing) and validates against the Pydantic
-`Settings` model; restart the bot to apply.
+### Market page (`/market`)
+
+Whole-market screening, opened from the **🌎 Market** button in the dashboard header.
+Seven sections: a **preset screener** (15 Yahoo presets × your own market-cap /
+price / volume filters), **whole market**, **top gainers**, **highest volume**,
+**top losers**, and the **small-cap** gainers/volume equivalents. The two long
+tables are collapsible and **start collapsed** so the page opens as an overview.
+
+Data comes from Yahoo's equity screener, called through `yfinance` — **not**
+OpenBB, which cannot express a sort field, page size or region filter. Every
+panel is a live request on a cold load (7 Yahoo calls); the assembled overview
+is then memoized for 90 s. Volume is **raw share volume, not relative volume**,
+penny stocks are excluded (`price > $1`) and OTC/pink sheets are dropped.
+
+### Where settings live
+
+Three layers, each edited from its own place in the dashboard:
+
+| Layer | Editor | File | Holds |
+|-------|--------|------|-------|
+| Global | **⚙ Global Settings** (header) | `.env` | data provider + API keys |
+| Account | **🏦 Account Settings** (header) | `settings/account/account.json` | broker (Trading Account), the data folder, backtest defaults, cloud/state storage |
+| Strategy | **Strategy Configuration** / **Rules** / **Risk Management** panels | `settings/strategies/store.json` | instrument, bar size, features, model, gates, schedule, risk limits, rules |
+
+Precedence: **strategy > account > .env**. Booleans render as on/off switches and
+secrets (`*_PASSWORD`, `*_API_KEY`, …) are masked — leave a secret field empty to
+keep the existing value. Every form validates against the Pydantic `Settings`
+model; account and strategy saves take effect immediately (the settings cache is
+keyed on the file mtimes), while `.env` changes need a bot restart.
+
+The **Features** toggles (`FEATURE_*_ENABLED`: SMA, EMA, MACD, RSI, ATR, Bollinger,
+Momentum, Volatility, VWAP, Volume) live in the strategy panel, with their
+window/period parameters under **Feature Parameters** (`FEATURES_*`). The
+**Data folder** field in Account Settings is the single folder that holds both the
+`historical/` and `backtest_results/` subfolders.
 
 The **Daily Delta** panel (left, shown once a dataset exists) checks the Parquet for missing
 completed days. When synced it shows "All data synced" + the last 5 bars; when days are missing
@@ -306,6 +340,10 @@ HISTORICAL_END_DATE=
 
 # Features (signal evaluation)
 FEATURES_SMA_PERIODS=10,20,50
+FEATURES_EMA_PERIODS=9,21,50
+FEATURES_MACD_FAST_PERIOD=12
+FEATURES_MACD_SLOW_PERIOD=26
+FEATURES_MACD_SIGNAL_PERIOD=9
 FEATURES_RSI_PERIOD=14
 FEATURES_ATR_PERIOD=14
 

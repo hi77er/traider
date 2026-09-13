@@ -159,8 +159,8 @@ traider/
 - **Trading instrument & period:** `INSTRUMENT`, `DECISION_INTERVAL_HOURS`, `TRADING_START_HOUR`, `TRADING_END_HOUR`, `MARKET_TIMEZONE`, `DECISION_TIME`, `DATA_DELTA_PULL_TIME`
 - **Market data:** `OPENBB_PROVIDER`, `OPENBB_API_KEY`
 - **Historical data period:** `HISTORICAL_BAR_SIZE`, `HISTORICAL_START_DATE`, `HISTORICAL_END_DATE`, `BACKTEST_START_DATE`, `BACKTEST_END_DATE`, `TRAIN_TEST_SPLIT`
-- **Features (signal evaluation):** `FEATURES_SMA_PERIODS`, `FEATURES_RSI_PERIOD`, `FEATURES_ATR_PERIOD`, `FEATURES_BOLLINGER_PERIOD`, `FEATURES_BOLLINGER_STD`, `FEATURES_MOMENTUM_PERIODS`, `FEATURES_VOLATILITY_PERIOD`, `FEATURES_MIN_LOOKBACK`
-- **Features (on/off toggles, one per indicator):** `FEATURE_SMA_ENABLED`, `FEATURE_RSI_ENABLED`, `FEATURE_ATR_ENABLED`, `FEATURE_BOLLINGER_ENABLED`, `FEATURE_MOMENTUM_ENABLED`, `FEATURE_VOLATILITY_ENABLED` (SMA / RSI / ATR / Bollinger / Momentum / Volatility)
+- **Features (signal evaluation):** `FEATURES_SMA_PERIODS`, `FEATURES_EMA_PERIODS`, `FEATURES_MACD_FAST_PERIOD`, `FEATURES_MACD_SLOW_PERIOD`, `FEATURES_MACD_SIGNAL_PERIOD`, `FEATURES_RSI_PERIOD`, `FEATURES_ATR_PERIOD`, `FEATURES_BOLLINGER_PERIOD`, `FEATURES_BOLLINGER_STD`, `FEATURES_MOMENTUM_PERIODS`, `FEATURES_VOLATILITY_PERIOD`, `FEATURES_MIN_LOOKBACK`
+- **Features (on/off toggles, one per indicator):** `FEATURE_SMA_ENABLED`, `FEATURE_EMA_ENABLED`, `FEATURE_MACD_ENABLED`, `FEATURE_RSI_ENABLED`, `FEATURE_ATR_ENABLED`, `FEATURE_BOLLINGER_ENABLED`, `FEATURE_MOMENTUM_ENABLED`, `FEATURE_VOLATILITY_ENABLED` (SMA / RSI / ATR / Bollinger / Momentum / Volatility)
 - **Model:** `MODEL_TYPE`, `MODEL_BUY_THRESHOLD`, `MODEL_SELL_THRESHOLD`, `MODEL_RETRAIN_INTERVAL_DAYS`
 - **Risk:** `RISK_LIMIT_PERCENT`, `MAX_LOSS_PERCENT`, `MAX_CONSECUTIVE_LOSSES`, `MAX_EXPOSURE_PERCENT`, `POSITION_SIZING_MODE`, `STOP_LOSS_PERCENT`, `TAKE_PROFIT_PERCENT`, `CIRCUIT_BREAKER_ENABLED`
 - **Backtest gates:** `GATE_MIN_SHARPE`, `GATE_MAX_DRAWDOWN_PERCENT`, `GATE_MIN_WIN_RATE_PERCENT`, `GATE_MAX_WEEKLY_LOSS_PERCENT`, `BACKTEST_SLIPPAGE_PERCENT`, `BACKTEST_COMMISSION_PER_TRADE`
@@ -210,12 +210,14 @@ traider/
 ### 3. **Feature Engineering** (`src/features/`) — ✅ implemented
 **Responsibility:** Transform raw OHLCV → feature vector (identical between backtest and live).
 Implemented as:
-- `indicators.py` — pure pandas SMA / RSI (Wilder) / ATR / Bollinger %B / momentum / rolling volatility
+- `indicators.py` — pure pandas SMA / EMA / MACD / RSI (Wilder) / ATR / Bollinger %B / momentum / rolling volatility
 - `schema.py` — `active_feature_columns()`: the ordered feature-name contract the model consumes
 - `engineering.py` — `FeatureEngineer.compute_frame()` (vectorized) and `.compute_latest()` (same math, last row); per-indicator toggles `FEATURE_*_ENABLED`
 
 **Example Features (all window/period parameters configurable via `.env`):**
 - Simple Moving Averages: SMA(10), SMA(20), SMA(50) → `FEATURES_SMA_PERIODS`
+- Exponential Moving Averages: EMA(9), EMA(21), EMA(50) → `FEATURES_EMA_PERIODS`
+- MACD: EMA(12) − EMA(26), signal EMA(9) → `FEATURES_MACD_FAST_PERIOD`, `FEATURES_MACD_SLOW_PERIOD`, `FEATURES_MACD_SIGNAL_PERIOD` (features `macd_*`, `macd_signal_*`, `macd_hist_*`)
 - RSI (Relative Strength Index) → `FEATURES_RSI_PERIOD`
 - Bollinger Bands (middle, upper, lower, %B) → `FEATURES_BOLLINGER_PERIOD`, `FEATURES_BOLLINGER_STD`
 - ATR (Average True Range) for volatility → `FEATURES_ATR_PERIOD`

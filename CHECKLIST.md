@@ -50,7 +50,7 @@ Track your progress through all 41 tasks across 9 phases.
   - [x] Required vars (execution): IBKR_API_URL, IBKR_ACCOUNT_ID, IBKR_USERNAME, IBKR_PASSWORD
   - [x] Instrument & period: INSTRUMENT (AAPL), DECISION_INTERVAL_HOURS, TRADING_START_HOUR, TRADING_END_HOUR, MARKET_TIMEZONE
   - [x] Historical period: HISTORICAL_BAR_SIZE, HISTORICAL_START_DATE, HISTORICAL_END_DATE, BACKTEST_START_DATE, BACKTEST_END_DATE, TRAIN_TEST_SPLIT
-  - [x] Features: FEATURES_SMA_PERIODS, FEATURES_RSI_PERIOD, FEATURES_ATR_PERIOD, FEATURES_BOLLINGER_PERIOD, FEATURES_BOLLINGER_STD, FEATURES_MOMENTUM_PERIODS, FEATURES_VOLATILITY_PERIOD, FEATURES_MIN_LOOKBACK
+  - [x] Features: FEATURES_SMA_PERIODS, FEATURES_EMA_PERIODS, FEATURES_MACD_FAST_PERIOD, FEATURES_MACD_SLOW_PERIOD, FEATURES_MACD_SIGNAL_PERIOD, FEATURES_RSI_PERIOD, FEATURES_ATR_PERIOD, FEATURES_BOLLINGER_PERIOD, FEATURES_BOLLINGER_STD, FEATURES_MOMENTUM_PERIODS, FEATURES_VOLATILITY_PERIOD, FEATURES_MIN_LOOKBACK
   - [x] Model: MODEL_TYPE, MODEL_BUY_THRESHOLD, MODEL_SELL_THRESHOLD, MODEL_RETRAIN_INTERVAL_DAYS
   - [x] Risk: RISK_LIMIT_PERCENT, MAX_LOSS_PERCENT, MAX_CONSECUTIVE_LOSSES, MAX_EXPOSURE_PERCENT, POSITION_SIZING_MODE, STOP_LOSS_PERCENT, TAKE_PROFIT_PERCENT, CIRCUIT_BREAKER_ENABLED
   - [x] Gates: GATE_MIN_SHARPE, GATE_MAX_DRAWDOWN_PERCENT, GATE_MIN_WIN_RATE_PERCENT, GATE_MAX_WEEKLY_LOSS_PERCENT, BACKTEST_SLIPPAGE_PERCENT, BACKTEST_COMMISSION_PER_TRADE
@@ -89,6 +89,8 @@ Track your progress through all 41 tasks across 9 phases.
   - [x] src/features/engineering.py (+ indicators.py, schema.py)
   - [x] FeatureEngineer class (compute_frame / compute_latest)
   - [x] SMA (10, 20, 50)
+  - [x] EMA (9, 21, 50)
+  - [x] MACD (12, 26, 9) — line, signal line and histogram
   - [x] RSI (14)
   - [x] Bollinger Bands (%B)
   - [x] ATR (14)
@@ -121,7 +123,7 @@ Track your progress through all 41 tasks across 9 phases.
 
 ### Model Development
 - [x] **model-simple** (18) — Create signal model (rule-based path)
-  - [x] src/model/simple_model.py (+ rules.py, strategies/store.json store)
+  - [x] src/model/simple_model.py (+ rules.py, settings/strategies/store.json store)
   - [x] Rule-based model (the logistic-regression path is NOT implemented — see Phase 5)
   - [x] Input: candle row + engineered features
   - [x] Output: {signal: BUY/SELL/HOLD, confidence: 0-1}

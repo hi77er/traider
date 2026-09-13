@@ -11,11 +11,13 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
+from src.web.routes import account as account_routes
 from src.web.routes import chart as chart_routes
 from src.web.routes import config as config_routes
 from src.web.routes import backtest as backtest_routes
 from src.web.routes import dataset as dataset_routes
 from src.web.routes import delta as delta_routes
+from src.web.routes import market as market_routes
 from src.web.routes import pages as page_routes
 from src.web.routes import report as report_routes
 from src.web.routes import rules as rules_routes
@@ -45,8 +47,10 @@ app.mount("/static", StaticFiles(directory=_STATIC), name="static")
 app.include_router(page_routes.router)
 app.include_router(dataset_routes.router)
 app.include_router(delta_routes.router)
+app.include_router(market_routes.router)
 app.include_router(chart_routes.router)
 app.include_router(config_routes.router)
+app.include_router(account_routes.router)
 app.include_router(rules_routes.router)
 app.include_router(signal_routes.router)
 app.include_router(backtest_routes.router)

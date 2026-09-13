@@ -17,7 +17,7 @@ import pandas as pd
 
 from src.config.settings import Settings, get_settings
 from src.features import indicators
-from src.features.schema import active_feature_columns
+from src.features.schema import active_feature_columns, macd_tag
 
 __all__ = ["FeatureEngineer", "compute_features", "latest_features"]
 
@@ -57,6 +57,22 @@ class FeatureEngineer:
         if self._settings.feature_sma_enabled:
             for p in self._settings.sma_periods:
                 out[f"sma_{p}"] = indicators.sma(close, p)
+
+        if self._settings.feature_ema_enabled:
+            for p in self._settings.ema_periods:
+                out[f"ema_{p}"] = indicators.ema(close, p)
+
+        if self._settings.feature_macd_enabled:
+            tag = macd_tag(self._settings)
+            macd = indicators.macd(
+                close,
+                self._settings.features_macd_fast_period,
+                self._settings.features_macd_slow_period,
+                self._settings.features_macd_signal_period,
+            )
+            out[f"macd_{tag}"] = macd["macd"]
+            out[f"macd_signal_{tag}"] = macd["signal"]
+            out[f"macd_hist_{tag}"] = macd["hist"]
 
         if self._settings.feature_rsi_enabled:
             out[f"rsi_{self._settings.features_rsi_period}"] = indicators.rsi(

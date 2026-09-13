@@ -92,12 +92,19 @@ def test_new_schedule_fields_in_config_schema(monkeypatch):
         finally:
             config_service.env_file_path = lambda: path
 
-    fields = {f["key"]: f for s in cfg["sections"] for f in s["fields"]}
-    assert fields["DECISION_TIME"]["value"] == "09:45"
-    assert fields["DATA_DELTA_PULL_TIME"]["value"] == "16:30"
-    trading = next(s for s in cfg["sections"] if s["name"] == "Trading")
+    # The schedules are per-strategy now, so they render in the strategy panel
+    # instead of the global .env form.
+    from src.config.settings import Settings as S
+
+    groups = config_service.strategy_config_groups(S(_env_file=None))
+    by_key = {f["key"]: f for g in groups for f in g["fields"]}
+    assert by_key["DECISION_TIME"]["value"] == "09:45"
+    assert by_key["DATA_DELTA_PULL_TIME"]["value"] == "16:30"
+    trading = next(g for g in groups if g["name"] == "Trading")
     keys = [f["key"] for f in trading["fields"]]
     assert "DECISION_TIME" in keys and "DATA_DELTA_PULL_TIME" in keys
+    global_keys = {f["key"] for s in cfg["sections"] for f in s["fields"]}
+    assert "DECISION_TIME" not in global_keys and "DATA_DELTA_PULL_TIME" not in global_keys
 
 
 def test_schedule_time_validation():

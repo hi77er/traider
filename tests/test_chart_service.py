@@ -17,6 +17,10 @@ def _settings(tmp_path, **over):
         instrument="AAPL",
         historical_bar_size="1d",
         features_sma_periods="10,20",
+        features_ema_periods="9,21",
+        features_macd_fast_period=12,
+        features_macd_slow_period=26,
+        features_macd_signal_period=9,
         features_rsi_period=14,
         features_atr_period=14,
         features_bollinger_period=20,
@@ -25,6 +29,8 @@ def _settings(tmp_path, **over):
         features_volatility_period=20,
         features_min_lookback=50,
         feature_sma_enabled=True,
+        feature_ema_enabled=True,
+        feature_macd_enabled=True,
         feature_rsi_enabled=True,
         feature_atr_enabled=True,
         feature_bollinger_enabled=True,
@@ -69,6 +75,13 @@ def test_overlays_grouped_and_complete(tmp_path):
     assert by_key["sma_20"]["scale"] == "price"
     assert by_key["sma_20"]["kind"] == "line"
 
+    # EMA rides the candles like the SMAs, one chip per configured window.
+    assert "ema_9" in by_key and "ema_21" in by_key
+    assert by_key["ema_21"]["label"] == "EMA 21"
+    assert by_key["ema_21"]["scale"] == "price"
+    assert by_key["ema_21"]["kind"] == "line"
+    assert len(by_key["ema_21"]["lines"][0]["data"]) > 0
+
     assert "bbands_20" in by_key
     bbands = by_key["bbands_20"]
     assert bbands["scale"] == "price" and bbands["kind"] == "bands"
@@ -107,6 +120,8 @@ def test_disabled_feature_excluded(tmp_path):
         tmp_path,
         feature_rsi_enabled=False,
         feature_sma_enabled=False,
+        feature_ema_enabled=False,
+        feature_macd_enabled=False,
         feature_vwap_enabled=False,
         feature_volume_enabled=False,
         feature_volume_abs_enabled=False,
@@ -114,8 +129,119 @@ def test_disabled_feature_excluded(tmp_path):
     bundle = chart_service.chart_indicators(st)
     keys = {o["key"] for o in bundle["overlays"]}
     assert "rsi_14" not in keys and "sma_10" not in keys
+    assert not any(k.startswith("ema_") for k in keys)
+    assert not any(k.startswith("macd") for k in keys)
     assert "vwap_20" not in keys and "vratio_20" not in keys and "volume_abs" not in keys
     assert "bbands_20" in keys  # bollinger still enabled
+
+
+def test_ema_toggle_recomputes_the_memoized_frame(tmp_path):
+    """Flipping FEATURE_EMA_ENABLED changes the config fingerprint, so the
+    memoized frame is rebuilt with the ema_* columns instead of being reused
+    without them (which would KeyError while building the overlays)."""
+    off = _seed(tmp_path, feature_ema_enabled=False)
+    keys_off = {o["key"] for o in chart_service.chart_indicators(off)["overlays"]}
+    assert not any(k.startswith("ema_") for k in keys_off)
+
+    on = _settings(tmp_path, feature_ema_enabled=True)
+    keys_on = {o["key"] for o in chart_service.chart_indicators(on)["overlays"]}
+    assert "ema_9" in keys_on and "ema_21" in keys_on
+
+
+def test_macd_pane_has_histogram_bars_and_two_lines(tmp_path):
+    st = _seed(tmp_path, n=90)
+    by_key = {o["key"]: o for o in chart_service.chart_indicators(st)["overlays"]}
+    macd = by_key["macd_12_26_9"]
+    assert macd["scale"] == "osc" and macd["kind"] == "line"
+    assert macd["label"] == "MACD 12, 26, 9"
+
+    # Histogram FIRST: series are created in order, so its bars paint behind the
+    # two lines rather than over them.
+    assert [l["name"] for l in macd["lines"]] == [
+        "macd_hist_12_26_9", "macd_12_26_9", "macd_signal_12_26_9"
+    ]
+    hist, line, signal = macd["lines"]
+    assert hist["kind"] == "histogram"
+    # The two lines stay plain lines; only the histogram is a bar series.
+    assert "kind" not in line and "kind" not in signal
+
+    # MACD values are small decimals, so the `volume` format must be overridden.
+    assert hist["priceFormat"] == {"type": "price", "precision": 2, "minMove": 0.01}
+    # The two lines must not share a colour — their crossing is the signal.
+    assert line["color"] != signal["color"]
+
+    # Warm-up rows are dropped: the line starts 8 bars before signal/histogram.
+    assert len(line["data"]) == 90 - 25
+    assert len(signal["data"]) == 90 - 33
+    assert len(hist["data"]) == 90 - 33
+
+    # Every drawn bar carries its own colour, consistent with its sign.
+    drawn = [p for p in hist["data"] if p.get("value") is not None]
+    assert drawn
+    for point in drawn:
+        expected = (
+            chart_service._MACD_HIST_UP_COLOR
+            if point["value"] >= 0
+            else chart_service._MACD_HIST_DOWN_COLOR
+        )
+        assert point["color"] == expected
+
+
+def test_histogram_points_colour_by_sign(tmp_path):
+    st = _settings(tmp_path)
+    s = pd.Series(
+        [1.0, -2.0, 0.0, 3.5],
+        index=pd.date_range("2024-01-01", periods=4),
+    )
+    pts = chart_service._histogram_points(s, st, "#up", "#down")
+    assert [p["color"] for p in pts] == ["#up", "#down", "#up", "#up"]  # 0 counts as up
+
+
+def test_histogram_points_skip_leading_warmup_nulls(tmp_path):
+    st = _settings(tmp_path)
+    s = pd.Series(
+        [float("nan"), float("nan"), -1.0],
+        index=pd.date_range("2024-01-01", periods=3),
+    )
+    pts = chart_service._histogram_points(s, st, "#up", "#down")
+    assert len(pts) == 1
+    assert pts[0]["color"] == "#down"
+
+
+def test_macd_toggle_recomputes_the_memoized_frame(tmp_path):
+    """Flipping FEATURE_MACD_ENABLED must change the config fingerprint, or the
+    memoized frame is reused without the macd_* columns and the overlay build
+    raises KeyError."""
+    off = _seed(tmp_path, feature_macd_enabled=False)
+    keys_off = {o["key"] for o in chart_service.chart_indicators(off)["overlays"]}
+    assert not any(k.startswith("macd") for k in keys_off)
+
+    on = _settings(tmp_path, feature_macd_enabled=True)
+    keys_on = {o["key"] for o in chart_service.chart_indicators(on)["overlays"]}
+    assert "macd_12_26_9" in keys_on
+
+
+def test_macd_period_change_recomputes_the_memoized_frame(tmp_path):
+    """The MACD windows are part of the fingerprint: changing them must not
+    reuse a frame still holding the old macd_<fast>_<slow>_<signal> columns."""
+    st = _seed(
+        tmp_path,
+        features_macd_fast_period=12,
+        features_macd_slow_period=26,
+        features_macd_signal_period=9,
+    )
+    keys = {o["key"] for o in chart_service.chart_indicators(st)["overlays"]}
+    assert "macd_12_26_9" in keys
+
+    changed = _settings(
+        tmp_path,
+        features_macd_fast_period=5,
+        features_macd_slow_period=35,
+        features_macd_signal_period=5,
+    )
+    keys2 = {o["key"] for o in chart_service.chart_indicators(changed)["overlays"]}
+    assert "macd_5_35_5" in keys2
+    assert "macd_12_26_9" not in keys2
 
 
 def test_osc_stats_present(tmp_path):

@@ -17,6 +17,7 @@ const state = {
   total: 0,
   offset: 0,
   config: null,
+  account: null, // GET /api/v1/account -> {file, file_exists, groups, error}
   chart: null,
   datasetRows: null,
   indicators: null,
@@ -154,10 +155,39 @@ async function loadChart() {
       const d = await api("/api/v1/dataset/data?limit=0"); // all rows for the chart
       state.datasetRows = d.rows;
     }
+    // A dataset with no usable bars has nothing to draw, and a blank pane is
+    // indistinguishable from a broken chart — so say what is actually wrong
+    // (this is the state you land in after deleting the data and before the
+    // download finishes).
+    const hasBars = (state.datasetRows || []).some(
+      (r) => toNum(r.open) !== null && toNum(r.close) !== null
+    );
+    if (!hasBars) {
+      if (state.chart) {
+        forgetCrosshairAnchor(state.chart);
+        state.chart.remove();
+        state.chart = null;
+      }
+      $("chart-canvas").innerHTML =
+        '<p class="muted chart-empty">No price data to chart yet — use ' +
+        '“Download initial historical data” in the Historical Data panel, ' +
+        'then reload.</p>';
+      return;
+    }
     buildMainChart();
   } catch (err) {
     $("chart-canvas").textContent = `Chart failed to load: ${err.message}`;
   }
+}
+
+// Coerce a numeric field, mapping null/undefined/""/NaN to null. Provider
+// payloads can carry a placeholder row with no close (e.g. a session that has
+// not settled yet); passing that straight to lightweight-charts makes it
+// reject the payload and draw nothing at all.
+function toNum(v) {
+  if (v === null || v === undefined || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
 }
 
 function buildMainChart() {
@@ -165,7 +195,11 @@ function buildMainChart() {
   // toggle) does NOT reset the view back to 100%.
   const prevRange = state.chart ? state.chart.timeScale().getVisibleLogicalRange() : null;
   // Dispose any previous instance so stale overlay lines never linger.
-  if (state.chart) { state.chart.remove(); state.chart = null; }
+  if (state.chart) {
+    forgetCrosshairAnchor(state.chart); // a disposed chart must not be synced
+    state.chart.remove();
+    state.chart = null;
+  }
   $("chart-canvas").innerHTML = "";
 
   const chart = LightweightCharts.createChart($("chart-canvas"), {
@@ -213,10 +247,33 @@ function buildMainChart() {
   });
   state.priceSeries = series;
   state.overlaySeries = []; // overlay/volume series are toggled in place
-  series.setData((state.datasetRows || []).map((r) => {
-    const t = r.time != null ? r.time : r.date; // unix for intraday, 'YYYY-MM-DD' for daily
-    return { time: t, open: r.open, high: r.high, low: r.low, close: r.close };
-  }));
+  // Bars with a missing price are skipped, never passed through: a single null
+  // makes lightweight-charts reject the whole payload and draw NOTHING, so one
+  // blank row would leave the entire chart empty. The data layer filters these
+  // out as well — this is the last line of defence.
+  series.setData((state.datasetRows || [])
+    .map((r) => ({
+      // unix seconds for intraday, 'YYYY-MM-DD' for daily bars
+      time: r.time != null ? r.time : r.date,
+      open: toNum(r.open), high: toNum(r.high),
+      low: toNum(r.low), close: toNum(r.close),
+    }))
+    .filter((b) => b.time != null && b.open !== null && b.high !== null
+      && b.low !== null && b.close !== null));
+
+  // Crosshair anchor: the close at each bar, so hovering an indicator pane can
+  // place THIS chart's horizontal line on the price of that instant.
+  state.priceValues = new Map();
+  let lastClose = null;
+  (state.datasetRows || []).forEach((r) => {
+    const key = r.time != null ? r.time : r.date;
+    const close = toNum(r.close);
+    if (key == null || close === null) return;
+    state.priceValues.set(key, close);
+    lastClose = close;
+  });
+  registerCrosshairAnchor(chart, series, state.priceValues, lastClose);
+
   addPriceOverlays(chart);
   drawVolumeBars(chart);
   drawSignalMarkers();
@@ -693,7 +750,7 @@ function fieldInput(f, prefix) {
   if (f.readonly) {
     const hint = document.createElement("span");
     hint.className = "hint ro-note";
-    hint.textContent = "Read-only — change it directly in .env";
+    hint.textContent = f.readonly_note || "Read-only — change it directly in .env";
     wrap.appendChild(hint);
   }
   return wrap;
@@ -817,9 +874,15 @@ function currentInstrument() {
 
 function switchDataset(symbol) {
   // Tear down everything tied to the previous instrument's dataset/chart.
-  if (state.chart) { try { state.chart.remove(); } catch (_) { /* noop */ } }
+  if (state.chart) {
+    forgetCrosshairAnchor(state.chart); // a disposed chart must not be synced
+    try { state.chart.remove(); } catch (_) { /* noop */ }
+  }
   state.chart = null;
-  (state.oscCharts || []).forEach((c) => { try { c.remove(); } catch (_) { /* noop */ } });
+  (state.oscCharts || []).forEach((c) => {
+    forgetCrosshairAnchor(c);
+    try { c.remove(); } catch (_) { /* noop */ }
+  });
   state.oscCharts = [];
   state.overlayLines = [];
   state.selected = {};
@@ -899,6 +962,109 @@ function closeGlobalSettings() {
   });
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && !backdrop.hidden) closeGlobalSettings();
+  });
+})();
+
+/* ---------- Account settings dialog (settings/account/account.json) ---------- */
+async function loadAccount(silent) {
+  try {
+    const c = await api("/api/v1/account");
+    state.account = c;
+    renderAccount(c);
+    if (!silent) {
+      $("account-msg").textContent = c.file_exists
+        ? `Editing ${c.file}`
+        : `No ${c.file} yet — saving will create it.`;
+    }
+    if (c.error) showAccountErrors(c.error, "warn");
+  } catch (err) {
+    $("account-msg").textContent = `Failed to load account settings: ${err.message}`;
+  }
+}
+
+function renderAccount(c) {
+  const host = $("account-fields");
+  if (!host) return;
+  host.innerHTML = "";
+  for (const group of c.groups || []) {
+    const fieldset = document.createElement("fieldset");
+    fieldset.className = "cfg-section";
+    const legend = document.createElement("legend");
+    legend.textContent = group.name;
+    fieldset.appendChild(legend);
+    for (const f of group.fields) fieldset.appendChild(fieldInput(f, "acct"));
+    host.appendChild(fieldset);
+  }
+  const fileEl = $("account-file");
+  if (fileEl && c.file) fileEl.textContent = c.file;
+}
+
+function showAccountErrors(text, kind) {
+  const el = $("account-errors");
+  if (!el) return;
+  el.classList.toggle("warn", kind === "warn");
+  el.textContent = text || "";
+  el.hidden = !text;
+}
+
+function openAccountSettings() {
+  const backdrop = $("account-settings-backdrop");
+  if (!backdrop) return;
+  if (!state.account) loadAccount(true); // render the fields before showing
+  showAccountErrors(""); // no stale validation notice from a previous open/save
+  backdrop.hidden = false;
+}
+
+function closeAccountSettings() {
+  const backdrop = $("account-settings-backdrop");
+  if (backdrop) backdrop.hidden = true;
+}
+
+async function saveAccount() {
+  const btn = $("account-save");
+  const c = state.account;
+  if (!c) return;
+
+  // Read every field from the rendered form (checkbox switches submit True/False;
+  // an empty password field keeps the stored secret).
+  const values = {};
+  for (const group of c.groups || []) {
+    for (const f of group.fields) {
+      const el = document.getElementById("acct-" + f.key);
+      if (!el) continue;
+      values[f.key] = el.type === "checkbox" ? (el.checked ? "True" : "False") : el.value;
+    }
+  }
+
+  if (btn) btn.disabled = true;
+  showAccountErrors("");
+  try {
+    const r = await api("/api/v1/account", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ values }),
+    });
+    if (r && r.ok === false) {
+      showAccountErrors((r.errors || []).join("\n") || r.message || "Invalid values", "warn");
+      return;
+    }
+    $("account-msg").textContent = r.message || "Saved";
+    await loadAccount(true); // re-read so secrets re-mask and values refresh
+  } catch (err) {
+    showAccountErrors(err.message, "warn");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+(function initAccountSettingsModal() {
+  const backdrop = $("account-settings-backdrop");
+  if (!backdrop) return;
+  backdrop.addEventListener("click", (e) => {
+    if (e.target === backdrop) closeAccountSettings();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !backdrop.hidden) closeAccountSettings();
   });
 })();
 
@@ -1037,6 +1203,98 @@ function subscribeOscToMainTime(chart) {
   });
 }
 
+/* ---------- Crosshair sync (vertical time line + horizontal value) ----------
+   Hovering ANY chart places every other chart's crosshair on the same TIME, so
+   one instant can be read across the candles and all the indicator panes.
+   lightweight-charts only draws a crosshair on the chart under the pointer, so
+   the others are positioned programmatically via `setCrosshairPosition`.
+
+   The horizontal line needs a VALUE and every chart has its own scale, so each
+   synced line is anchored on that chart's OWN series value at that time — i.e.
+   exactly what it shows when you hover that chart yourself. A warm-up gap in an
+   anchor falls back to its first real value, so the VERTICAL line never breaks. */
+const _crosshairAnchors = new Map(); // chart -> {series, values: Map, times, fallback}
+let _crosshairSyncing = false;
+
+function registerCrosshairAnchor(chart, series, values, fallback) {
+  if (!chart || !series) return;
+  // `values` is a time -> value Map populated in chronological order, so its
+  // keys ARE the ascending time axis the nearest-previous lookup binary-searches.
+  // Without them a chart with sparse data (the 600-point equity curve) could
+  // only ever show its first value on the horizontal line.
+  const times = values ? Array.from(values.keys()) : [];
+  _crosshairAnchors.set(chart, {
+    series: series, values: values, times: times, fallback: fallback,
+  });
+  chart.subscribeCrosshairMove((param) => _onCrosshairMove(chart, param));
+}
+
+function forgetCrosshairAnchor(chart) {
+  if (chart) _crosshairAnchors.delete(chart);
+}
+
+// [{time, value}] (null values already dropped) -> {values, times, fallback}
+function _crosshairValues(data) {
+  const values = new Map();
+  const times = [];
+  let fallback = null;
+  (data || []).forEach((p) => {
+    if (p == null || p.value == null) return;
+    if (!values.has(p.time)) times.push(p.time);
+    values.set(p.time, p.value);
+    if (fallback == null) fallback = p.value;
+  });
+  return { values: values, times: times, fallback: fallback };
+}
+
+// The anchor's value at `time`, falling back to the NEAREST point at or before
+// it. That matters for charts whose data is thinner than the price series: the
+// equity curve is capped at 600 points, so an exact hit is the exception — an
+// exact-only lookup would leave its horizontal line parked on the first value.
+function _crosshairValueAt(anchor, time) {
+  const exact = anchor.values.get(time);
+  if (exact != null) return exact;
+  const times = anchor.times || [];
+  let lo = 0;
+  let hi = times.length - 1;
+  let found = null;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (times[mid] <= time) { found = times[mid]; lo = mid + 1; } else { hi = mid - 1; }
+  }
+  return found == null ? anchor.fallback : anchor.values.get(found);
+}
+
+function _onCrosshairMove(source, param) {
+  if (!source || !_crosshairAnchors.size) return;
+  // Re-entrancy guard. VERIFIED against 4.1.3: `setCrosshairPosition` emits no
+  // crosshair event at all, so a programmatic placement cannot bounce back —
+  // this only needs to cover a synchronous echo if a future version adds one,
+  // which is why it expires on the next task. Do NOT swallow by pushed TIME:
+  // a stationary mouse repeats the same bar time on every move, and dropping
+  // those repeats freezes the crosshair on whichever chart was hovered first.
+  if (_crosshairSyncing) return;
+
+  const time = param && param.time != null ? param.time : null;
+  _crosshairSyncing = true;
+  try {
+    _crosshairAnchors.forEach((anchor, chart) => {
+      if (chart === source) return; // the hovered chart already tracks the mouse
+      try {
+        if (time == null) {
+          chart.clearCrosshairPosition();
+        } else {
+          chart.setCrosshairPosition(_crosshairValueAt(anchor, time), time, anchor.series);
+        }
+      } catch (_) {
+        /* series or point vanished in a rebuild — skip this chart */
+      }
+    });
+  } finally {
+    setTimeout(() => { _crosshairSyncing = false; }, 0);
+  }
+}
+
 // Bumped on every drawOscPanes() so deferred pane-finalize callbacks from an
 // older invocation never act on panes that have since been removed.
 let _oscPaneGen = 0;
@@ -1044,7 +1302,10 @@ let _oscPaneGen = 0;
 function drawOscPanes() {
   const host = $("indicator-panes");
   if (!host) return;
-  (state.oscCharts || []).forEach((c) => { try { c.remove(); } catch (_) { /* noop */ } });
+  (state.oscCharts || []).forEach((c) => {
+    forgetCrosshairAnchor(c); // a removed chart must not be crosshair-synced
+    try { c.remove(); } catch (_) { /* noop */ }
+  });
   state.oscCharts = [];
   host.innerHTML = "";
   if (!state.indicators) return;
@@ -1068,20 +1329,34 @@ function drawOscPanes() {
         grid: { vertLines: { color: "#22262f" }, horzLines: { color: "#22262f" } },
         timeScale: { timeVisible: false, borderColor: "#333a46" },
         rightPriceScale: { borderColor: "#333a46" },
+        // Same free-floating crosshair as the main chart, so the synced
+        // horizontal line is not snapped to a bar's extremes.
+        crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
       });
+      let anchorSeries = null;
       o.lines.forEach((line) => {
+        // A line may carry its own kind / colour / price format: MACD draws its
+        // histogram (bars) AND its two lines in ONE pane, so these cannot all
+        // be taken from the overlay.
+        const kind = line.kind || o.kind;
+        const lineColor = line.color || o.color || "#4c8dff";
         const s =
-          o.kind === "histogram"
+          kind === "histogram"
             ? chart.addHistogramSeries({
-                color: o.color || "#4c8dff",
-                priceFormat: { type: "volume" },
+                color: lineColor,
+                priceFormat: line.priceFormat || { type: "volume" },
                 priceLineVisible: false,
                 lastValueVisible: true,
               })
-            : chart.addLineSeries({ color: o.color || "#4c8dff", lineWidth: 1 });
+            : chart.addLineSeries({ color: lineColor, lineWidth: 1 });
         s.setData(line.data);
+        if (!anchorSeries) anchorSeries = s;
       });
       if (o.range) chart.priceScale("right").applyOptions({ minValue: o.range.min, maxValue: o.range.max });
+      // Anchor the synced horizontal line on the pane's FIRST series (the MACD
+      // histogram, the RSI line, …): that is the value this pane reads out.
+      const anchor = _crosshairValues(o.lines[0] && o.lines[0].data);
+      registerCrosshairAnchor(chart, anchorSeries, anchor.values, anchor.fallback);
       state.oscCharts.push(chart);
     });
 
@@ -1321,6 +1596,14 @@ const _INDICATOR_PHRASES = {
   vratio: "relative volume",
 };
 
+// MACD's three columns each carry a (fast, slow, signal) triple, so they are
+// spelled out rather than derived from a single period.
+const _MACD_PHRASES = {
+  macd: "MACD line",
+  macd_signal: "MACD signal line",
+  macd_hist: "MACD histogram",
+};
+
 const _OP_PHRASES = {
   "<": "below",
   "<=": "at or below",
@@ -1336,6 +1619,10 @@ function featurePhrase(name) {
   const raw = _RAW_FEATURE_PHRASES[name];
   if (raw) return raw;
   if (name === "volume_abs") return "the absolute trading volume";
+  // MACD columns carry a (fast, slow, signal) triple, so they are matched
+  // before the single-period pattern below.
+  const macd = /^(macd|macd_signal|macd_hist)_(\d+)_(\d+)_(\d+)$/.exec(name);
+  if (macd) return `the ${_MACD_PHRASES[macd[1]]} (${macd[2]}, ${macd[3]}, ${macd[4]})`;
   const m = /^([a-z_]+?)_(\d+)$/.exec(name);
   const label = _INDICATOR_PHRASES[m ? m[1] : name];
   if (m && label) return `the ${m[2]}-period ${label}`;
@@ -2193,6 +2480,7 @@ function btDataReady(delta) {
 function setBtBusyControls(busy) {
   [
     "save-config", // global (.env) settings
+    "account-save", // account settings (broker, folders, backtest defaults)
     "save-pconfig", // strategy configuration
     "save-rules", // strategy rules
     "strategy-create-btn", // ＋ New (inline Create)
@@ -2391,7 +2679,11 @@ function drawBtCurve(points) {
   const host = $("bt-curve");
   if (!host) return;
   host.innerHTML = "";
-  if (btChart) { try { btChart.remove(); } catch (_) { /* noop */ } btChart = null; }
+  if (btChart) {
+    forgetCrosshairAnchor(btChart);
+    try { btChart.remove(); } catch (_) { /* noop */ }
+    btChart = null;
+  }
   if (!points || !points.length) { host.textContent = "—"; return; }
   try {
     const chart = LightweightCharts.createChart(host, {
@@ -2400,10 +2692,16 @@ function drawBtCurve(points) {
       grid: { vertLines: { color: "#22262f" }, horzLines: { color: "#22262f" } },
       rightPriceScale: { borderColor: "#333a46" },
       timeScale: { borderColor: "#333a46", visible: false },
+      crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
     });
     const line = chart.addLineSeries({ color: "#4c8dff", lineWidth: 2, priceLineVisible: false, lastValueVisible: true });
-    line.setData(points.map((p) => ({ time: p.time, value: p.equity })));
+    const curve = points.map((p) => ({ time: p.time, value: p.equity }));
+    line.setData(curve);
     btChart = chart;
+    // The equity curve joins the crosshair sync too (its zoom already follows
+    // the main chart), anchored on the equity value at each time.
+    const anchor = _crosshairValues(curve);
+    registerCrosshairAnchor(chart, line, anchor.values, anchor.fallback);
 
     // Link zoom with the main price chart, exactly like the oscillator panes:
     // wait for this chart's initial paint (2 frames) before attaching the
@@ -2515,4 +2813,5 @@ ensureMainChartWheel();
 showPendingToast();
 refresh();
 loadConfig();
+loadAccount(true);
 loadRules();

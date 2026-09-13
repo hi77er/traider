@@ -15,6 +15,8 @@ import pandas as pd
 
 __all__ = [
     "sma",
+    "ema",
+    "macd",
     "rsi",
     "atr",
     "bollinger_pctb",
@@ -29,6 +31,51 @@ __all__ = [
 def sma(close: pd.Series, period: int) -> pd.Series:
     """Simple moving average of ``close`` over ``period`` bars."""
     return close.rolling(window=period, min_periods=period).mean()
+
+
+def ema(close: pd.Series, period: int) -> pd.Series:
+    """Exponential moving average of ``close`` with span ``period``.
+
+    Recursive form ``E[t] = a * close[t] + (1 - a) * E[t-1]`` with
+    ``a = 2 / (period + 1)`` (pandas ``ewm(span=..., adjust=False)``), seeded
+    with the first close. ``adjust=False`` is the trading convention and, unlike
+    the ``adjust=True`` default, only ever looks backwards - so the value at bar
+    ``t`` is identical whether it is computed over full history or live, which
+    is what keeps backtest and live features the same.
+
+    ``min_periods=period`` blanks the warm-up rows exactly like ``sma``, so both
+    moving averages become available at the same bar and an EMA/SMA pair is
+    directly comparable.
+    """
+    return close.ewm(span=period, adjust=False, min_periods=period).mean()
+
+
+def macd(
+    close: pd.Series,
+    fast: int = 12,
+    slow: int = 26,
+    signal: int = 9,
+) -> pd.DataFrame:
+    """Moving Average Convergence/Divergence: line, signal line and histogram.
+
+    ``macd = EMA(fast) - EMA(slow)``, ``signal = EMA(signal)`` of that line and
+    ``hist = macd - signal``. Both EMAs use ``adjust=False`` (see :func:`ema`),
+    so every value depends only on past bars and is identical whether computed
+    over the full history or live — the same guarantee SMA/EMA already have.
+
+    Returns a DataFrame with ``macd`` / ``signal`` / ``hist`` columns.
+    ``min_periods`` blanks the warm-up rows: the MACD line becomes valid on the
+    ``slow``-th bar and the signal line (hence the histogram) on the
+    ``slow + signal - 1``-th, so the histogram — the column rules usually
+    reference — carries the longest warm-up of the family.
+    """
+    fast_ema = close.ewm(span=fast, adjust=False, min_periods=fast).mean()
+    slow_ema = close.ewm(span=slow, adjust=False, min_periods=slow).mean()
+    line = fast_ema - slow_ema
+    signal_line = line.ewm(span=signal, adjust=False, min_periods=signal).mean()
+    return pd.DataFrame(
+        {"macd": line, "signal": signal_line, "hist": line - signal_line}
+    )
 
 
 def rsi(close: pd.Series, period: int = 14) -> pd.Series:

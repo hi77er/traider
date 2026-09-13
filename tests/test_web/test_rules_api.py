@@ -34,6 +34,7 @@ def test_payload_includes_builder_metadata(tmp_path):
     feats = p["allowed_features"]
     assert "close" in feats and "volume" in feats  # raw series available
     assert "sma_50" in feats and "rsi_14" in feats  # active features available
+    assert any(f.startswith("ema_") for f in feats)  # EMA is offered to rules too
     # no strategies yet -> empty store so the panel shows "create first"
     assert p["strategies"] == {}
     assert p["active"] is None
