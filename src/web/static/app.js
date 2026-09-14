@@ -1048,7 +1048,7 @@ async function loadTrading() {
   applyConfigLock();
 }
 
-function renderEnvSelect(d) {
+function renderEnvSelect(d, force) {
   const sel = $("exec-env");
   if (!sel) return;
   const exec = d.execution || {};
@@ -1062,16 +1062,38 @@ function renderEnvSelect(d) {
       sel.appendChild(opt);
     }
   }
-  if (document.activeElement !== sel) sel.value = exec.env || "paper";
+  if (force || document.activeElement !== sel) sel.value = exec.env || "paper";
   sel.className = `exec-select ${exec.ok ? (exec.live ? "live" : "paper") : "blocked"}`;
   sel.title = exec.ok
     ? `${exec.broker} · ${exec.env} — ${exec.base_url}`
     : `Orders would be REFUSED — ${exec.message}`;
 }
 
+// A browser may restore a form's value on its own — bfcache, back/forward, a
+// crash-recovery session restart — and fire `change` with no user involved. For
+// the control that decides which account gets REAL orders, a restore must never
+// be mistaken for a deliberate choice, so a change may only be persisted after a
+// real gesture on the select itself.
+let _envGesture = false;
+
+function watchEnvSelect() {
+  const sel = $("exec-env");
+  if (!sel) return;
+  const arm = () => { _envGesture = true; };
+  sel.addEventListener("pointerdown", arm, { once: true });
+  sel.addEventListener("keydown", arm, { once: true });
+}
+
 async function onEnvChange() {
   const sel = $("exec-env");
   if (!sel) return;
+  if (!_envGesture) {
+    // Not a choice anyone made: put the display back to what the server last
+    // said and write nothing. With no payload yet there is no truth to restore,
+    // so leave the control alone rather than guess a mode.
+    if (state.tradingPayload) renderEnvSelect(state.tradingPayload, true);
+    return;
+  }
   const previous = (state.executionStatus || {}).env || "paper";
   const env = sel.value;
   if (env === previous) return;
@@ -3032,6 +3054,7 @@ function showPendingToast() {
 }
 
 ensureMainChartWheel();
+watchEnvSelect(); // arm the environment dropdown so only a real gesture can change it
 showPendingToast();
 refresh();
 loadConfig();

@@ -98,11 +98,14 @@ The portal is the whole interface:
 
 - **Strategy bar** - switch, create, rename or delete a strategy (each one has
   its own instrument, bar size, rules and risk settings)
-- **Environment dropdown** (header, next to 🌎 Market) - which Alpaca account the
+- **Environment dropdown** (header, left, beside the logo) - which Alpaca account the
   active strategy's orders go to. It both selects and displays the mode, coloured
   by it: teal `Paper`, red `LIVE`, amber when the selected account has no keys (so
   orders would be refused). Paper vs live is per strategy, so one strategy can run
-  on the live account while another stays on paper.
+  on the live account while another stays on paper. Only a real gesture on the
+  dropdown can change it: a browser-restored value (bfcache, back/forward, crash
+  recovery) fires `change` without anyone choosing anything, so it is ignored and
+  the display snaps back to what the server said.
 - **Execution panel** (top of the right column) - the trading ON/OFF switch and
   the resolved target (strategy, instrument, bar size, environment, endpoint,
   which key pairs are set). It is the only place trading is started, because it

@@ -8,10 +8,16 @@
 </head>
 <body>
   <header>
-    <h1>📈 TRAIDER Dashboard</h1>
-    <div class="header-actions">
+    <!-- Left: identity + the account type. Which account the bot trades is part of
+         what it IS, not a setting buried in a panel, so it sits next to the name
+         and is always on screen. -->
+    <div class="header-left">
+      <h1>📈 TRAIDER</h1>
       <select id="exec-env" class="exec-select paper" onchange="onEnvChange()"
               title="Which Alpaca account this strategy's orders go to"></select>
+    </div>
+    <!-- Right: everything that configures or navigates away. -->
+    <div class="header-actions">
       <a class="btn-link" href="/market" title="Whole-market screens: screener, gainers, volume, losers, small caps">🌎 Market</a>
       <button id="open-account-settings" class="ghost small" onclick="openAccountSettings()" title="Account-wide settings: broker (Trading Account), data folders, backtest defaults">🏦 Account Settings</button>
       <button id="open-global-settings" class="ghost small" onclick="openGlobalSettings()" title="Edit global (non-strategy) settings in .env">⚙ Global Settings</button>

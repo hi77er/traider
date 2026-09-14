@@ -22,13 +22,19 @@ header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 16px;
   padding: 16px 24px;
   border-bottom: 1px solid var(--border);
 }
 
 header h1 { font-size: 20px; margin: 0; }
 
-.header-actions { display: flex; align-items: center; gap: 10px; }
+/* Identity + the account type on the left; configuration + navigation on the
+   right. The two groups are the only children, so space-between pins them to
+   the ends and the switch stays put however wide the buttons get. */
+.header-left { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.header-left h1 { white-space: nowrap; }
+.header-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 
 .chip {
   background: var(--card);

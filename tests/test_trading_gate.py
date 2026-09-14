@@ -367,3 +367,18 @@ def test_the_trading_switch_and_its_lock_are_wired_into_the_dashboard():
     css = (ROOT / "src" / "web" / "static" / "style.css").read_text(encoding="utf-8")
     assert ".exec-state.on" in css
     assert "body.trading-on" in css
+
+
+def test_the_header_keeps_identity_and_the_switch_left_and_config_right():
+    """Which account the bot trades is identity, not a setting: it sits beside the
+    logo, always on screen. Configuration and navigation stay on the right."""
+    html = (ROOT / "src" / "web" / "templates" / "index.html").read_text(encoding="utf-8")
+    left = html.index('class="header-left"')
+    switch = html.index('id="exec-env"')
+    actions = html.index('class="header-actions"')
+    assert left < switch < actions, "the paper/live switch must sit in the left group"
+    for el in ("open-account-settings", "open-global-settings"):
+        assert html.index(el) > actions, f"{el} must stay in the right group"
+    # The logo is the product name, not the page name.
+    assert "TRAIDER Dashboard" not in html
+    assert "📈 TRAIDER<" in html
