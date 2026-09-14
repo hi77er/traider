@@ -427,7 +427,10 @@ The unfinished Phase 2 & 3 work lives here so Risk & Execution can proceed first
 
 ### Go Live
 - [ ] **live-go-live** (39) — Switch to live trading
-  - [ ] Change PAPER_TRADING=False
+  - [ ] Set the strategy's `EXECUTION_ENV` to `live` in the Execution panel
+  - [ ] Turn on `EXECUTION_LIVE_ACK` (live needs BOTH, so one mis-click cannot do it)
+  - [ ] Add the Alpaca LIVE key pair in Account Settings (paper keys are not accepted)
+  - [ ] Confirm the header badge reads 🔴 LIVE
   - [ ] Start with 1% of capital
   - [ ] Verify first week:
     - [ ] Orders execute correctly

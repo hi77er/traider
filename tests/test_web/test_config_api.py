@@ -84,7 +84,10 @@ def test_get_config_types(tmp_path):
     assert sg["MODEL_TYPE"]["options"] == ["logistic_regression", "rule_based"]
     ag = {f["key"]: f for g in config_service.account_sections(S(_env_file=None)) for f in g["fields"]}
     assert ag["TRAIN_TEST_SPLIT"]["type"] == "float"
-    assert ag["PAPER_TRADING"]["type"] == "bool"
+    assert ag["EXECUTION_BROKER"]["options"][0] == {"label": "Alpaca", "value": "alpaca"}
+    # Credential fields are never echoed back to the browser.
+    assert ag["ALPACA_PAPER_API_SECRET"]["sensitive"] is True
+    assert ag["ALPACA_LIVE_API_KEY"]["sensitive"] is True
 
 
 # ---------------------------------------------------------------------------
@@ -241,8 +244,13 @@ def test_account_schema_groups_and_derived_folders(tmp_path):
     by_key = {f["key"]: f for g in groups for f in g["fields"]}
     assert by_key["IBKR_PASSWORD"]["sensitive"] is True
     assert by_key["IBKR_ACCOUNT_ID"]["type"] == "str"
-    assert by_key["PAPER_TRADING"]["type"] == "bool"
-    assert by_key["PAPER_TRADING"]["value"] == "True"
+    assert by_key["EXECUTION_BROKER"]["value"] == "alpaca"
+    # Both Alpaca key pairs are secrets, and both start unset.
+    assert by_key["ALPACA_PAPER_API_SECRET"]["sensitive"] is True
+    assert by_key["ALPACA_LIVE_API_SECRET"]["sensitive"] is True
+    assert by_key["ALPACA_PAPER_API_KEY"]["value"] == ""
+    # The paper/live MODE is per-strategy, so it is deliberately not an account key.
+    assert "EXECUTION_ENV" not in by_key
     assert by_key["DATA_DIR"]["value"] == "data"
     # One folder for both subfolders, which are derived and not editable.
     assert by_key["HISTORICAL_DATA_DIR"]["readonly"] is True
@@ -257,7 +265,7 @@ def test_update_account_persists_json_and_drives_folders(tmp_path, monkeypatch):
 
     res = config_service.update_account({
         "DATA_DIR": "srv/data", "IBKR_ACCOUNT_ID": "U123",
-        "IBKR_PASSWORD": "s3cret", "PAPER_TRADING": "True",
+        "IBKR_PASSWORD": "s3cret", "EXECUTION_BROKER": "alpaca",
     })
     assert res["ok"] is True, res
     # Only what the user configures is stored — the two subfolders are derived.
@@ -265,7 +273,7 @@ def test_update_account_persists_json_and_drives_folders(tmp_path, monkeypatch):
         "DATA_DIR": "srv/data",
         "IBKR_ACCOUNT_ID": "U123",
         "IBKR_PASSWORD": "s3cret",
-        "PAPER_TRADING": "True",
+        "EXECUTION_BROKER": "alpaca",
     }
     by_key = {f["key"]: f for g in res["groups"] for f in g["fields"]}
     assert by_key["HISTORICAL_DATA_DIR"]["value"] == "srv/data/historical"
@@ -277,6 +285,10 @@ def test_update_account_persists_json_and_drives_folders(tmp_path, monkeypatch):
     assert json.loads((tmp_path / "account.json").read_text())["settings"]["IBKR_PASSWORD"] == "s3cret"
     res3 = config_service.update_account({"INSTRUMENT": "TSLA"})
     assert res3["ok"] is False and res3["errors"]
+    # The paper/live MODE belongs to the strategy, so the account form must refuse
+    # it — otherwise there would be two competing places to set it.
+    res4 = config_service.update_account({"EXECUTION_ENV": "live"})
+    assert res4["ok"] is False and res4["errors"]
 
 
 def test_account_api_roundtrip(tmp_path, monkeypatch):
@@ -286,7 +298,7 @@ def test_account_api_roundtrip(tmp_path, monkeypatch):
     assert got.status_code == 200
     assert [g["name"] for g in got.json()["groups"]][0] == "Trading Account"
     posted = client.post("/api/v1/account", json={"values": {"IBKR_ACCOUNT_ID": "DU999",
-                                                          "PAPER_TRADING": "False"}})
+                                                          "EXECUTION_BROKER": "alpaca"}})
     assert posted.status_code == 200
     assert posted.json()["ok"] is True
     assert (tmp_path / "account.json").exists()

@@ -352,12 +352,20 @@ RISK_LIMIT_PERCENT=2
 MAX_LOSS_PERCENT=10
 MAX_CONSECUTIVE_LOSSES=3
 
-# Execution (IBKR Web API)
+# Execution — broker + credentials (account-wide). Which environment an order
+# goes to (paper or live) is chosen PER STRATEGY in the dashboard's
+# Strategy Configuration panel under "Execution".
+EXECUTION_BROKER=alpaca
+ALPACA_PAPER_API_KEY=YOUR_PAPER_KEY_ID
+ALPACA_PAPER_API_SECRET=YOUR_PAPER_SECRET  # ← AWS Secrets Manager in prod
+ALPACA_LIVE_API_KEY=
+ALPACA_LIVE_API_SECRET=                    # only needed when a strategy is live
+
+# IBKR is selectable but has no executor implemented yet
 IBKR_API_URL=https://api.ib.com
 IBKR_ACCOUNT_ID=YOUR_ACCOUNT_ID
 IBKR_USERNAME=YOUR_USERNAME
-IBKR_PASSWORD=YOUR_PASSWORD  # ← Will be loaded from AWS Secrets Manager in prod
-PAPER_TRADING=True
+IBKR_PASSWORD=YOUR_PASSWORD
 
 # Web Portal & state
 WEB_PORTAL_ENABLED=True

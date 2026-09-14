@@ -164,7 +164,8 @@ traider/
 - **Model:** `MODEL_TYPE`, `MODEL_BUY_THRESHOLD`, `MODEL_SELL_THRESHOLD`, `MODEL_RETRAIN_INTERVAL_DAYS`
 - **Risk:** `RISK_LIMIT_PERCENT`, `MAX_LOSS_PERCENT`, `MAX_CONSECUTIVE_LOSSES`, `MAX_EXPOSURE_PERCENT`, `POSITION_SIZING_MODE`, `STOP_LOSS_PERCENT`, `TAKE_PROFIT_PERCENT`, `CIRCUIT_BREAKER_ENABLED`
 - **Backtest gates:** `GATE_MIN_SHARPE`, `GATE_MAX_DRAWDOWN_PERCENT`, `GATE_MIN_WIN_RATE_PERCENT`, `GATE_MAX_WEEKLY_LOSS_PERCENT`, `BACKTEST_SLIPPAGE_PERCENT`, `BACKTEST_COMMISSION_PER_TRADE`
-- **Execution (IBKR):** `IBKR_API_URL`, `IBKR_ACCOUNT_ID`, `IBKR_USERNAME`, `IBKR_PASSWORD`, `PAPER_TRADING`, `EXECUTION_MAX_RETRIES`, `EXECUTION_RETRY_BASE_DELAY_SECONDS`, `EXECUTION_ORDER_TIMEOUT_SECONDS`
+- **Execution — account-wide:** `EXECUTION_BROKER`, `ALPACA_PAPER_API_KEY`, `ALPACA_PAPER_API_SECRET`, `ALPACA_LIVE_API_KEY`, `ALPACA_LIVE_API_SECRET`, `IBKR_API_URL`, `IBKR_ACCOUNT_ID`, `IBKR_USERNAME`, `IBKR_PASSWORD`, `EXECUTION_MAX_RETRIES`, `EXECUTION_RETRY_BASE_DELAY_SECONDS`, `EXECUTION_ORDER_TIMEOUT_SECONDS`
+- **Execution — per strategy:** `EXECUTION_ENV` (paper | live), `EXECUTION_LIVE_ACK` (second key required before any live order)
 - **Scheduler:** `SCHEDULER_ENABLED`, `SCHEDULER_TIMEZONE`
 - **State (DynamoDB):** `AWS_REGION`, `DYNAMODB_TABLE`, `DYNAMODB_TTL_DAYS`, `DYNAMODB_ENDPOINT_URL`
 - **Web Portal:** `WEB_PORTAL_ENABLED`, `WEB_PORTAL_HOST`, `WEB_PORTAL_PORT`, `WEB_PORTAL_AUTH_ENABLED`, `WEB_PORTAL_USERNAME`, `WEB_PORTAL_PASSWORD`
@@ -811,11 +812,25 @@ COPY docker/entrypoint.sh /entrypoint.sh
 ENTRYPOINT ["/entrypoint.sh"]
 ```
 
-### Authentication Flow:
+### Execution flow (Alpaca — the IBKR flow below is NOT how the gateway works):
+1. The bot goes through `src/execution/config.py`, which resolves ONE triple:
+   base URL + key id + secret (`https://paper-api.alpaca.markets` or
+   `https://api.alpaca.markets`) from `EXECUTION_ENV`.
+2. Auth is an HTTP Basic header (`APCA-API-KEY-ID` / `APCA-API-SECRET-KEY`) on
+   every request — there is no login call and no session token to refresh.
+3. LIVE requires TWO independent keys: `EXECUTION_ENV=live` AND
+   `EXECUTION_LIVE_ACK=true`. Anything missing is REFUSED, never downgraded.
+4. Paper and live are the same API, so switching changes nothing else.
+5. The dashboard header badge shows which environment is active; every stored
+   run records it under `inputs.execution`.
+
+### IBKR Client Portal Gateway (historical note — superseded, and no executor exists):
 1. Gateway runs on port 5000 (default)
-2. Bot calls `POST /auth` with username/password → receives session token
-3. All subsequent API calls include session token in headers
-4. Token refresh/reauth handled in executor module
+2. ~~Bot calls `POST /auth` with username/password → receives session token~~
+   **This is wrong** — the gateway has no such endpoint. You log into the gateway
+   ONCE interactively in a browser (with 2FA) and the gateway holds the session;
+   the bot then just talks to `localhost:5000`. Storing the password does not
+   enable unattended trading: the session expires and needs a human with a phone.
 
 ---
 

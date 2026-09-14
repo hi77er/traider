@@ -38,6 +38,7 @@ import pandas as pd
 
 from src.config.settings import Settings
 from src.data.dataset import bar_label, chart_time, load_dataset
+from src.execution.config import execution_status
 from src.model.simple_model import RuleBasedSignalGenerator
 
 from . import metrics
@@ -185,6 +186,25 @@ def _settings_snapshot(settings) -> dict:
     }
 
 
+def _execution_snapshot(settings) -> dict:
+    """Where an order WOULD go for this run's strategy — paper or live.
+
+    Recorded because paper and live results legitimately differ (paper simulates
+    no slippage, fees or dividends), so a run without this stamp cannot be
+    attributed to an environment later. Deliberately non-raising: an unconfigured
+    credential must not stop a backtest, it must simply be recorded as such.
+    Never contains a key or secret — only the environment and its base URL.
+    """
+    status = execution_status(settings)
+    return {
+        "broker": status["broker"],
+        "env": status["env"],
+        "live": bool(status["live"]),
+        "base_url": status["base_url"],
+        "configured": bool(status["ok"]),
+    }
+
+
 def _inputs_snapshot(
     settings, generator, df: pd.DataFrame, ppy: int, allow_short: bool, slippage: float, commission: float
 ) -> dict:
@@ -203,6 +223,7 @@ def _inputs_snapshot(
 
     return {
         "settings": _settings_snapshot(settings),
+        "execution": _execution_snapshot(settings),
         "model_type": str(settings.model_type),
         "rules": rules,
         "skipped_rules": skipped,

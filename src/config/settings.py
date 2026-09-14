@@ -205,12 +205,27 @@ class Settings(BaseSettings):
     backtest_slippage_percent: float = Field(default=0.05, ge=0.0)
     backtest_commission_per_trade: float = Field(default=0.0, ge=0.0, description="USD per side")
 
-    # ── Execution (IBKR) — order placement only ──────────────────────
+    # ── Execution — order placement only (data always comes from OpenBB) ──
+    # The BROKER and its credentials describe this trading ACCOUNT, so they live
+    # in the account layer (settings/account/account.json) — one file shared by
+    # every strategy. The MODE (paper vs live) is per-STRATEGY, so a strategy
+    # still being developed can run against the paper account while a proven one
+    # trades live. Alpaca's paper and live environments differ ONLY by base URL
+    # and key pair, so switching is a single triple swap (src/execution/config.py).
+    execution_broker: str = Field(default="alpaca", description="Broker that places orders: alpaca | ibkr")
+    alpaca_paper_api_key: Optional[str] = Field(default=None, description="Alpaca PAPER API key id")
+    alpaca_paper_api_secret: Optional[str] = Field(default=None, description="Alpaca PAPER API secret")
+    alpaca_live_api_key: Optional[str] = Field(default=None, description="Alpaca LIVE API key id")
+    alpaca_live_api_secret: Optional[str] = Field(default=None, description="Alpaca LIVE API secret")
+    execution_env: str = Field(default="paper", description="Which environment orders go to: paper | live")
+    execution_live_ack: bool = Field(
+        default=False,
+        description="Second key required before any LIVE order is sent (live also needs EXECUTION_ENV=live)",
+    )
     ibkr_api_url: str = Field(default="https://api.ib.com")
     ibkr_account_id: Optional[str] = None
     ibkr_username: Optional[str] = None
     ibkr_password: Optional[str] = None
-    paper_trading: bool = True
     execution_max_retries: int = Field(default=3, ge=0)
     execution_retry_base_delay_seconds: float = Field(default=1.0, ge=0.0)
     execution_order_timeout_seconds: int = Field(default=60, ge=1)
@@ -249,6 +264,18 @@ class Settings(BaseSettings):
     def backup_providers(self) -> List[str]:
         """Fallback OpenBB providers parsed from `OPENBB_BACKUP_PROVIDERS`."""
         return [x.strip() for x in self.openbb_backup_providers.split(",") if x.strip()]
+
+    @property
+    def paper_trading(self) -> bool:
+        """Derived: True when orders go to the simulated account.
+
+        ``EXECUTION_ENV`` replaced the old ``PAPER_TRADING`` boolean, which could
+        not express "paper for a strategy still being developed, live for a
+        proven one". Kept as a read-only alias so existing callers keep working;
+        it is NOT a Settings field, so it is not editable and never appears in a
+        saved run's settings snapshot.
+        """
+        return self.execution_env == "paper"
 
     @property
     def momentum_periods(self) -> List[int]:
@@ -317,6 +344,26 @@ class Settings(BaseSettings):
                 f"POSITION_SIZING_MODE must be 'fixed_risk' or 'volatility_target', got {v!r}"
             )
         return v
+
+    @field_validator("execution_broker", mode="before")
+    @classmethod
+    def _validate_execution_broker(cls, v):
+        """Normalize the broker name; refuse anything without an executor."""
+        val = str(v).strip().lower() if v not in (None, "") else "alpaca"
+        if val not in ("alpaca", "ibkr"):
+            raise ValueError(f"EXECUTION_BROKER must be 'alpaca' or 'ibkr', got {v!r}")
+        return val
+
+    @field_validator("execution_env", mode="before")
+    @classmethod
+    def _validate_execution_env(cls, v):
+        """Normalize the environment. Anything unrecognized RAISES rather than
+        silently falling back, because a typo must never be read as 'paper' when
+        the user meant live (or the reverse)."""
+        val = str(v).strip().lower() if v not in (None, "") else "paper"
+        if val not in ("paper", "live"):
+            raise ValueError(f"EXECUTION_ENV must be 'paper' or 'live', got {v!r}")
+        return val
 
     @field_validator("decision_time", "data_delta_pull_time")
     @classmethod

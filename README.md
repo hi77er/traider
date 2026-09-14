@@ -18,8 +18,9 @@ replay of it.
 | Data pipeline (OpenBB + yfinance, Parquet store, delta backfill) | done |
 | Features, rule model, risk layer, backtest engine + Gate | done |
 | Web portal (chart, config, backtest panel, report page) | done |
-| Tests | 262 passing |
-| Live order execution (IBKR) | **not implemented** |
+| Tests | 379 passing |
+| Execution config — Alpaca broker, per-strategy paper/live, fail-closed | done |
+| Live order execution (the Alpaca executor itself) | **not implemented** |
 | Portfolio state (DynamoDB) | **not implemented** |
 | Scheduler / bot entry point | **not implemented** - `src/main.py` is a stub |
 
@@ -40,8 +41,9 @@ OpenBB/yfinance ──> canonical Parquet dataset ──> features ──> rule 
                         │
           ┌─────────────┴──────────────┐
           v                            v
-   BACKTEST (next-open fills)     EXECUTION (IBKR) <- not implemented
-          │                            │
+   BACKTEST (next-open fills)     EXECUTION (Alpaca paper / live)
+          │                            │   ^ config + switch done,
+          │                            │     executor not implemented
           v                            v
    report page + run store        portfolio state <- not implemented
 ```
@@ -62,8 +64,9 @@ Two consequences worth knowing:
 
 - Python 3.9 (developed and tested on 3.9.6)
 - No API key needed for the default setup - the data layer uses yfinance
-- An IBKR Client Portal Gateway only for order execution (not required to
-  backtest or to use the portal)
+- Alpaca **paper** API keys only if you want the bot to place orders - paper
+  keys are free and available worldwide, and are not required to backtest or to
+  use the portal
 
 ## Setup
 
@@ -115,7 +118,7 @@ The portal is the whole interface:
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest tests/ -q      # 360 passed
+.venv/bin/python -m pytest tests/ -q      # 379 passed
 ```
 
 The suite is offline: OpenBB, the broker and the clock are all stubbed, so it
@@ -135,7 +138,7 @@ src/
   model/       rule store and rule-based signal generator
   risk/        position sizing, stop/take levels, circuit breaker, validator
   backtest/    engine, metrics + Gate, risk replay, report analytics, run store
-  execution/   IBKR executor          (not implemented)
+  execution/   Alpaca paper/live resolver (config); executor not implemented
   state/       portfolio tracker      (not implemented)
   scheduler/   decision loop          (not implemented)
   logging/     structured logging, alerts (not implemented)
@@ -190,13 +193,24 @@ configuration, not the code - a strategy is judged against the bar you set.
 | [DEPENDENCY_GRAPH.md](DEPENDENCY_GRAPH.md) | module dependency graph |
 | [DOCUMENT_INDEX.md](DOCUMENT_INDEX.md) | index of every document |
 | [SUMMARY.txt](SUMMARY.txt) | short summary of the project |
-| [.github/skills/](.github/skills) | task-scoped notes (OpenBB, backtesting, features, risk, IBKR) |
+| [.github/skills/](.github/skills) | task-scoped notes (OpenBB, backtesting, features, risk, Alpaca, IBKR) |
 
 ## Safety
 
-- **Nothing here places an order.** Execution is unimplemented, and the
-  intended first live step is paper trading.
+- **Nothing here places an order yet.** The broker, credentials and the
+  per-strategy paper/live switch are configured and enforced, but the executor
+  itself is still to be written.
+- **Going live needs two independent keys.** A strategy must set
+  `EXECUTION_ENV=live` *and* `EXECUTION_LIVE_ACK=true`, with the LIVE key pair
+  configured. Anything missing is refused outright rather than downgraded to
+  paper - silently falling back would either hide a broken live setup or spend
+  real money. The header badge (🧪 PAPER / 🔴 LIVE) and each run's
+  `inputs.execution` record which environment was in play.
 - Keep credentials in `.env` (gitignored) or a secret manager - never in code.
+  Note the account file is written with owner-only permissions by accident of
+  its atomic write, not by design.
 - A backtest is not a forecast. The Gate exists to stop a strategy that has not
   earned capital, and passing it is a floor, not a promise.
+- Paper results are optimistic: the paper engine simulates no slippage, fees or
+  dividends, so it will beat both your backtest and live.
 - This is a personal engineering project, not financial advice.

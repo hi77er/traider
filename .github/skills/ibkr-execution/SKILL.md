@@ -17,7 +17,13 @@ The TRAIDER bot places orders **only** through the Interactive Brokers Web API v
 - Debugging order rejections
 
 ## Project Facts
-- Config: `IBKR_API_URL`, `IBKR_ACCOUNT_ID`, `IBKR_USERNAME`, `IBKR_PASSWORD` (execution only); `PAPER_TRADING` toggles paper vs live
+- **STATUS: there is no IBKR executor.** `EXECUTION_BROKER=ibkr` is accepted by
+  the config but refused by `src/execution/config.py`, because the implemented
+  path is Alpaca — see the `alpaca-execution` skill. Everything below describes
+  what IBKR execution *would* require.
+- Config: `IBKR_API_URL`, `IBKR_ACCOUNT_ID`, `IBKR_USERNAME`, `IBKR_PASSWORD` (execution only).
+  The paper/live switch is `EXECUTION_ENV` (per strategy) plus `EXECUTION_LIVE_ACK` — never
+  an IBKR-specific flag.
 - Retry/backoff/timeout from config: `EXECUTION_MAX_RETRIES`, `EXECUTION_RETRY_BASE_DELAY_SECONDS`, `EXECUTION_ORDER_TIMEOUT_SECONDS`
 - Gateway runs on port 5000 in the Docker container; entrypoint starts gateway + bot
 - Only the execution module may touch IBKR — nothing else should talk to it
@@ -25,7 +31,14 @@ The TRAIDER bot places orders **only** through the Interactive Brokers Web API v
 
 ## Procedure
 
-1. **Authenticate** via the Client Portal Gateway (login/session token) with retry; cache and refresh the token.
+1. **Authenticate** — the gateway has NO credential endpoint. You log into
+   `https://localhost:5000` **once, interactively in a browser** (IBKR login +
+   2FA) and the gateway holds the session; the bot merely talks to that
+   already-authenticated local gateway. There is no `POST /auth`, no session
+   token to send, and therefore nothing for the app to store — which is why a
+   stored password does not unlock unattended trading. Verify with
+   `GET /v1/api/iserver/auth/status`, keep the session alive via `POST /v1/api/tickle`,
+   and treat "not authenticated" as a hard stop that alerts a human.
 2. **Build the order** in `IBKRExecutor.place_order(instrument, side, quantity, stop_loss_price, take_profit_price)` — validate fields (side, positive quantity, sane prices) before sending.
 3. **Submit** via the Web API and capture the `order_id`.
 4. **Poll** order status until `Filled` or a timeout; treat partial fills explicitly.

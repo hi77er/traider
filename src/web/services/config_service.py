@@ -59,6 +59,18 @@ _SECTION_RULES: List[Tuple[Tuple[str, ...], str]] = [
 _OPTIONS: Dict[str, List[Any]] = {
     "MODEL_TYPE": ["logistic_regression", "rule_based"],
     "POSITION_SIZING_MODE": ["fixed_risk", "volatility_target"],
+    # Which broker places orders. Only Alpaca has an executor today; selecting
+    # IBKR is honest-but-unusable and the execution status says so explicitly.
+    "EXECUTION_BROKER": [
+        {"label": "Alpaca", "value": "alpaca"},
+        {"label": "Interactive Brokers", "value": "ibkr"},
+    ],
+    # The paper/live switch. Paper is first because it is the safe default, and
+    # the labels spell out the consequence rather than leaving a bare "live".
+    "EXECUTION_ENV": [
+        {"label": "Paper — simulated, no real money", "value": "paper"},
+        {"label": "LIVE — REAL ORDERS", "value": "live"},
+    ],
     "HISTORICAL_BAR_SIZE": [
         {"label": "1 hour", "value": "1h"},
         {"label": "2 hours", "value": "2h"},
@@ -105,7 +117,13 @@ _LABELS: Dict[str, str] = {
     "DATA_DIR": "Data folder",
     "HISTORICAL_DATA_DIR": "Historical data subfolder",
     "BACKTEST_DIR": "Backtest data subfolder",
-    "PAPER_TRADING": "Paper trading (no real orders)",
+    "EXECUTION_BROKER": "Broker",
+    "ALPACA_PAPER_API_KEY": "Alpaca paper API key",
+    "ALPACA_PAPER_API_SECRET": "Alpaca paper API secret",
+    "ALPACA_LIVE_API_KEY": "Alpaca live API key",
+    "ALPACA_LIVE_API_SECRET": "Alpaca live API secret",
+    "EXECUTION_ENV": "Order environment (paper / live)",
+    "EXECUTION_LIVE_ACK": "Acknowledge LIVE orders",
     "IBKR_API_URL": "IBKR Client Portal Gateway URL",
     "IBKR_ACCOUNT_ID": "IBKR account id",
     "IBKR_USERNAME": "IBKR username",
@@ -183,7 +201,17 @@ _HINTS: Dict[str, str] = {
     "IBKR_ACCOUNT_ID": "Your Interactive Brokers account id.",
     "IBKR_USERNAME": "IBKR account username (if your gateway needs one).",
     "IBKR_PASSWORD": "IBKR password — stored masked, never shown.",
-    "PAPER_TRADING": "True runs against the simulated paper account; False sends REAL orders.",
+    "EXECUTION_BROKER": "Alpaca is the only broker with a working API here; "
+    "the IBKR executor is not implemented yet.",
+    "EXECUTION_ENV": "paper = the simulated account (safe). live = REAL orders, "
+    "and it additionally requires the LIVE acknowledgement below.",
+    "EXECUTION_LIVE_ACK": "Safety catch — with this off, LIVE orders are refused "
+    "even when the environment says live.",
+    "ALPACA_PAPER_API_KEY": "From the Alpaca dashboard with the Paper account "
+    "selected. Paper and live keys are DIFFERENT — never mix them.",
+    "ALPACA_PAPER_API_SECRET": "Shown once when generated. Paper key secret.",
+    "ALPACA_LIVE_API_KEY": "Only needed when EXECUTION_ENV is live.",
+    "ALPACA_LIVE_API_SECRET": "Only needed when EXECUTION_ENV is live.",
     "EXECUTION_MAX_RETRIES": "Attempts to send/fetch an order before giving up.",
     "EXECUTION_RETRY_BASE_DELAY_SECONDS": "Delay before the first retry; later retries back off.",
     "EXECUTION_ORDER_TIMEOUT_SECONDS": "Seconds to wait for an order acknowledgement before retrying.",
@@ -245,6 +273,16 @@ def _field_hints(key: str, info) -> List[str]:
 # in the strategy panel and stored inside each strategy's `config` object in
 # the strategy JSON file — NOT in the global .env form. Order matters (display).
 _STRATEGY_SCOPE: List[Tuple[str, Tuple[str, ...]]] = [
+    (
+        "Execution",
+        (
+            # Per-strategy paper vs live, so a strategy still being developed can
+            # run against the paper account while a proven one trades live. LIVE
+            # needs BOTH keys: the environment AND the acknowledgement. The
+            # broker and its credentials are account-wide (see _ACCOUNT_SECTIONS).
+            "EXECUTION_ENV", "EXECUTION_LIVE_ACK",
+        ),
+    ),
     (
         "Instrument",
         (
@@ -327,7 +365,12 @@ _ACCOUNT_SECTIONS: List[Tuple[str, Tuple[str, ...]]] = [
     (
         "Trading Account",
         (
-            "PAPER_TRADING",
+            # The BROKER and its credentials describe this ACCOUNT, so they are
+            # shared by every strategy. Which ENVIRONMENT an order is sent to is
+            # per-strategy — see the "Execution" group in _STRATEGY_SCOPE.
+            "EXECUTION_BROKER",
+            "ALPACA_PAPER_API_KEY", "ALPACA_PAPER_API_SECRET",
+            "ALPACA_LIVE_API_KEY", "ALPACA_LIVE_API_SECRET",
             "IBKR_API_URL", "IBKR_ACCOUNT_ID", "IBKR_USERNAME", "IBKR_PASSWORD",
             "EXECUTION_MAX_RETRIES", "EXECUTION_RETRY_BASE_DELAY_SECONDS",
             "EXECUTION_ORDER_TIMEOUT_SECONDS",

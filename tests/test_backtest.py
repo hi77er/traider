@@ -555,6 +555,13 @@ def test_run_backtest_records_provenance(tmp_path):
         re.search(r"key|token|secret|password|credential", k, re.IGNORECASE)
         for k in inputs["settings"]
     )
+    # The execution environment is stamped as well, so a stored run can always be
+    # attributed to paper or live (their results legitimately differ). Exactly
+    # these keys — never a credential.
+    assert set(inputs["execution"]) == {"broker", "env", "live", "base_url", "configured"}
+    assert inputs["execution"]["broker"] == "alpaca"
+    assert inputs["execution"]["env"] == "paper"
+    assert inputs["execution"]["live"] is False
 
     # Identical inputs -> identical hash (so a re-run is recognisable).
     again = run_backtest(settings, dataset=_rising_df())

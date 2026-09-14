@@ -1020,6 +1020,28 @@ function closeAccountSettings() {
   if (backdrop) backdrop.hidden = true;
 }
 
+/* ---------- Execution badge (broker + paper/live) ----------
+   The one place that answers "is this bot about to send REAL orders?" at a
+   glance. A paper and a live account are indistinguishable in every other panel,
+   so an unlabelled dashboard is exactly how live orders get sent by accident.
+   Never throws: a badge problem must not take the dashboard down with it. */
+async function loadExecutionStatus() {
+  const el = $("exec-badge");
+  if (!el) return;
+  try {
+    const s = await api("/api/v1/execution/status");
+    const live = !!s.live;
+    el.textContent = `${live ? "🔴" : "🧪"} ${live ? "LIVE" : "PAPER"}`;
+    el.className = `exec-badge ${s.ok ? (live ? "live" : "paper") : "blocked"}`;
+    el.title = s.ok
+      ? `${s.broker} · ${s.env} — ${s.base_url}`
+      : `Orders would be REFUSED — ${s.message}`;
+    el.hidden = false;
+  } catch (_) {
+    el.hidden = true;
+  }
+}
+
 async function saveAccount() {
   const btn = $("account-save");
   const c = state.account;
@@ -1050,6 +1072,7 @@ async function saveAccount() {
     }
     $("account-msg").textContent = r.message || "Saved";
     await loadAccount(true); // re-read so secrets re-mask and values refresh
+    await loadExecutionStatus(); // the broker/keys may have just changed
   } catch (err) {
     showAccountErrors(err.message, "warn");
   } finally {
@@ -2814,4 +2837,5 @@ showPendingToast();
 refresh();
 loadConfig();
 loadAccount(true);
+loadExecutionStatus();
 loadRules();

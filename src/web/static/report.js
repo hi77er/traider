@@ -781,6 +781,17 @@
       .map((k) => kv(k, esc(settings[k])))
       .join("");
 
+    // Which environment the strategy was pointed at. Paper and live results
+    // legitimately differ (paper simulates no slippage, fees or dividends), so a
+    // run that does not say which one it was cannot be compared with another.
+    const execution = inputs.execution || {};
+    const executionCell = execution.env
+      ? `<span class="rp-exec ${execution.live ? "live" : "paper"}">` +
+        `${esc(String(execution.env).toUpperCase())}</span>` +
+        `<span class="muted"> · ${esc(execution.broker || "—")}` +
+        `${execution.configured === false ? " · not configured" : ""}</span>`
+      : `<span class="muted">—</span>`;
+
     $("rp-inputs").innerHTML =
       `<h4 class="rp-sub-head">Rules that ran (${rules.length})` +
       `${skipped.length ? ` · ${skipped.length} skipped` : ""}</h4>` +
@@ -791,6 +802,7 @@
       kv("Instrument", esc(win.instrument || rep.symbol || "—")) +
       kv("Bar size", esc(win.bar_size || rep.bar_size || "—")) +
       kv("Model", esc(rep.model_type || "—")) +
+      kv("Execution", executionCell) +
       kv("Allow short", inputs.allow_short ? "yes" : "no") +
       kv("Bars replayed", int(win.rows)) +
       kv("Window", `${esc(win.start || "?")} → ${esc(win.end || "?")}`) +
