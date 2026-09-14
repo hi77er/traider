@@ -94,10 +94,15 @@ def test_misconfiguration_is_refused_not_guessed(overrides, expected):
     assert expected in str(excinfo.value)
 
 
-def test_an_unimplemented_broker_is_refused_rather_than_ignored():
-    with pytest.raises(ExecutionConfigError) as excinfo:
-        resolve_execution_target(_s(execution_broker="ibkr", **PAPER_KEYS))
-    assert "no executor" in str(excinfo.value)
+def test_no_ibkr_settings_remain_anywhere():
+    """IBKR was dropped in favour of Alpaca — a stray key must not creep back."""
+    assert not [f for f in Settings.model_fields if "ibkr" in f]
+    assert "execution_broker" not in Settings.model_fields
+    scoped = set(config_service.STRATEGY_SCOPED_KEYS) | set(config_service.ACCOUNT_SCOPED_KEYS)
+    assert not [k for k in scoped if "IBKR" in k]
+    # No broker selector either: with one broker it would be pure ceremony.
+    assert not [k for k in scoped if "BROKER" in k]
+    assert execution_status(_s())["broker"] == "alpaca"
 
 
 def test_a_secret_never_reaches_a_repr_or_log_line():
@@ -109,12 +114,10 @@ def test_a_secret_never_reaches_a_repr_or_log_line():
 # ---------------------------------------------------------------------------
 # the settings surface itself
 # ---------------------------------------------------------------------------
-def test_environment_and_broker_are_normalised_but_typos_are_rejected():
-    assert _s(execution_env="LIVE", execution_broker=" Alpaca ").execution_env == "live"
+def test_the_environment_is_normalised_but_typos_are_rejected():
+    assert _s(execution_env="LIVE").execution_env == "live"
     with pytest.raises(Exception):
         _s(execution_env="production")
-    with pytest.raises(Exception):
-        _s(execution_broker="trading212")
 
 
 def test_paper_trading_is_kept_as_a_derived_alias():
@@ -133,11 +136,11 @@ def test_the_mode_is_per_strategy_and_credentials_are_account_wide():
     strategy_keys = set(config_service.STRATEGY_SCOPED_KEYS)
     account_keys = set(config_service.ACCOUNT_SCOPED_KEYS)
     assert {"EXECUTION_ENV", "EXECUTION_LIVE_ACK"} <= strategy_keys
-    assert {"EXECUTION_BROKER", "ALPACA_PAPER_API_KEY", "ALPACA_PAPER_API_SECRET",
+    assert {"ALPACA_PAPER_API_KEY", "ALPACA_PAPER_API_SECRET",
             "ALPACA_LIVE_API_KEY", "ALPACA_LIVE_API_SECRET"} <= account_keys
     # Exactly one home for each, or the two layers would fight.
     assert not {"EXECUTION_ENV", "EXECUTION_LIVE_ACK"} & account_keys
-    assert not {"EXECUTION_BROKER", "ALPACA_LIVE_API_KEY"} & strategy_keys
+    assert "ALPACA_LIVE_API_KEY" not in strategy_keys
     # The old single switch is gone.
     assert "PAPER_TRADING" not in strategy_keys | account_keys
 

@@ -193,7 +193,7 @@ configuration, not the code - a strategy is judged against the bar you set.
 | [DEPENDENCY_GRAPH.md](DEPENDENCY_GRAPH.md) | module dependency graph |
 | [DOCUMENT_INDEX.md](DOCUMENT_INDEX.md) | index of every document |
 | [SUMMARY.txt](SUMMARY.txt) | short summary of the project |
-| [.github/skills/](.github/skills) | task-scoped notes (OpenBB, backtesting, features, risk, Alpaca, IBKR) |
+| [.github/skills/](.github/skills) | task-scoped notes (OpenBB, backtesting, features, risk, Alpaca) |
 
 ## Safety
 

@@ -4,19 +4,13 @@ set -e
 echo "🚀 TRAIDER Bot Startup"
 echo "======================================"
 
-# Check if IBKR Client Portal Gateway should be started
-if [ "${START_GATEWAY:-false}" == "true" ]; then
-    echo "📡 Starting IBKR Client Portal Gateway..."
-    # Gateway startup would go here
-    # /opt/ibkr/gateway.sh &
-    sleep 5
+# No sidecar gateway: market data comes from OpenBB and orders go to Alpaca over
+# HTTPS with an API key pair. All this can check is that credentials exist — the
+# hard gate lives in src/execution/config.py, which refuses to trade without them.
+if [ -n "${ALPACA_PAPER_API_KEY:-}" ] || [ -n "${ALPACA_LIVE_API_KEY:-}" ]; then
+    echo "🔑 Alpaca credentials present"
 else
-    echo "⏭️  Skipping IBKR Gateway (set START_GATEWAY=true to enable)"
-fi
-
-# Verify required environment variables
-if [ -z "$IBKR_API_URL" ]; then
-    echo "⚠️  Warning: IBKR_API_URL not set. Will use default."
+    echo "ℹ️  No Alpaca credentials set — orders will be refused until they are added"
 fi
 
 # Run the bot

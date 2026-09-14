@@ -5,7 +5,7 @@ description: 'Apply the risk layer that vetoes risky signals. Use when: implemen
 
 # Risk Management
 
-The bot's first rule: **never lose more than you allow.** Every signal passes through the risk layer before the IBKR executor may act. Risk vetoes are logged so you can always see *why* a trade was rejected.
+The bot's first rule: **never lose more than you allow.** Every signal passes through the risk layer before the Alpaca executor may act. Risk vetoes are logged so you can always see *why* a trade was rejected.
 
 ## When to Use
 - Implementing `src/risk/position_sizing.py`, `circuit_breaker.py`, `validator.py`
@@ -19,7 +19,7 @@ The bot's first rule: **never lose more than you allow.** Every signal passes th
 - Position sizing formula: `position_size = (account_size × RISK_LIMIT_PERCENT) / stop_loss_distance`
 - Circuit breaker: stop trading for the day after `MAX_CONSECUTIVE_LOSSES` or daily drawdown > `MAX_LOSS_PERCENT`; reset next day/week
 - `RiskValidator.validate_signal(signal, state)` returns `(approved: bool, reason: str)` — single entry point, logs every veto
-- Execution (IBKR) must never be called without risk approval
+- Execution (Alpaca) must never be called without risk approval
 
 ## Procedure
 

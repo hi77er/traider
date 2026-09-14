@@ -2,9 +2,9 @@
 
 Track your progress through all 41 tasks across 9 phases.
 
-> **Plan change:** the unfinished Phase 2 & 3 work (state, logging, alerts, IBKR connectivity, model training, backtest Gate, report generator) was moved to the new **Phase 5 — Deferred: Core & Backtest Completion**, so **Phase 4 (Risk & Execution) can start now**. Old Phases 5–8 became Phases 6–9.
+> **Plan change:** the unfinished Phase 2 & 3 work (state, logging, alerts, Alpaca connectivity, model training, backtest Gate, report generator) was moved to the new **Phase 5 — Deferred: Core & Backtest Completion**, so **Phase 4 (Risk & Execution) can start now**. Old Phases 5–8 became Phases 6–9.
 >
-> **✅ Since then:** the **report generator (task 21) is COMPLETE** — it is no longer deferred work. Still open in Phase 5: state / logging / alerts / IBKR connectivity, the backtest Gate (20) and the parameter-sensitivity sweep.
+> **✅ Since then:** the **report generator (task 21) is COMPLETE** — it is no longer deferred work. Still open in Phase 5: state / logging / alerts / Alpaca connectivity, the backtest Gate (20) and the parameter-sensitivity sweep.
 
 ---
 
@@ -23,13 +23,13 @@ Track your progress through all 41 tasks across 9 phases.
   - [ ] Create requirements.txt
   - [ ] Verify imports work
 
-- [ ] **setup-docker** (3) — Create Dockerfile (IBKR gateway for execution + OpenBB for data)
-  - [ ] Base: Ubuntu 22.04 + Java 11 JDK
-  - [ ] Install IBKR Client Portal Gateway (execution only)
-  - [ ] Multi-stage: add Python 3.11 + OpenBB Platform
+- [ ] **setup-docker** (3) — Create Dockerfile (Python + OpenBB data layer + Alpaca execution)
+  - [ ] Base: Debian slim + Python 3
+  - [ ] No sidecar gateway: orders go to Alpaca over HTTPS with an API key
+  - [ ] Multi-stage: build the venv, then a minimal runtime image
   - [ ] Copy bot code
-  - [ ] Expose port 5000 (IBKR gateway)
-  - [ ] Create entrypoint.sh (start gateway + bot)
+  - [ ] Expose port 8000 (web portal)
+  - [ ] Create entrypoint.sh (check credentials + start bot)
 
 - [ ] **setup-aws** (4) — Prepare AWS Lightsail config
   - [ ] Document Lightsail container deployment steps (use Terraform)
@@ -47,7 +47,7 @@ Track your progress through all 41 tasks across 9 phases.
 - [x] **config-create** (5) — Create config module
   - [x] src/config/settings.py with Pydantic BaseSettings
   - [x] Required vars: OPENBB_PROVIDER (+ optional OPENBB_API_KEY)
-  - [x] Required vars (execution): IBKR_API_URL, IBKR_ACCOUNT_ID, IBKR_USERNAME, IBKR_PASSWORD
+  - [x] Required vars (execution): ALPACA_PAPER_API_KEY, ALPACA_PAPER_API_SECRET (plus ALPACA_LIVE_* for live)
   - [x] Instrument & period: INSTRUMENT (AAPL), DECISION_INTERVAL_HOURS, TRADING_START_HOUR, TRADING_END_HOUR, MARKET_TIMEZONE
   - [x] Historical period: HISTORICAL_BAR_SIZE, HISTORICAL_START_DATE, HISTORICAL_END_DATE, BACKTEST_START_DATE, BACKTEST_END_DATE, TRAIN_TEST_SPLIT
   - [x] Features: FEATURES_SMA_PERIODS, FEATURES_EMA_PERIODS, FEATURES_MACD_FAST_PERIOD, FEATURES_MACD_SLOW_PERIOD, FEATURES_MACD_SIGNAL_PERIOD, FEATURES_RSI_PERIOD, FEATURES_ATR_PERIOD, FEATURES_BOLLINGER_PERIOD, FEATURES_BOLLINGER_STD, FEATURES_MOMENTUM_PERIODS, FEATURES_VOLATILITY_PERIOD, FEATURES_MIN_LOOKBACK
@@ -178,14 +178,14 @@ Track your progress through all 41 tasks across 9 phases.
 > different entries) before trusting a Gate result.
 
 ### Execution
-- [ ] **execution-ibkr** (25) — Implement IBKR executor (execution only)
-  - [ ] src/execution/ibkr_executor.py
-  - [ ] IBKRExecutor class
+- [ ] **execution-alpaca** (25) — Implement the Alpaca executor (execution only)
+  - [ ] src/execution/alpaca_executor.py
+  - [ ] AlpacaExecutor class
   - [ ] place_order(instrument, side, quantity, stop_loss, take_profit)
-  - [ ] Uses IBKR Web API via Client Portal Gateway
-  - [ ] Handle authentication, order validation
+  - [ ] Uses the Alpaca Trading API (bracket / OCO orders for the exits)
+  - [ ] Resolve paper vs live via src/execution/config.py — never re-derive it
   - [ ] Poll for confirmation
-  - [ ] Data for decisions comes from OpenBB, not IBKR
+  - [ ] Data for decisions comes from OpenBB, not Alpaca
 
 - [ ] **execution-retry** (26) — Add retry logic
   - [ ] src/execution/retry.py
@@ -207,7 +207,7 @@ The unfinished Phase 2 & 3 work lives here so Risk & Execution can proceed first
 
 ### Config
 - [ ] **config-validation** (6) — remaining item only:
-  - [ ] Test IBKR gateway connectivity (execution)
+  - [ ] Test the Alpaca paper endpoint connectivity (execution)
   - (done: required env vars, INSTRUMENT format, fail-fast validators, OpenBB connectivity)
 
 ### State & Portfolio
@@ -356,7 +356,7 @@ The unfinished Phase 2 & 3 work lives here so Risk & Execution can proceed first
 
 ### Functional Testing
 - [ ] **test-paper-trading** (32) — Paper trading 1-2 weeks
-  - [ ] Deploy to real IBKR account (paper money)
+  - [ ] Deploy to a real Alpaca account (paper money)
   - [ ] Run for 1-2 weeks live
   - [ ] **GATE CHECK:**
     - [ ] Zero crashes
@@ -384,10 +384,9 @@ The unfinished Phase 2 & 3 work lives here so Risk & Execution can proceed first
   - [ ] Build image: `docker build -t traider .`
   - [ ] Test locally: `docker run traider`
   - [ ] Verify:
-    - [ ] Java + IBKR Gateway starts
     - [ ] Python bot runs
     - [ ] All dependencies installed
-    - [ ] Gateway connectivity works
+    - [ ] Alpaca API reachable (paper endpoint)
 
 ### AWS Deployment
 - [ ] **deploy-aws-setup** (35) — Lightsail deployment

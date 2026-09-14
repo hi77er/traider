@@ -5,7 +5,7 @@ Three layers are merged into the ONE ``Settings`` object every module consumes:
 | Layer | File | Example keys |
 |-------|------|--------------|
 | Global | ``.env`` | ``OPENBB_PROVIDER``, ``OPENBB_API_KEY`` |
-| Account | ``settings/account/account.json`` | ``DATA_DIR``, ``IBKR_ACCOUNT_ID``, ``BACKTEST_SLIPPAGE_PERCENT`` |
+| Account | ``settings/account/account.json`` | ``DATA_DIR``, ``ALPACA_PAPER_API_KEY``, ``BACKTEST_SLIPPAGE_PERCENT`` |
 | Strategy | ``settings/strategies/store.json`` | ``INSTRUMENT``, ``FEATURE_*``, ``MODEL_*``, ``GATE_*``, ``RISK_*`` |
 
 **Precedence: strategy > account > .env > schema default.** Both JSON files are

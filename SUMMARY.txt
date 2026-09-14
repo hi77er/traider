@@ -2,7 +2,7 @@
 ║                     TRAIDER TRADING BOT - MASTER PLAN                      ║
 ║                                                                            ║
 ║  A Comprehensive Python AI Trading Bot for AAPL (Apple) Stock            ║
-║  OpenBB Platform (Data) • Interactive Brokers (Orders) • AWS Lightsail    ║
+║  OpenBB Platform (Data) • Alpaca Trading API (Orders) • AWS Lightsail    ║
 ╚════════════════════════════════════════════════════════════════════════════╝
 
 
@@ -25,7 +25,7 @@ PROJECT OVERVIEW
 3. FEATURES        → Transform price → AI-friendly numbers (SMA, RSI, ATR)
 4. MODEL/SIGNAL    → AI core: features → BUY/SELL/HOLD + confidence
 5. RISK MGMT       → Position sizing, circuit breaker, risk validator
-6. EXECUTION       → Place orders on IBKR via Web API (data comes from OpenBB)
+6. EXECUTION       → Place orders on Alpaca via its API (data comes from OpenBB)
 7. STATE TRACKER   → DynamoDB table (positions, P&L, trades)
 8. SCHEDULER       → Main loop every 4 hours (APScheduler)
 9. LOGGING/WEB PORTAL → Structured logs + dashboard (progress, charts, config, alerts)
@@ -54,7 +54,7 @@ Phase 4: Risk & Execution (Days 13-15, 5 tasks)  ← NEXT
 Phase 5: Deferred — Core & Backtest Completion (moved from Phases 2 & 3)
   ✓ DONE: report generator + standalone report page (/report, run menu, full trade list)
   ➜ State (DynamoDB schema + tracker), structured logging, alert feed,
-    IBKR connectivity check, model training (only if the ML path is in scope)
+    Alpaca connectivity check, model training (only if the ML path is in scope)
   ➜ GATE CHECK: Backtest metrics (Sharpe ≥ 1.0, DD ≤ 25%, WR ≥ 55%)
   ➜ Parameter sensitivity (multi-run sweep) — split out of the report task
   
@@ -116,7 +116,7 @@ ARCHITECTURE
                 ▼
        ┌──────────────────┐
        │  EXECUTION       │  (only module placing real orders)
-       │  • IBKR API      │
+       │  • Alpaca API    │
        │  • Retry logic   │
        └────────┬─────────┘
                 │
@@ -193,7 +193,7 @@ RESOURCE REQUIREMENTS
 ════════════════════════════════════════════════════════════════════════════
 
 Accounts:
-  • Interactive Brokers (paper or real, free to open) — for order execution
+  • Alpaca (the paper account is free and open to anyone worldwide) — for order execution
   • OpenBB Platform (open-source, free) — for market data
   • AWS account (~$15-50/month for Lightsail)
   • Web Portal (FastAPI dashboard — free, open-source)
@@ -215,7 +215,7 @@ MONITORING POST-LIVE
 Daily:
   ☐ Bot running? (check AWS Lightsail)
   ☐ Error logs? (check CloudWatch)
-  ☐ Did it trade? (check IBKR account)
+  ☐ Did it trade? (check the Alpaca account)
   ☐ P&L reasonable? (±2% of expected)
 
 Weekly:
@@ -284,9 +284,9 @@ KEY DESIGN DECISIONS
 ✓ DynamoDB (managed) vs PostgreSQL
   → DynamoDB: managed, durable, scales without ops; supports PITR and export to S3 for archival
 
-✓ OpenBB Platform (data) + IBKR (execution)
+✓ OpenBB Platform (data) + Alpaca (execution)
   → OpenBB aggregates market data providers behind one SDK (free providers, no broker auth);
-    IBKR kept only for order placement since OpenBB cannot execute trades
+    Alpaca kept only for order placement since OpenBB cannot execute trades
 
 ✓ Simple AI (Logistic Regression) vs Neural Nets
   → Simple: fast, debuggable, good edge, upgrade later if needed
@@ -326,14 +326,14 @@ GETTING HELP
 Resources:
   • OpenBB Platform Docs: https://docs.openbb.co/platform
   • OpenBB GitHub: https://github.com/OpenBB-finance/OpenBB
-  • IBKR Web API Docs: https://www.interactivebrokers.com/en/trading/web-api
+  • Alpaca Trading API Docs: https://docs.alpaca.markets/us/docs/trading-api
   • Client Portal Gateway: https://github.com/InteractiveBrokers/cpapi-web-gateway
   • APScheduler Docs: https://apscheduler.readthedocs.io/
   • SQLAlchemy Docs: https://docs.sqlalchemy.org/
   • Pytest Docs: https://docs.pytest.org/
 
 Key Contacts:
-  • IBKR Support: support.interactivebrokers.com
+  • Alpaca Support: alpaca.markets/support
   • AWS Support: console.aws.amazon.com/support
 
 

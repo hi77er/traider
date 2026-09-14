@@ -1,4 +1,4 @@
-"""Where an order goes: which broker, and which environment of that broker.
+"""Where an order goes: which Alpaca environment.
 
 Alpaca's paper and live environments are the **same API** with a different base
 URL and a different key pair, so "switching between them" is one triple swap.
@@ -28,10 +28,10 @@ from typing import Tuple
 PAPER_BASE_URL = "https://paper-api.alpaca.markets"
 LIVE_BASE_URL = "https://api.alpaca.markets"
 
-SUPPORTED_BROKERS: Tuple[str, ...] = ("alpaca", "ibkr")
-# Brokers that actually have a working executor. Selecting another supported
-# broker is a configuration error, not a silent no-op.
-IMPLEMENTED_BROKERS: Tuple[str, ...] = ("alpaca",)
+# The only broker. Kept as a constant rather than hard-coded at each call site
+# because it is also part of every run's provenance payload and of the report UI,
+# so adding a second broker later extends this file instead of reshaping callers.
+BROKER = "alpaca"
 ENVIRONMENTS: Tuple[str, ...] = ("paper", "live")
 
 
@@ -78,18 +78,8 @@ def _alpaca_target(settings, env: str) -> Tuple[str, str, str]:
 
 def resolve_execution_target(settings) -> ExecutionTarget:
     """Resolve the target for the next order, or raise :class:`ExecutionConfigError`."""
-    broker = _clean(settings.execution_broker).lower() or "alpaca"
     env = _clean(settings.execution_env).lower() or "paper"
 
-    if broker not in SUPPORTED_BROKERS:
-        raise ExecutionConfigError(
-            f"Unknown EXECUTION_BROKER {broker!r}; expected one of {list(SUPPORTED_BROKERS)}."
-        )
-    if broker not in IMPLEMENTED_BROKERS:
-        raise ExecutionConfigError(
-            f"EXECUTION_BROKER={broker} has no executor yet — only "
-            f"{list(IMPLEMENTED_BROKERS)} can place orders right now."
-        )
     if env not in ENVIRONMENTS:
         raise ExecutionConfigError(
             f"Unknown EXECUTION_ENV {env!r}; expected one of {list(ENVIRONMENTS)}."
@@ -118,7 +108,7 @@ def resolve_execution_target(settings) -> ExecutionTarget:
         )
 
     return ExecutionTarget(
-        broker=broker,
+        broker=BROKER,
         env=env,
         base_url=base_url,
         key_id=key_id,
@@ -134,7 +124,7 @@ def execution_status(settings) -> dict:
     the dashboard badge shows and what a run's provenance records — without ever
     including a credential.
     """
-    broker = _clean(settings.execution_broker).lower() or "alpaca"
+    broker = BROKER
     env = _clean(settings.execution_env).lower() or "paper"
     try:
         target = resolve_execution_target(settings)

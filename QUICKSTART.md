@@ -19,7 +19,7 @@ Build a modular Python trading bot for AAPL (Apple) stock that:
 **What:** Build the scaffolding
 - [x] Create folder structure
 - [x] Install dependencies
-- [x] Create Dockerfile with Java (IBKR needs it for order execution; market data comes from OpenBB)
+- [x] Create Dockerfile (Python + OpenBB for data; no Java or gateway needed — Alpaca is an HTTPS API)
 - [x] Setup AWS Lightsail docs
 
 **Deliverable:** Runnable, empty bot structure
@@ -48,7 +48,7 @@ Build a modular Python trading bot for AAPL (Apple) stock that:
 **What:** Make sure it doesn't crash before real money
 - [x] Unit tests (test each part separately)
 - [x] Integration tests (test all parts together)
-- [x] Paper trading (fake money on real IBKR account for 1-2 weeks)
+- [x] Paper trading (fake money on a real Alpaca account for 1-2 weeks)
 
 **Deliverable:** Bot runs 1-2 weeks without crashing, P&L is accurate
 
@@ -92,7 +92,7 @@ Build a modular Python trading bot for AAPL (Apple) stock that:
    └─ Risk validator (says YES/NO to each trade)
 
 6. EXECUTION → Only module that places real orders
-   └─ Talks to IBKR API (execution only; data comes from OpenBB), retries if order fails
+   └─ Talks to the Alpaca API (execution only; data comes from OpenBB), retries if an order fails
 
 7. STATE TRACKER → DynamoDB table of positions & P&L
    └─ Survives if bot crashes
@@ -149,8 +149,8 @@ traider/
 ✅ **Backtest before live** (non-negotiable)  
 → Validates strategy works before risking real money
 
-✅ **OpenBB for data, IBKR for execution**  
-→ OpenBB aggregates market data (free providers, no broker auth); IBKR only places orders (OpenBB can't execute)
+✅ **OpenBB for data, Alpaca for execution**
+→ OpenBB aggregates market data (free providers, no broker auth); Alpaca only places orders (OpenBB can't execute)
 
 ✅ **Docker + AWS Lightsail**  
 → Reproducible, manageable, ~$15/month
@@ -300,7 +300,7 @@ Don't build in random order! Follow this:
    → Deploy after testing
 
 9. **Paper trading**  
-   → Real IBKR account (paper money) for 1-2 weeks
+   → Real Alpaca account (paper money) for 1-2 weeks
 
 10. **Go live**  
     → Start with 1% position size
@@ -352,20 +352,13 @@ RISK_LIMIT_PERCENT=2
 MAX_LOSS_PERCENT=10
 MAX_CONSECUTIVE_LOSSES=3
 
-# Execution — broker + credentials (account-wide). Which environment an order
-# goes to (paper or live) is chosen PER STRATEGY in the dashboard's
-# Strategy Configuration panel under "Execution".
-EXECUTION_BROKER=alpaca
+# Execution — Alpaca credentials (account-wide). Which environment an order goes
+# to (paper or live) is chosen PER STRATEGY in the dashboard's Strategy
+# Configuration panel under "Execution".
 ALPACA_PAPER_API_KEY=YOUR_PAPER_KEY_ID
 ALPACA_PAPER_API_SECRET=YOUR_PAPER_SECRET  # ← AWS Secrets Manager in prod
 ALPACA_LIVE_API_KEY=
 ALPACA_LIVE_API_SECRET=                    # only needed when a strategy is live
-
-# IBKR is selectable but has no executor implemented yet
-IBKR_API_URL=https://api.ib.com
-IBKR_ACCOUNT_ID=YOUR_ACCOUNT_ID
-IBKR_USERNAME=YOUR_USERNAME
-IBKR_PASSWORD=YOUR_PASSWORD
 
 # Web Portal & state
 WEB_PORTAL_ENABLED=True
@@ -429,7 +422,7 @@ test_error_cases.py  # What if API fails? Retry? Handle?
 ### Daily
 - [ ] Is bot running? (check AWS Lightsail)
 - [ ] Any error logs? (check CloudWatch)
-- [ ] Did it trade? (check IBKR account)
+- [ ] Did it trade? (check the Alpaca account)
 - [ ] Is P&L reasonable? (±2% of expected)
 
 ### Weekly
@@ -448,7 +441,7 @@ test_error_cases.py  # What if API fails? Retry? Handle?
 ## Resources Needed
 
 **Accounts:**
-- IBKR account (real money or paper — for order execution)
+- Alpaca account (paper is free and open worldwide — for order execution)
 - OpenBB Platform (open-source, free; data only)
 - AWS account ($20-50/month for Lightsail)
 - Web Portal (FastAPI dashboard — free, open-source)

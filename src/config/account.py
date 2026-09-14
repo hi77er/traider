@@ -10,7 +10,7 @@ TRAIDER's configuration has three layers, and this module owns the middle one:
 
 The account document is a flat ``KEY -> value`` map so the SAME overlay
 machinery as a strategy's ``config`` can merge it (see ``effective.py``):
-values are env-key spellings (``IBKR_ACCOUNT_ID``, ``DATA_DIR``, …) and are
+values are env-key spellings (``ALPACA_PAPER_API_KEY``, ``DATA_DIR``, …) and are
 validated by the ``Settings`` model, so there is exactly one definition of every
 setting.
 
@@ -50,7 +50,7 @@ class AccountStore(BaseModel):
     updated_at: Optional[str] = Field(default=None, description="ISO timestamp of the last save")
     settings: Dict[str, str] = Field(
         default_factory=dict,
-        description="Account settings, env KEY -> raw value (e.g. DATA_DIR, IBKR_ACCOUNT_ID)",
+        description="Account settings, env KEY -> raw value (e.g. DATA_DIR, ALPACA_PAPER_API_KEY)",
     )
 
 

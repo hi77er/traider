@@ -1,7 +1,7 @@
 # TRAIDER: Comprehensive Python AI Trading Bot - Master Plan
 
 ## Project Overview
-**traider** is a modular, production-grade Python AI trading bot for automated **AAPL (Apple) stock** trading. Market data comes from the **OpenBB Platform SDK**; order execution uses the **Interactive Brokers Web API**. Deployed on AWS Lightsail.
+**traider** is a modular, production-grade Python AI trading bot for automated **AAPL (Apple) stock** trading. Market data comes from the **OpenBB Platform SDK**; order execution uses the **Alpaca Trading API**. Deployed on AWS Lightsail.
 
 **Key Characteristics:**
 - Non-day-trading bot (4-hour decision intervals, polling-based, no websockets)
@@ -10,7 +10,7 @@
 - Backtested strategy validation before live execution
 - Full observability: logging, alerts, dashboards
 - Durable state persistence (DynamoDB)
-- Docker containerized: OpenBB Platform (Python) for data + IBKR Client Portal Gateway + Java for execution
+- Docker containerized: OpenBB Platform (Python) for data + the Alpaca API for execution (no sidecar gateway, no Java)
 
 ---
 
@@ -38,7 +38,7 @@
 │                    │                                         │
 │            ┌───────▼──────────────┐                          │
 │            │  Execution Module    │                          │
-│            │  - IBKR Order API    │                          │
+│            │  - Alpaca Order API  │                          │
 │            │  - Retry Logic       │                          │
 │            └───────┬──────────────┘                          │
 │                    │                                         │
@@ -60,7 +60,7 @@
 ```
 
 > **Data flow:** All price data enters via the **OpenBB Platform SDK** (historical + live).
-> **Execution flow:** Approved orders are sent via the **IBKR Web API** (Client Portal Gateway). OpenBB does not place orders.
+> **Execution flow:** Approved orders are sent via the **Alpaca Trading API**. OpenBB does not place orders.
 
 ---
 
@@ -91,7 +91,7 @@ traider/
 │   │   └── validator.py             # Unified signal validator
 │   ├── execution/
 │   │   ├── __init__.py
-│   │   ├── ibkr_executor.py         # IBKR order placement (execution only — data comes from OpenBB)
+│   │   ├── alpaca_executor.py       # Alpaca order placement (execution only — data comes from OpenBB)
 │   │   └── retry.py                 # Retry logic for failed orders
 │   ├── state/
 │   │   ├── __init__.py
@@ -136,7 +136,7 @@ traider/
 │   └── conftest.py                  # Pytest fixtures
 │
 ├── docker/
-│   ├── Dockerfile                   # Multi-stage: Java + IBKR Gateway + Python
+│   ├── Dockerfile                   # Multi-stage: Python venv build + minimal runtime
 │   ├── entrypoint.sh                # Start gateway + bot
 │   └── .dockerignore
 │
@@ -164,7 +164,7 @@ traider/
 - **Model:** `MODEL_TYPE`, `MODEL_BUY_THRESHOLD`, `MODEL_SELL_THRESHOLD`, `MODEL_RETRAIN_INTERVAL_DAYS`
 - **Risk:** `RISK_LIMIT_PERCENT`, `MAX_LOSS_PERCENT`, `MAX_CONSECUTIVE_LOSSES`, `MAX_EXPOSURE_PERCENT`, `POSITION_SIZING_MODE`, `STOP_LOSS_PERCENT`, `TAKE_PROFIT_PERCENT`, `CIRCUIT_BREAKER_ENABLED`
 - **Backtest gates:** `GATE_MIN_SHARPE`, `GATE_MAX_DRAWDOWN_PERCENT`, `GATE_MIN_WIN_RATE_PERCENT`, `GATE_MAX_WEEKLY_LOSS_PERCENT`, `BACKTEST_SLIPPAGE_PERCENT`, `BACKTEST_COMMISSION_PER_TRADE`
-- **Execution — account-wide:** `EXECUTION_BROKER`, `ALPACA_PAPER_API_KEY`, `ALPACA_PAPER_API_SECRET`, `ALPACA_LIVE_API_KEY`, `ALPACA_LIVE_API_SECRET`, `IBKR_API_URL`, `IBKR_ACCOUNT_ID`, `IBKR_USERNAME`, `IBKR_PASSWORD`, `EXECUTION_MAX_RETRIES`, `EXECUTION_RETRY_BASE_DELAY_SECONDS`, `EXECUTION_ORDER_TIMEOUT_SECONDS`
+- **Execution — account-wide (Alpaca):** `ALPACA_PAPER_API_KEY`, `ALPACA_PAPER_API_SECRET`, `ALPACA_LIVE_API_KEY`, `ALPACA_LIVE_API_SECRET`, `EXECUTION_MAX_RETRIES`, `EXECUTION_RETRY_BASE_DELAY_SECONDS`, `EXECUTION_ORDER_TIMEOUT_SECONDS`
 - **Execution — per strategy:** `EXECUTION_ENV` (paper | live), `EXECUTION_LIVE_ACK` (second key required before any live order)
 - **Scheduler:** `SCHEDULER_ENABLED`, `SCHEDULER_TIMEZONE`
 - **State (DynamoDB):** `AWS_REGION`, `DYNAMODB_TABLE`, `DYNAMODB_TTL_DAYS`, `DYNAMODB_ENDPOINT_URL`
@@ -293,18 +293,21 @@ def validate_signal(signal, current_state):
 ### 6. **Execution Module** (`src/execution/`)
 **Responsibility:** Only module that places real orders. No execution = no trading.
 
-#### 6a. IBKR Executor (`ibkr_executor.py`)
+#### 6a. Alpaca Executor (`alpaca_executor.py`)
 ```python
-class IBKRExecutor:
+class AlpacaExecutor:
     def place_order(self, instrument, side, quantity, stop_loss_price, take_profit_price):
-        # 1. Build order object
-        # 2. Submit via IBKR Web API (via Client Portal Gateway)
-        # 3. Poll for confirmation
-        # 4. Return order_id or raise exception
+        # 1. Resolve paper vs live via src/execution/config.py
+        # 2. Build the order (a bracket/OCO carries the stop + take profit)
+        # 3. Submit to the Alpaca Trading API
+        # 4. Poll for confirmation
+        # 5. Return order_id or raise exception
 ```
-- **Execution only.** All price data comes from the OpenBB Platform (Module 2); IBKR is used solely to place and manage orders
-- Uses IBKR Web API via Client Portal Gateway
-- Handles authentication (login/session token)
+- **Execution only.** All price data comes from the OpenBB Platform (Module 2); Alpaca is used solely to place and manage orders
+- Auth is an API key pair — no gateway, no Java, no session token to refresh
+- Paper and live are the SAME API, so switching is one base URL + key pair swap
+- Attaches the exits as ONE bracket/OCO order, so a filled take-profit can never
+  leave a live stop order behind that opens the opposite position
 - Validates order before sending
 - Polls order status until filled or timeout
 
@@ -522,10 +525,10 @@ Backtest window comes from `BACKTEST_START_DATE` / `BACKTEST_END_DATE` (or the h
 ```
 ✅ setup-env            → Create directory structure
 ✅ setup-deps           → Install dependencies, create venv
-✅ setup-docker         → Build Dockerfile (Java + IBKR gateway for execution + Python/OpenBB for data)
+✅ setup-docker         → Build Dockerfile (Python/OpenBB for data + Alpaca for execution)
 ✅ setup-aws            → Document Lightsail deployment
 ✅ config-create        → Config module with Pydantic
-✅ config-validation    → Validate env vars, test OpenBB data + IBKR execution connectivity
+✅ config-validation    → Validate env vars, test OpenBB data + Alpaca execution connectivity
 ```
 
 ### Phase 2: Core Modules (Days 3-8) — completed (state/logging deferred to Phase 5)
@@ -560,7 +563,7 @@ Backtest window comes from `BACKTEST_START_DATE` / `BACKTEST_END_DATE` (or the h
 ✅ risk-validation          → Unified risk checks
 ✅ risk-backtest-parity     → Gate measures the SAME system that will trade
                               (sizing + stop/take + circuit breaker inside the backtest)
-⏸️ execution-ibkr           → IBKR order placement   [not started — needs gateway credentials]
+⏸️ execution-alpaca         → Alpaca order placement  [not started — needs Alpaca API keys]
 ⏸️ execution-retry          → Retry with backoff     [not started]
 ```
 
@@ -571,7 +574,7 @@ Moved from Phases 2 & 3 so Risk & Execution can start first. Prerequisite for Ph
 ⏸️ state-persistence        → PortfolioTracker (DynamoDB)
 ⏸️ logging-setup            → Structured logging
 ⏸️ alerting-setup           → Alert feed + bot state in the portal
-⏸️ config-validation        → remaining: IBKR gateway connectivity test
+⏸️ config-validation        → remaining: Alpaca endpoint connectivity test
 ⏸️ model-training           → trainer.py + versioned models (only if the ML path is used)
 ⏸️ backtest-strategy        → GATE: Sharpe ≥ 1.0, DD ≤ 25%, WR ≥ 55%, no week > 5% loss
 ✅ backtest-report          → report page `/report`: equity vs buy & hold, drawdown,
@@ -592,7 +595,7 @@ Moved from Phases 2 & 3 so Risk & Execution can start first. Prerequisite for Ph
 ```
 ✅ test-unit                → Unit tests all modules
 ✅ test-integration         → End-to-end flow tests
-✅ test-paper-trading       → Paper money on real IBKR account (1-2 weeks)
+✅ test-paper-trading       → Paper money on a real Alpaca account (1-2 weeks)
 ✅ test-load                → Stress test 2-3 months in fast time
 ```
 **Go/No-Go Decision:** If paper trading shows issues, debug & iterate.
@@ -647,15 +650,15 @@ Moved from Phases 2 & 3 so Risk & Execution can start first. Prerequisite for Ph
 ### 6. **Docker + AWS Lightsail**
 - ✅ Containerized = reproducible, easy to deploy
 - ✅ Lightsail = managed, cheap (~$10-20/month)
-- ✅ Java runtime for IBKR Client Portal Gateway (execution)
+- ✅ No Java runtime and no sidecar gateway — Alpaca is a plain HTTPS API (execution)
 - ✅ OpenBB Platform installed in Python venv (data)
 - ✅ CloudWatch for logs/alarms
 - ✅ S3 for backups
 
-### 7. **OpenBB for Data + IBKR for Execution**
+### 7. **OpenBB for Data + Alpaca for Execution**
 - ✅ OpenBB Platform aggregates market data providers behind one SDK — no broker auth needed for data, easier provider switching
 - ✅ Same OpenBB data path for backtest & live = no data mismatch
-- ✅ IBKR kept only for order placement (OpenBB cannot execute trades)
+- ✅ Alpaca kept only for order placement (OpenBB cannot execute trades)
 - ✅ Free providers (e.g. `yfinance`) keep the data cost at $0 during development
 
 ---
@@ -679,7 +682,7 @@ Moved from Phases 2 & 3 so Risk & Execution can start first. Prerequisite for Ph
 - Error handling (one component fails, others survive)
 
 ### Paper Trading (Real Account, Fake Money)
-- Deploy bot to real IBKR account with paper trading enabled
+- Deploy bot to a real Alpaca account with paper trading enabled
 - Run for 1-2 weeks live
 - Verify:
   - Orders execute correctly
@@ -712,7 +715,7 @@ Moved from Phases 2 & 3 so Risk & Execution can start first. Prerequisite for Ph
 - [ ] Web Portal showing bot progress and alerts feed
 - [ ] State backup to S3 working
 - [ ] Health check endpoint responding
-- [ ] IBKR credentials secure (in AWS Secrets Manager, not in code)
+- [ ] Alpaca credentials secure (in AWS Secrets Manager, not in code)
 - [ ] OpenBB provider key (if any) secure (in AWS Secrets Manager, not in code)
 - [ ] .env template created (no secrets committed)
 - [ ] README complete with deployment instructions
@@ -752,7 +755,7 @@ Moved from Phases 2 & 3 so Risk & Execution can start first. Prerequisite for Ph
 4. **Durable State:** Position/P&L survives restart
 5. **Comprehensive Logging:** Debug any issue post-facto
 6. **Alerts:** Know immediately if something breaks
-7. **Manual Override:** Can always close position manually via IBKR UI
+7. **Manual Override:** Can always close position manually via the Alpaca dashboard
 
 ---
 
@@ -788,49 +791,52 @@ Moved from Phases 2 & 3 so Risk & Execution can start first. Prerequisite for Ph
 
 ---
 
-## Appendix: IBKR Client Portal Gateway Setup
+## Appendix: Alpaca Setup
 
 ### In Docker:
 ```dockerfile
-FROM ubuntu:22.04
+FROM debian:bookworm-slim
 
-# Install Java (IBKR requires Java 11+)
-RUN apt-get update && apt-get install -y openjdk-11-jdk
-
-# Download & install IBKR Client Portal Gateway
-RUN wget https://download2.interactivebrokers.com/...gateway.deb && dpkg -i gateway.deb
-
-# Install Python
-RUN apt-get install -y python3.11 python3.11-venv
+# No Java and no sidecar gateway: Alpaca is a plain HTTPS API reached with an
+# API key pair, so the runtime image needs nothing but Python.
+RUN apt-get update && apt-get install -y python3 python3-venv
 
 # Copy bot code
 COPY . /app/traider
 WORKDIR /app/traider
 
-# Entrypoint starts both gateway + bot
+# Entrypoint checks for credentials, then starts the bot
 COPY docker/entrypoint.sh /entrypoint.sh
 ENTRYPOINT ["/entrypoint.sh"]
 ```
 
-### Execution flow (Alpaca — the IBKR flow below is NOT how the gateway works):
+### Execution flow:
 1. The bot goes through `src/execution/config.py`, which resolves ONE triple:
    base URL + key id + secret (`https://paper-api.alpaca.markets` or
    `https://api.alpaca.markets`) from `EXECUTION_ENV`.
 2. Auth is an HTTP Basic header (`APCA-API-KEY-ID` / `APCA-API-SECRET-KEY`) on
    every request — there is no login call and no session token to refresh.
 3. LIVE requires TWO independent keys: `EXECUTION_ENV=live` AND
-   `EXECUTION_LIVE_ACK=true`. Anything missing is REFUSED, never downgraded.
+   `EXECUTION_LIVE_ACK=true`, plus a live key pair. Anything missing is REFUSED,
+   never downgraded.
 4. Paper and live are the same API, so switching changes nothing else.
 5. The dashboard header badge shows which environment is active; every stored
    run records it under `inputs.execution`.
 
-### IBKR Client Portal Gateway (historical note — superseded, and no executor exists):
-1. Gateway runs on port 5000 (default)
-2. ~~Bot calls `POST /auth` with username/password → receives session token~~
-   **This is wrong** — the gateway has no such endpoint. You log into the gateway
-   ONCE interactively in a browser (with 2FA) and the gateway holds the session;
-   the bot then just talks to `localhost:5000`. Storing the password does not
-   enable unattended trading: the session expires and needs a human with a phone.
+### Getting a paper account:
+1. Sign up at alpaca.markets — a **Paper Only Account** is available worldwide
+   with just an email address (no KYC, no funding), and starts with $100k of
+   simulated cash.
+2. In the dashboard, select the Paper account, then generate its API key pair.
+   Paper and live keys are different; a new paper account needs new keys.
+3. Put the key/secret in Account Settings (or `.env`), and leave
+   `EXECUTION_ENV=paper` until you deliberately want real orders.
+
+### Superseded: IBKR Client Portal Gateway
+Dropped in favour of Alpaca. The gateway has **no credential endpoint** — you log
+into `https://localhost:5000` once interactively in a browser (with 2FA) and the
+gateway holds the session, so the bot cannot authenticate unattended and the
+session expires daily. Storing a password does not solve that.
 
 ---
 
@@ -867,7 +873,7 @@ quote = obb.equity.price.quote(config.INSTRUMENT, provider=config.OPENBB_PROVIDE
 ## Useful Resources
 - OpenBB Platform Docs: https://docs.openbb.co/platform
 - OpenBB GitHub: https://github.com/OpenBB-finance/OpenBB
-- IBKR Web API Docs: https://www.interactivebrokers.com/en/trading/web-api
+- Alpaca Trading API Docs: https://docs.alpaca.markets/us/docs/trading-api
 - Client Portal Gateway: https://github.com/InteractiveBrokers/cpapi-web-gateway
 - APScheduler: https://apscheduler.readthedocs.io/
 - SQLAlchemy: https://docs.sqlalchemy.org/

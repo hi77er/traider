@@ -26,10 +26,11 @@ a human with a phone every morning".
   an `ExecutionTarget` (broker, env, base_url, key_id, secret, live) or raises
   `ExecutionConfigError`. Never re-derive the environment anywhere else.
 - Config split — **account-wide** (`settings/account/account.json`):
-  `EXECUTION_BROKER`, `ALPACA_PAPER_API_KEY`, `ALPACA_PAPER_API_SECRET`,
+  `ALPACA_PAPER_API_KEY`, `ALPACA_PAPER_API_SECRET`,
   `ALPACA_LIVE_API_KEY`, `ALPACA_LIVE_API_SECRET`.
   **Per strategy** (strategy panel, "Execution"): `EXECUTION_ENV` (`paper` |
-  `live`), `EXECUTION_LIVE_ACK`.
+  `live`), `EXECUTION_LIVE_ACK`. There is no broker selector — Alpaca is the
+  only broker (`BROKER` in `src/execution/config.py`).
 - `EXECUTION_MAX_RETRIES`, `EXECUTION_RETRY_BASE_DELAY_SECONDS`,
   `EXECUTION_ORDER_TIMEOUT_SECONDS` drive retry/backoff/timeout.
 - Only the execution module may talk to a broker. The risk layer must approve

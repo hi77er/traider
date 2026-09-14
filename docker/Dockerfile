@@ -32,20 +32,14 @@ RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
 FROM debian:bookworm-slim AS final
 
 ENV DEBIAN_FRONTEND=noninteractive \
-    JAVA_HOME=/usr/lib/jvm/default-java \
     PATH="/opt/venv/bin:$PATH"
 
-# Install ONLY runtime dependencies (Java JRE headless + Python3 runtime)
+# Install ONLY runtime dependencies (Python3 runtime + curl for the health check)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    default-jre-headless \
     python3 \
     curl \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
-
-# Set up IBKR Gateway directory structure
-WORKDIR /opt/ibkr
-RUN mkdir -p /opt/ibkr/startup
 
 # Set up Bot directory structure
 WORKDIR /app
@@ -62,13 +56,13 @@ COPY docker/entrypoint.sh /app/entrypoint.sh
 # Create non-root user and assign permissions
 RUN useradd -m -u 1000 traider && \
     chmod +x /app/entrypoint.sh && \
-    chown -R traider:traider /app /opt/ibkr
+    chown -R traider:traider /app
 
 # Switch to security non-root user
 USER traider
 
-# Expose ports (e.g., 5000 for Gateway API, 8000 for Bot metrics/web interface)
-EXPOSE 5000 8000
+# Web portal / dashboard port
+EXPOSE 8000
 
 # Lightweight health check using standard python
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \

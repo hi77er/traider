@@ -189,7 +189,7 @@ After each task, you run verification commands:
 
 **Data & Execution Split:**
 - Market data → OpenBB Platform (free providers, no broker auth)
-- Order execution → IBKR Web API (OpenBB cannot place orders)
+- Order execution → Alpaca Trading API (OpenBB cannot place orders)
 
 **Infrastructure:**
 - Docker (containerization)

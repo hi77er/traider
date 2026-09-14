@@ -1,6 +1,6 @@
 # TRAIDER: Comprehensive Build Plan - Document Index
 
-Welcome to the complete planning package for building **traider**, a modular Python AI trading bot for **AAPL (Apple) stock** trading. Market data comes from the **OpenBB Platform**; order execution uses **Interactive Brokers**.
+Welcome to the complete planning package for building **traider**, a modular Python AI trading bot for **AAPL (Apple) stock** trading. Market data comes from the **OpenBB Platform**; order execution uses the **Alpaca Trading API**.
 
 ---
 
@@ -38,7 +38,7 @@ Welcome to the complete planning package for building **traider**, a modular Pyt
   - Scheduler, Logging/Alerting, Backtester
 - File structure with purpose of each file
 - Design decisions and rationale
-- OpenBB Platform setup + IBKR Client Portal Gateway setup details
+- OpenBB Platform setup + Alpaca paper-account setup details
 - Success metrics and monitoring
 
 **Best for:** Understanding what each module does, implementation details
@@ -263,7 +263,7 @@ A: Iterate the model or strategy rules. Backtest again. Never go live without pa
 A: Yes! After config-validation, data/state/logging can be built in parallel. See DEPENDENCY_GRAPH.md
 
 **Q: Where does price data come from?**  
-A: The OpenBB Platform SDK aggregates market data providers (free ones like yfinance need no key). IBKR is used only to place orders, since OpenBB cannot execute trades.
+A: The OpenBB Platform SDK aggregates market data providers (free ones like yfinance need no key). Alpaca is used only to place orders, since OpenBB cannot execute trades.
 
 **Q: How much capital to start with?**  
 A: Start paper trading with unlimited (it's fake money). Live: start with 1% of your capital.
@@ -318,7 +318,7 @@ A: Slippage, market regime change, model degradation. Monthly retraining handles
 ## 🔒 Security & Best Practices
 
 - ✅ All credentials in .env (never committed to git)
-- ✅ AWS Secrets Manager for production (IBKR creds + any OpenBB provider key)
+- ✅ AWS Secrets Manager for production (Alpaca creds + any OpenBB provider key)
 - ✅ DynamoDB (managed)
 - ✅ DynamoDB PITR or export to S3 for archival
 - ✅ Logs shipped to CloudWatch
@@ -340,8 +340,8 @@ A: Slippage, market regime change, model degradation. Monthly retraining handles
 - [OpenBB GitHub](https://github.com/OpenBB-finance/OpenBB)
 
 ### Trading
-- [Interactive Brokers Web API](https://www.interactivebrokers.com/en/trading/web-api)
-- [IBKR Client Portal Gateway](https://github.com/InteractiveBrokers/cpapi-web-gateway)
+- [Alpaca Trading API](https://docs.alpaca.markets/us/docs/trading-api)
+- [Alpaca paper trading](https://docs.alpaca.markets/us/docs/paper-trading)
 
 ### DevOps
 - [Docker Docs](https://docs.docker.com/)
@@ -375,7 +375,7 @@ Good luck! 🚀
 
 ---
 
-**Version:** 1.1 - OpenBB Data Layer + IBKR Execution  
+**Version:** 1.1 - OpenBB Data Layer + Alpaca Execution  
 **Created:** 2026-08-20  
 **Updated:** 2026-09-01  
 **Status:** ✅ All 41 Tasks Planned, Dependencies Mapped, Ready to Build  

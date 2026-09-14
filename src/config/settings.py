@@ -206,13 +206,13 @@ class Settings(BaseSettings):
     backtest_commission_per_trade: float = Field(default=0.0, ge=0.0, description="USD per side")
 
     # ── Execution — order placement only (data always comes from OpenBB) ──
-    # The BROKER and its credentials describe this trading ACCOUNT, so they live
-    # in the account layer (settings/account/account.json) — one file shared by
-    # every strategy. The MODE (paper vs live) is per-STRATEGY, so a strategy
-    # still being developed can run against the paper account while a proven one
-    # trades live. Alpaca's paper and live environments differ ONLY by base URL
-    # and key pair, so switching is a single triple swap (src/execution/config.py).
-    execution_broker: str = Field(default="alpaca", description="Broker that places orders: alpaca | ibkr")
+    # ALPACA is the only broker. Its paper and live environments are the SAME API
+    # with a different base URL and key pair, so switching between them is a
+    # single triple swap (src/execution/config.py).
+    # Credentials describe this trading ACCOUNT, so they live in the account
+    # layer (settings/account/account.json) — one file shared by every strategy.
+    # The MODE (paper vs live) is per-STRATEGY, so a strategy still being
+    # developed can run against the paper account while a proven one trades live.
     alpaca_paper_api_key: Optional[str] = Field(default=None, description="Alpaca PAPER API key id")
     alpaca_paper_api_secret: Optional[str] = Field(default=None, description="Alpaca PAPER API secret")
     alpaca_live_api_key: Optional[str] = Field(default=None, description="Alpaca LIVE API key id")
@@ -222,10 +222,6 @@ class Settings(BaseSettings):
         default=False,
         description="Second key required before any LIVE order is sent (live also needs EXECUTION_ENV=live)",
     )
-    ibkr_api_url: str = Field(default="https://api.ib.com")
-    ibkr_account_id: Optional[str] = None
-    ibkr_username: Optional[str] = None
-    ibkr_password: Optional[str] = None
     execution_max_retries: int = Field(default=3, ge=0)
     execution_retry_base_delay_seconds: float = Field(default=1.0, ge=0.0)
     execution_order_timeout_seconds: int = Field(default=60, ge=1)
@@ -344,15 +340,6 @@ class Settings(BaseSettings):
                 f"POSITION_SIZING_MODE must be 'fixed_risk' or 'volatility_target', got {v!r}"
             )
         return v
-
-    @field_validator("execution_broker", mode="before")
-    @classmethod
-    def _validate_execution_broker(cls, v):
-        """Normalize the broker name; refuse anything without an executor."""
-        val = str(v).strip().lower() if v not in (None, "") else "alpaca"
-        if val not in ("alpaca", "ibkr"):
-            raise ValueError(f"EXECUTION_BROKER must be 'alpaca' or 'ibkr', got {v!r}")
-        return val
 
     @field_validator("execution_env", mode="before")
     @classmethod

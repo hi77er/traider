@@ -43,7 +43,7 @@ setup-deps (2)
           │     ↓
           │   alerting-setup (15)
           │
-          └→ execution-ibkr (25)
+          └→ execution-alpaca (25)
 
 PHASE 2: CORE MODULES (parallel from config-validation)
 ═════════════════════════════════════════════════════════
@@ -83,7 +83,7 @@ state-persistence (13)
           ↓
       risk-validation (24)
 
-execution-ibkr (25)
+execution-alpaca (25)
     ├→ config-validation (6)
     ├→ state-persistence (13)
     └→ execution-retry (26)
@@ -96,7 +96,7 @@ PHASE 5: DEFERRED — CORE & BACKTEST COMPLETION
 (Nothing in Phase 4 depends on these except state-persistence, which Phase 4
 stubs with simple in-memory state until task 13 lands.)
 
-config-validation (6: remaining IBKR connectivity check)
+config-validation (6: remaining Alpaca connectivity check)
       ↓
 state-db-schema (12) → state-persistence (13)
 logging-setup (14) → alerting-setup (15 remaining: alert feed in portal)
@@ -185,7 +185,7 @@ live-go-live (39)
 3. config-create → config-validation
 4. data-historical → feature-create → feature-validation
 5. backtest-framework → model-simple
-6. risk-position-sizing → risk-circuit-breaker → risk-validation → execution-ibkr → execution-retry   (Phase 4)
+6. risk-position-sizing → risk-circuit-breaker → risk-validation → execution-alpaca → execution-retry   (Phase 4)
 7. state-persistence → logging-setup → backtest-strategy → backtest-report   (Phase 5; report ✅ done)
 8. scheduler-create → scheduler-error-handling → main-entry                  (Phase 6)
 9. test-unit → test-integration → test-paper-trading → test-load             (Phase 7)
@@ -207,7 +207,7 @@ TOTAL PROJECT: ~35 days + 14 days paper trading (concurrent)
 - data-live (8)
 - state-db-schema (12)   → now Phase 5
 - logging-setup (14)     → now Phase 5
-- execution-ibkr (25)
+- execution-alpaca (25)
 → All independent, can start same day
 
 **Group B (While backtesting):**
@@ -216,7 +216,7 @@ TOTAL PROJECT: ~35 days + 14 days paper trading (concurrent)
 → Don't depend on backtest results
 
 **Group C (While coding):**
-- Paper trading setup (can prepare IBKR account while Phase 4-5 run)
+- Paper trading setup (can prepare the Alpaca paper account while Phase 4-5 run)
 - Confirm OpenBB provider + AAPL data availability early (before data-historical)
 - Docker/AWS docs (can read while coding)
 
@@ -251,7 +251,7 @@ Friday (Day 10):   Phase 4 starts: risk-position-sizing, risk-circuit-breaker   
 ```
 Monday (Day 11):   risk-position-sizing, risk-circuit-breaker
 Tuesday (Day 12):  risk-validation (all risk checks complete)
-Wednesday (Day 13): execution-ibkr, execution-retry
+Wednesday (Day 13): execution-alpaca, execution-retry
 Thursday (Day 14): scheduler-create, scheduler-error-handling
 Friday (Day 15):   main-entry [core system ready]
 ```
@@ -319,14 +319,14 @@ If you have multiple developers:
 | setup-docker | setup-deps | setup-aws |
 | setup-aws | setup-docker | deploy-aws-setup |
 | config-create | setup-deps | config-validation |
-| config-validation | config-create | data-historical, data-live, state-db-schema, logging-setup, execution-ibkr |
+| config-validation | config-create | data-historical, data-live, state-db-schema, logging-setup, execution-alpaca |
 | data-historical | config-validation | data-tests, feature-create, backtest-framework |
 | data-live | config-validation | scheduler-create |
 | data-tests | data-historical, data-live | — |
 | feature-create | data-historical | feature-validation, backtest-framework |
 | feature-validation | feature-create | model-simple, backtest-framework, test-unit |
 | state-db-schema | config-validation | state-persistence |
-| state-persistence | state-db-schema | backtest-framework, risk-position-sizing, risk-circuit-breaker, execution-ibkr, scheduler-create, test-unit |
+| state-persistence | state-db-schema | backtest-framework, risk-position-sizing, risk-circuit-breaker, execution-alpaca, scheduler-create, test-unit |
 | logging-setup | config-validation | alerting-setup, backtest-framework, execution-retry, test-unit |
 | alerting-setup | logging-setup | main-entry |
 | backtest-framework | feature-validation, state-persistence, logging-setup | backtest-dummy-signals, backtest-strategy, test-unit |
@@ -338,8 +338,8 @@ If you have multiple developers:
 | risk-position-sizing | state-persistence | risk-validation |
 | risk-circuit-breaker | state-persistence | risk-validation |
 | risk-validation | risk-position-sizing, risk-circuit-breaker | scheduler-create, test-unit |
-| execution-ibkr | config-validation, state-persistence | execution-retry |
-| execution-retry | execution-ibkr, logging-setup | scheduler-create, test-unit |
+| execution-alpaca | config-validation, state-persistence | execution-retry |
+| execution-retry | execution-alpaca, logging-setup | scheduler-create, test-unit |
 | scheduler-create | data-live, model-simple, risk-validation, execution-retry, state-persistence | scheduler-error-handling, test-unit |
 | scheduler-error-handling | scheduler-create | main-entry |
 | main-entry | scheduler-error-handling, alerting-setup | test-unit, test-integration |
@@ -421,7 +421,7 @@ pip install openbb requests schedule pydantic sqlalchemy python-dotenv numpy pan
 pip freeze > requirements.txt
 
 # Task 3: setup-docker
-# Create docker/Dockerfile with Java + IBKR gateway (execution) + Python/OpenBB (data)
+# Create docker/Dockerfile with Python + OpenBB (data) + Alpaca (execution)
 
 # Task 4: setup-aws
 # Create AWS deployment documentation

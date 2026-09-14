@@ -5,7 +5,7 @@ description: 'Work with the OpenBB Platform SDK (openbb package) to fetch market
 
 # OpenBB Platform (Data Layer)
 
-The TRAIDER bot gets ALL price data from the **OpenBB Platform SDK** (`from openbb import obb`). OpenBB aggregates many providers behind a standardized output schema. It is **data-only** — it cannot place orders (that is the `ibkr-execution` skill).
+The TRAIDER bot gets ALL price data from the **OpenBB Platform SDK** (`from openbb import obb`). OpenBB aggregates many providers behind a standardized output schema. It is **data-only** — it cannot place orders (that is the `alpaca-execution` skill).
 
 ## When to Use
 - Implementing `src/data/openbb_client.py`, `historical.py`, `live.py`

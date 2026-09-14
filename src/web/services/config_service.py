@@ -59,12 +59,6 @@ _SECTION_RULES: List[Tuple[Tuple[str, ...], str]] = [
 _OPTIONS: Dict[str, List[Any]] = {
     "MODEL_TYPE": ["logistic_regression", "rule_based"],
     "POSITION_SIZING_MODE": ["fixed_risk", "volatility_target"],
-    # Which broker places orders. Only Alpaca has an executor today; selecting
-    # IBKR is honest-but-unusable and the execution status says so explicitly.
-    "EXECUTION_BROKER": [
-        {"label": "Alpaca", "value": "alpaca"},
-        {"label": "Interactive Brokers", "value": "ibkr"},
-    ],
     # The paper/live switch. Paper is first because it is the safe default, and
     # the labels spell out the consequence rather than leaving a bare "live".
     "EXECUTION_ENV": [
@@ -117,17 +111,12 @@ _LABELS: Dict[str, str] = {
     "DATA_DIR": "Data folder",
     "HISTORICAL_DATA_DIR": "Historical data subfolder",
     "BACKTEST_DIR": "Backtest data subfolder",
-    "EXECUTION_BROKER": "Broker",
     "ALPACA_PAPER_API_KEY": "Alpaca paper API key",
     "ALPACA_PAPER_API_SECRET": "Alpaca paper API secret",
     "ALPACA_LIVE_API_KEY": "Alpaca live API key",
     "ALPACA_LIVE_API_SECRET": "Alpaca live API secret",
     "EXECUTION_ENV": "Order environment (paper / live)",
     "EXECUTION_LIVE_ACK": "Acknowledge LIVE orders",
-    "IBKR_API_URL": "IBKR Client Portal Gateway URL",
-    "IBKR_ACCOUNT_ID": "IBKR account id",
-    "IBKR_USERNAME": "IBKR username",
-    "IBKR_PASSWORD": "IBKR password",
     "BACKTEST_START_DATE": "Backtest window start",
     "BACKTEST_END_DATE": "Backtest window end",
     "TRAIN_TEST_SPLIT": "Train/test split",
@@ -197,12 +186,6 @@ _HINTS: Dict[str, str] = {
     "FEATURES_EMA_PERIODS": "An EMA weights recent bars more than an SMA, so it turns faster "
     "(9 = fast, 21 = medium, 50 = slow).",
     "BACKTEST_SLIPPAGE_PERCENT": "Order slippage as a % of price, charged on each fill (e.g. 0.05 = 0.05%).",
-    "IBKR_API_URL": "Base URL of the IBKR Client Portal Gateway you connect to.",
-    "IBKR_ACCOUNT_ID": "Your Interactive Brokers account id.",
-    "IBKR_USERNAME": "IBKR account username (if your gateway needs one).",
-    "IBKR_PASSWORD": "IBKR password — stored masked, never shown.",
-    "EXECUTION_BROKER": "Alpaca is the only broker with a working API here; "
-    "the IBKR executor is not implemented yet.",
     "EXECUTION_ENV": "paper = the simulated account (safe). live = REAL orders, "
     "and it additionally requires the LIVE acknowledgement below.",
     "EXECUTION_LIVE_ACK": "Safety catch — with this off, LIVE orders are refused "
@@ -365,13 +348,11 @@ _ACCOUNT_SECTIONS: List[Tuple[str, Tuple[str, ...]]] = [
     (
         "Trading Account",
         (
-            # The BROKER and its credentials describe this ACCOUNT, so they are
-            # shared by every strategy. Which ENVIRONMENT an order is sent to is
-            # per-strategy — see the "Execution" group in _STRATEGY_SCOPE.
-            "EXECUTION_BROKER",
+            # The Alpaca credentials describe this ACCOUNT, so they are shared by
+            # every strategy. Which ENVIRONMENT an order is sent to is per-strategy
+            # — see the "Execution" group in _STRATEGY_SCOPE.
             "ALPACA_PAPER_API_KEY", "ALPACA_PAPER_API_SECRET",
             "ALPACA_LIVE_API_KEY", "ALPACA_LIVE_API_SECRET",
-            "IBKR_API_URL", "IBKR_ACCOUNT_ID", "IBKR_USERNAME", "IBKR_PASSWORD",
             "EXECUTION_MAX_RETRIES", "EXECUTION_RETRY_BASE_DELAY_SECONDS",
             "EXECUTION_ORDER_TIMEOUT_SECONDS",
         ),

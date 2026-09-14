@@ -3,7 +3,7 @@
 ``RiskValidator.validate_signal(signal, state)`` returns a :class:`RiskDecision`
 whose ``approved`` and ``reason`` are the contract the plan specifies:
 
-    Execution (IBKR) must never be called without risk approval.
+    Execution (Alpaca) must never be called without risk approval.
 
 The decision also carries the :class:`~src.risk.position_sizing.Sizing` used, so
 the executor knows *how much* to trade, and a ``checks`` map naming each test
