@@ -165,7 +165,8 @@ traider/
 - **Risk:** `RISK_LIMIT_PERCENT`, `MAX_LOSS_PERCENT`, `MAX_CONSECUTIVE_LOSSES`, `MAX_EXPOSURE_PERCENT`, `POSITION_SIZING_MODE`, `STOP_LOSS_PERCENT`, `TAKE_PROFIT_PERCENT`, `CIRCUIT_BREAKER_ENABLED`
 - **Backtest gates:** `GATE_MIN_SHARPE`, `GATE_MAX_DRAWDOWN_PERCENT`, `GATE_MIN_WIN_RATE_PERCENT`, `GATE_MAX_WEEKLY_LOSS_PERCENT`, `BACKTEST_SLIPPAGE_PERCENT`, `BACKTEST_COMMISSION_PER_TRADE`
 - **Execution — account-wide (Alpaca):** `ALPACA_PAPER_API_KEY`, `ALPACA_PAPER_API_SECRET`, `ALPACA_LIVE_API_KEY`, `ALPACA_LIVE_API_SECRET`, `EXECUTION_MAX_RETRIES`, `EXECUTION_RETRY_BASE_DELAY_SECONDS`, `EXECUTION_ORDER_TIMEOUT_SECONDS`
-- **Execution — per strategy:** `EXECUTION_ENV` (paper | live), `EXECUTION_LIVE_ACK` (second key required before any live order)
+- **Execution — per strategy:** `EXECUTION_ENV` (paper | live) — stored per strategy but edited from the header dropdown, not a settings panel
+- **Execution — runtime (NOT config):** `data/trading.json` holds the trading ON/OFF switch. It is deliberately outside the configuration files, because those are exactly what the switch freezes.
 - **Scheduler:** `SCHEDULER_ENABLED`, `SCHEDULER_TIMEZONE`
 - **State (DynamoDB):** `AWS_REGION`, `DYNAMODB_TABLE`, `DYNAMODB_TTL_DAYS`, `DYNAMODB_ENDPOINT_URL`
 - **Web Portal:** `WEB_PORTAL_ENABLED`, `WEB_PORTAL_HOST`, `WEB_PORTAL_PORT`, `WEB_PORTAL_AUTH_ENABLED`, `WEB_PORTAL_USERNAME`, `WEB_PORTAL_PASSWORD`
@@ -816,12 +817,17 @@ ENTRYPOINT ["/entrypoint.sh"]
    `https://api.alpaca.markets`) from `EXECUTION_ENV`.
 2. Auth is an HTTP Basic header (`APCA-API-KEY-ID` / `APCA-API-SECRET-KEY`) on
    every request — there is no login call and no session token to refresh.
-3. LIVE requires TWO independent keys: `EXECUTION_ENV=live` AND
-   `EXECUTION_LIVE_ACK=true`, plus a live key pair. Anything missing is REFUSED,
-   never downgraded.
+3. The binary live gate is at runtime, not in config: a LIVE strategy needs
+   `EXECUTION_ENV=live`, a live key pair, **and** `confirm_live: true` on
+   `POST /api/v1/trading/on` — asked again every time trading is turned on. (This
+   replaced the old `EXECUTION_LIVE_ACK` field: a stored acknowledgement could arm
+   real trading with one Save, which is the wrong shape for a gate whose job is to
+   make one action deliberate.) Anything missing is REFUSED, never downgraded.
 4. Paper and live are the same API, so switching changes nothing else.
-5. The dashboard header badge shows which environment is active; every stored
-   run records it under `inputs.execution`.
+5. Trading ON takes a lock: every configuration write answers HTTP 409 until it is
+   turned off again, so a strategy cannot be reconfigured mid-flight. The header
+   dropdown shows which environment is active; every stored run records it under
+   `inputs.execution`.
 
 ### Getting a paper account:
 1. Sign up at alpaca.markets — a **Paper Only Account** is available worldwide

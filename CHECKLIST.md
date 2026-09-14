@@ -184,8 +184,18 @@ Track your progress through all 41 tasks across 9 phases.
   - [ ] place_order(instrument, side, quantity, stop_loss, take_profit)
   - [ ] Uses the Alpaca Trading API (bracket / OCO orders for the exits)
   - [ ] Resolve paper vs live via src/execution/config.py — never re-derive it
+  - [ ] Refuse to send anything while `trading_service.is_trading_on()` is False
   - [ ] Poll for confirmation
   - [ ] Data for decisions comes from OpenBB, not Alpaca
+
+- [x] **trading-switch** — Trading ON/OFF + the configuration lock (done)
+  - [x] `data/trading.json` (runtime state, gitignored), always starts OFF
+  - [x] Turning it on is refused while the selected account could not place an order
+  - [x] A LIVE strategy needs a per-action confirmation, every time
+  - [x] HTTP 409 on every configuration write while trading is on: settings,
+        account, rules, strategy create/rename/delete/select, backtest, dataset,
+        delta, execution env
+  - [x] Turning it OFF is always allowed — it is what releases the lock
 
 - [ ] **execution-retry** (26) — Add retry logic
   - [ ] src/execution/retry.py
@@ -426,16 +436,18 @@ The unfinished Phase 2 & 3 work lives here so Risk & Execution can proceed first
 
 ### Go Live
 - [ ] **live-go-live** (39) — Switch to live trading
-  - [ ] Set the strategy's `EXECUTION_ENV` to `live` in the Execution panel
-  - [ ] Turn on `EXECUTION_LIVE_ACK` (live needs BOTH, so one mis-click cannot do it)
-  - [ ] Add the Alpaca LIVE key pair in Account Settings (paper keys are not accepted)
-  - [ ] Confirm the header badge reads 🔴 LIVE
+  - [ ] Add the Alpaca LIVE key pair in Account Settings (paper keys are not accepted for live)
+  - [ ] Switch the header dropdown to `LIVE — REAL ORDERS` and confirm it turns red
+  - [ ] Confirm the Execution panel shows no amber warning (green = the keys resolve)
+  - [ ] Turn trading ON and accept the live confirmation prompt (asked every time)
+  - [ ] Confirm the Trading panel appears under the chart and the config/backtest buttons are disabled
   - [ ] Start with 1% of capital
   - [ ] Verify first week:
     - [ ] Orders execute correctly
     - [ ] P&L matches expectations
     - [ ] No unexpected slippage
     - [ ] Alerts working
+  - [ ] To change anything at all: turn trading OFF first (the server answers 409 otherwise)
 
 ### Monitoring & Iteration
 - [ ] **live-monitoring** (40) — Establish monitoring routine

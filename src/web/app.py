@@ -23,6 +23,7 @@ from src.web.routes import pages as page_routes
 from src.web.routes import report as report_routes
 from src.web.routes import rules as rules_routes
 from src.web.routes import signal as signal_routes
+from src.web.routes import trading as trading_routes
 
 _STATIC = Path(__file__).resolve().parent / "static"
 
@@ -53,6 +54,7 @@ app.include_router(chart_routes.router)
 app.include_router(config_routes.router)
 app.include_router(account_routes.router)
 app.include_router(execution_routes.router)
+app.include_router(trading_routes.router)
 app.include_router(rules_routes.router)
 app.include_router(signal_routes.router)
 app.include_router(backtest_routes.router)

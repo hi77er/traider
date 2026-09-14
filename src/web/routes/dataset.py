@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, Query
 from src.config.settings import Settings, get_settings
 from src.web.auth import require_auth
 from src.web.services import dataset_service
+from src.web.services.trading_service import require_trading_off
 
 router = APIRouter(
     prefix="/api/v1/dataset",
@@ -35,9 +36,13 @@ def data(
     return dataset_service.get_rows(start=start, end=end, limit=limit, offset=offset)
 
 
-@router.post("/backfill")
+@router.post("/backfill", dependencies=[Depends(require_trading_off)])
 def backfill(_: Settings = Depends(get_settings)) -> dict:
-    """Trigger the initial historical-data download (async, once at a time)."""
+    """Trigger the initial historical-data download (async, once at a time).
+
+    Refused while trading is on: replacing the candles a strategy is running on
+    would change its decisions under it.
+    """
     return dataset_service.start_backfill()
 
 
@@ -47,10 +52,13 @@ def rebuild_job(_: Settings = Depends(get_settings)) -> dict:
     return dataset_service.rebuild_status()
 
 
-@router.post("/rebuild")
+@router.post("/rebuild", dependencies=[Depends(require_trading_off)])
 def start_rebuild(
     old_bar_size: Optional[str] = Query(default=None, description="Bar size the dataset previously used"),
     _: Settings = Depends(get_settings),
 ) -> dict:
-    """Delete the old dataset and download the newly configured window."""
+    """Delete the old dataset and download the newly configured window.
+
+    Refused while trading is on — it deletes the data a strategy is using.
+    """
     return dataset_service.start_rebuild(old_bar_size=old_bar_size)

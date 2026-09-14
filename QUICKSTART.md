@@ -206,13 +206,15 @@ penny stocks are excluded (`price > $1`) and OTC/pink sheets are dropped.
 
 ### Where settings live
 
-Three layers, each edited from its own place in the dashboard:
+Three configuration layers — plus one runtime switch that is deliberately NOT
+configuration — each edited from its own place in the dashboard:
 
 | Layer | Editor | File | Holds |
 |-------|--------|------|-------|
 | Global | **⚙ Global Settings** (header) | `.env` | data provider + API keys |
-| Account | **🏦 Account Settings** (header) | `settings/account/account.json` | broker (Trading Account), the data folder, backtest defaults, cloud/state storage |
-| Strategy | **Strategy Configuration** / **Rules** / **Risk Management** panels | `settings/strategies/store.json` | instrument, bar size, features, model, gates, schedule, risk limits, rules |
+| Account | **🏦 Account Settings** (header) | `settings/account/account.json` | the Alpaca paper + live key pairs, the data folder, backtest defaults, cloud/state storage |
+| Strategy | **Strategy Configuration** / **Rules** / **Risk Management** panels | `settings/strategies/store.json` | instrument, bar size, features, model, gates, schedule, risk limits, rules, paper/live |
+| Runtime | **Execution** panel + the header dropdown | `data/trading.json` | trading ON/OFF. Deliberately NOT configuration: it lives beside the datasets, because the configuration files it freezes cannot hold the switch that freezes them. |
 
 Precedence: **strategy > account > .env**. Booleans render as on/off switches and
 secrets (`*_PASSWORD`, `*_API_KEY`, …) are masked — leave a secret field empty to
@@ -226,6 +228,21 @@ window/period parameters under **Feature Parameters** (`FEATURES_*`). The
 **Data folder** field in Account Settings is the single folder that holds both the
 `historical/` and `backtest_results/` subfolders.
 
+### Trading switch and the configuration lock
+
+The **Execution** panel (top of the right column) holds one setting: **Turn trading
+on / off**. Trading always starts OFF, and turning it on is refused while the
+selected Alpaca account has no API keys — so "trading on" can never be a lie. A
+strategy pointed at the **live** account asks for a confirmation every time, and the
+header dropdown answers "which account is this?" at a glance: teal `Paper`, red
+`LIVE`, amber when orders would be refused.
+
+While trading is ON, a **Trading** panel appears under the chart and the server
+refuses every configuration write with HTTP 409 — settings, account, rules,
+strategy create/rename/delete/select, the backtest runner, the dataset
+rebuild/backfill and the delta sync — with the matching buttons disabled in the UI.
+Nothing that would change what the bot is running may be edited mid-flight. Turning
+trading off is always allowed: it is the only action that releases the lock.
 The **Daily Delta** panel (left, shown once a dataset exists) checks the Parquet for missing
 completed days. When synced it shows "All data synced" + the last 5 bars; when days are missing
 it lists them and offers **Fetch missing days** (writes them into the dataset).
@@ -353,8 +370,9 @@ MAX_LOSS_PERCENT=10
 MAX_CONSECUTIVE_LOSSES=3
 
 # Execution — Alpaca credentials (account-wide). Which environment an order goes
-# to (paper or live) is chosen PER STRATEGY in the dashboard's Strategy
-# Configuration panel under "Execution".
+# to (paper or live) is chosen PER STRATEGY from the header dropdown in the
+# dashboard — it is not a field in any settings panel. Orders are only ever sent
+# while trading is ON (the Execution panel's switch, stored in data/trading.json).
 ALPACA_PAPER_API_KEY=YOUR_PAPER_KEY_ID
 ALPACA_PAPER_API_SECRET=YOUR_PAPER_SECRET  # ← AWS Secrets Manager in prod
 ALPACA_LIVE_API_KEY=

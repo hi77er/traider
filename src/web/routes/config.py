@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from src.web.auth import require_auth
 from src.web.services import config_service
+from src.web.services.trading_service import require_trading_off
 
 router = APIRouter(
     prefix="/api/v1/config",
@@ -29,7 +30,10 @@ def get_config() -> dict:
     return config_service.get_config_schema()
 
 
-@router.post("")
+@router.post("", dependencies=[Depends(require_trading_off)])
 def update_config(body: ConfigUpdate) -> dict:
-    """Merge submitted values into ``.env`` and revalidate the whole config."""
+    """Merge submitted values into ``.env`` and revalidate the whole config.
+
+    Refused while trading is on: a running strategy must not be reconfigured.
+    """
     return config_service.update_config(body.values)

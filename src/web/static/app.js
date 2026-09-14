@@ -1020,26 +1020,213 @@ function closeAccountSettings() {
   if (backdrop) backdrop.hidden = true;
 }
 
-/* ---------- Execution badge (broker + paper/live) ----------
-   The one place that answers "is this bot about to send REAL orders?" at a
-   glance. A paper and a live account are indistinguishable in every other panel,
-   so an unlabelled dashboard is exactly how live orders get sent by accident.
-   Never throws: a badge problem must not take the dashboard down with it. */
-async function loadExecutionStatus() {
-  const el = $("exec-badge");
-  if (!el) return;
+/* ---------- Execution: env dropdown, trading switch, config lock ----------
+   The header dropdown IS the paper/live control, and it is coloured by state
+   (teal paper / red live / amber when orders would be refused), so "is this bot
+   about to send REAL orders?" is always on screen. A paper and a live account are
+   indistinguishable everywhere else — which is exactly how live orders get sent
+   by accident.
+
+   Trading ON freezes every configuration surface. The server enforces that with a
+   409; applyConfigLock() only mirrors it so nothing is clickable that would be
+   rejected. Everything here is non-throwing: a panel problem must not take the
+   dashboard down, and it must never silently UNlock. */
+async function loadTrading() {
+  let d = null;
   try {
-    const s = await api("/api/v1/execution/status");
-    const live = !!s.live;
-    el.textContent = `${live ? "🔴" : "🧪"} ${live ? "LIVE" : "PAPER"}`;
-    el.className = `exec-badge ${s.ok ? (live ? "live" : "paper") : "blocked"}`;
-    el.title = s.ok
-      ? `${s.broker} · ${s.env} — ${s.base_url}`
-      : `Orders would be REFUSED — ${s.message}`;
-    el.hidden = false;
+    d = await api("/api/v1/trading");
   } catch (_) {
-    el.hidden = true;
+    return; // keep the last known state rather than unlocking by accident
   }
+  state.tradingPayload = d;
+  state.tradingState = d.trading || {};
+  state.executionStatus = d.execution || {};
+  state.tradingLocked = !!d.locked;
+  renderEnvSelect(d);
+  renderExecutionPanel(d);
+  renderTradingPanel(d);
+  applyConfigLock();
+}
+
+function renderEnvSelect(d) {
+  const sel = $("exec-env");
+  if (!sel) return;
+  const exec = d.execution || {};
+  const opts = d.env_options || [];
+  if (opts.length && sel.options.length !== opts.length) {
+    sel.innerHTML = "";
+    for (const o of opts) {
+      const opt = document.createElement("option");
+      opt.value = o.value;
+      opt.textContent = o.label;
+      sel.appendChild(opt);
+    }
+  }
+  if (document.activeElement !== sel) sel.value = exec.env || "paper";
+  sel.className = `exec-select ${exec.ok ? (exec.live ? "live" : "paper") : "blocked"}`;
+  sel.title = exec.ok
+    ? `${exec.broker} · ${exec.env} — ${exec.base_url}`
+    : `Orders would be REFUSED — ${exec.message}`;
+}
+
+async function onEnvChange() {
+  const sel = $("exec-env");
+  if (!sel) return;
+  const previous = (state.executionStatus || {}).env || "paper";
+  const env = sel.value;
+  if (env === previous) return;
+  if (env === "live") {
+    const ok = await confirmDialog({
+      title: "Route orders to the LIVE account?",
+      messageHtml:
+        "Every order for this strategy will go to your <b>real</b> Alpaca account. " +
+        "Nothing is sent until you turn trading on.",
+      confirmText: "Use the live account",
+    });
+    if (!ok) {
+      sel.value = previous;
+      return;
+    }
+  }
+  const r = await api("/api/v1/execution/env", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ env: env }),
+  });
+  if (r && r.ok === false) {
+    flashToast((r.errors || []).join("; ") || r.message || "Could not change the environment", "warn");
+    sel.value = previous;
+  } else {
+    flashToast(r && r.message ? r.message : "Environment updated", "ok");
+  }
+  await loadTrading();
+}
+
+async function toggleTrading() {
+  const tr = state.tradingState || {};
+  const exec = state.executionStatus || {};
+  if (!tr.on && exec.live) {
+    const ok = await confirmDialog({
+      title: "Start trading with REAL money?",
+      messageHtml:
+        `Orders will go to your live Alpaca account (<code>${escapeHtml(exec.base_url || "")}</code>). ` +
+        "You can stop at any time with <b>Turn trading off</b>.",
+      confirmText: "Start live trading",
+    });
+    if (!ok) return;
+  }
+  let r = null;
+  try {
+    r = await api(tr.on ? "/api/v1/trading/off" : "/api/v1/trading/on", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirm_live: !!exec.live }),
+    });
+  } catch (err) {
+    flashToast(`Trading switch failed: ${err.message}`, "warn");
+    return;
+  }
+  if (r && r.ok === false) {
+    flashToast(r.message || "Trading could not be turned on", "warn");
+  } else {
+    flashToast(r && r.message ? r.message : "", "ok");
+  }
+  await loadTrading();
+  // A lock change alters what is available, so let the panels that own specific
+  // buttons recompute them (they re-enable only what is genuinely possible).
+  if (state.rulesPayload && typeof renderStrategyBar === "function") renderStrategyBar();
+}
+
+function renderExecutionPanel(d) {
+  const exec = d.execution || {};
+  const tr = d.trading || {};
+  const line = $("exec-state-line");
+  if (line) {
+    line.textContent = tr.on
+      ? `ON since ${shortWhen(tr.since)} — orders route to ${String(tr.env || "").toUpperCase()}`
+      : "OFF — no orders are being sent";
+    line.className = tr.on ? "exec-state on" : "exec-state";
+  }
+  const btn = $("trading-toggle");
+  if (btn) {
+    btn.textContent = tr.on ? "⏹ Turn trading off" : "▶ Turn trading on";
+    btn.className = tr.on ? "ghost small danger" : "primary small";
+    btn.disabled = false; // the off switch must always be reachable
+  }
+  const msg = $("exec-msg");
+  if (msg) {
+    msg.textContent = exec.ok ? "" : `⚠ ${exec.message}`;
+    msg.className = exec.ok ? "muted" : "muted exec-warn";
+  }
+  const facts = $("exec-facts");
+  if (facts) {
+    facts.innerHTML = [
+      execRow("Strategy", escapeHtml(d.strategy || "—")),
+      execRow("Instrument", escapeHtml(d.instrument || "—")),
+      execRow("Bar size", escapeHtml(d.bar_size || "—")),
+      execRow("Environment",
+        `<span class="rp-exec ${exec.live ? "live" : "paper"}">${escapeHtml(String(exec.env || "").toUpperCase())}</span>`),
+      execRow("Endpoint", `<code>${escapeHtml(exec.base_url || "—")}</code>`),
+      execRow("Paper keys", exec.paper_keys_set ? "set" : "—"),
+      execRow("Live keys", exec.live_keys_set ? "set" : "—"),
+    ].join("");
+  }
+}
+
+function renderTradingPanel(d) {
+  const panel = $("trading-panel");
+  if (!panel) return;
+  const tr = d.trading || {};
+  const exec = d.execution || {};
+  panel.hidden = !tr.on;
+  if (!tr.on) return;
+  const msg = $("trading-msg");
+  if (msg) {
+    msg.textContent = `${String(tr.env || "").toUpperCase()} account · ${exec.broker || "—"} · live since ${shortWhen(tr.since)}`;
+  }
+  const facts = $("trading-facts");
+  if (facts) {
+    facts.innerHTML = [
+      execRow("Strategy", escapeHtml(d.strategy || "—")),
+      execRow("Instrument", escapeHtml(d.instrument || "—")),
+      execRow("Bar size", escapeHtml(d.bar_size || "—")),
+      execRow("Endpoint", `<code>${escapeHtml(exec.base_url || "—")}</code>`),
+    ].join("");
+  }
+}
+
+function execRow(label, html) {
+  return `<div class="rp-kv"><span class="label">${escapeHtml(label)}</span><span>${html}</span></div>`;
+}
+
+// "2026-09-15T09:12:31+00:00" -> "09:12 UTC on 2026-09-15"
+function shortWhen(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return String(iso);
+  const hhmm = d.toISOString().slice(11, 16);
+  return `${hhmm} UTC on ${d.toISOString().slice(0, 10)}`;
+}
+
+// Mirror of the server's lock: disable everything that would be refused with 409.
+function applyConfigLock() {
+  const locked = !!state.tradingLocked;
+  document.body.classList.toggle("trading-on", locked);
+  setBtBusyControls(!!state.btRunning); // spreads the lock through the shared list
+  applyStrategyAddState(!!state.btRunning); // ＋ New: busy OR limit OR lock
+  // The backtest card derives its own button states (Run is also data-gated), so
+  // ask it to recompute — otherwise unlocking would leave Run disabled until the
+  // next poll happened to re-render it.
+  if (document.getElementById("backtest")) renderBacktest(btPayload, btDelta);
+  const report = $("bt-report");
+  if (report) report.disabled = locked;
+  const deltaHost = $("delta-actions"); // "⬇ Fetch bars" / "↻ Retry" write to the dataset
+  if (deltaHost) deltaHost.querySelectorAll("button").forEach((b) => { b.disabled = locked; });
+  const note = $("exec-lock-note");
+  if (note) note.hidden = !locked;
+  // The strategy bar's own buttons are owned by renderStrategyBar(); ask it to
+  // recompute so unlocking re-enables exactly what is available again.
+  if (state.rulesPayload && typeof renderStrategyBar === "function") renderStrategyBar();
 }
 
 async function saveAccount() {
@@ -1072,7 +1259,7 @@ async function saveAccount() {
     }
     $("account-msg").textContent = r.message || "Saved";
     await loadAccount(true); // re-read so secrets re-mask and values refresh
-    await loadExecutionStatus(); // the broker/keys may have just changed
+    await loadTrading(); // the keys may have just changed, so re-resolve the target
   } catch (err) {
     showAccountErrors(err.message, "warn");
   } finally {
@@ -1432,7 +1619,10 @@ async function loadDelta() {
 // other panels; it is state-specific, so it is cleared before each render.
 function setDeltaAction(html) {
   const host = $("delta-actions");
-  if (host) host.innerHTML = html || "";
+  if (!host) return;
+  host.innerHTML = html || "";
+  // While trading is on the server refuses data writes with 409, so don't offer them.
+  if (state.tradingLocked) host.querySelectorAll("button").forEach((b) => { b.disabled = true; });
 }
 
 function renderDelta(s) {
@@ -1567,9 +1757,10 @@ function setStrategyMsg(text) {
 }
 
 function setActionButtonsDisabled(disabled) {
+  const off = !!disabled || !!state.tradingLocked; // the lock can never be undone here
   ["rules-add-buy", "rules-add-sell", "rules-reset", "save-rules", "save-pconfig", "save-risk"].forEach((id) => {
     const b = $(id);
-    if (b) b.disabled = disabled;
+    if (b) b.disabled = off;
   });
 }
 
@@ -1697,9 +1888,9 @@ function renderStrategyBar() {
     sel.innerHTML = opts;
     sel.value = p.active || "";
   }
-  if (delBtn) delBtn.disabled = !p || !p.active;
-  if (renameBtn) renameBtn.disabled = !p || !p.active;
-  applyStrategyAddState(false); // respects the strategy-count limit
+  if (delBtn) delBtn.disabled = !p || !p.active || !!state.tradingLocked;
+  if (renameBtn) renameBtn.disabled = !p || !p.active || !!state.tradingLocked;
+  applyStrategyAddState(!!state.tradingLocked); // busy OR limit OR trading lock
 
   const rs = p && p.strategies ? p.strategies[p.active] : null;
   const chip = $("strategy-context");
@@ -2499,22 +2690,28 @@ function btDataReady(delta) {
 }
 
 // Mutations are locked while a backtest is in flight so the strategy/config
-// can't change underneath a run.
+// can't change underneath a run — AND while trading is ON, so a running strategy
+// can never be reconfigured mid-flight. The server enforces both with a 409; this
+// list only keeps the UI honest so nothing is clickable that would be rejected.
 function setBtBusyControls(busy) {
+  const off = !!busy || !!state.tradingLocked;
   [
     "save-config", // global (.env) settings
     "account-save", // account settings (broker, folders, backtest defaults)
     "save-pconfig", // strategy configuration
     "save-rules", // strategy rules
+    "save-risk", // risk management
+    "rules-add-buy", "rules-add-sell", "rules-reset", // rule editing (dead-ended without a save)
+    "exec-env", // switching paper<->live mid-run is the worst case of all
     "strategy-create-btn", // ＋ New (inline Create)
     "strategy-rename", "strategy-rename-btn", // ✏ Rename
     "strategy-delete", // 🗑 Delete
     "strategy-select", // switch active strategy
   ].forEach((id) => {
     const el = document.getElementById(id);
-    if (el) el.disabled = busy;
+    if (el) el.disabled = off;
   });
-  applyStrategyAddState(busy); // ＋ New also respects the strategy-count limit
+  applyStrategyAddState(off); // ＋ New also respects the strategy-count limit
 }
 
 // “＋ New” is locked while a backtest runs AND when the strategy-count limit
@@ -2527,7 +2724,7 @@ function applyStrategyAddState(busy) {
   const names = Object.keys(p ? p.strategies || {} : {});
   const max = (p && p.max_strategies) || 5;
   const limited = names.length >= max;
-  btn.disabled = !!busy || limited;
+  btn.disabled = !!busy || limited || !!state.tradingLocked;
   if (limited) {
     // Single custom (two-line) tooltip only — clear the native title so the
     // browser doesn't also show its own one-line tooltip on top of it.
@@ -2567,14 +2764,16 @@ function renderBacktest(d, delta) {
   const warnEl = $("bt-datawarn");
   const spin = $("bt-spinner");
   const running = !!(d && d.status && d.status.running);
+  state.btRunning = running; // remembered so the trading lock can re-apply it
   setBtBusyControls(running);
   if (spin) spin.hidden = !running;
 
   // Run is enabled only when: data is fully synced AND at least one rule is set.
+  // Trading ON always wins — the backtesting panel is frozen then.
   const ready = btDataReady(delta);
   const rulesCount = currentRuleCount();
   const canRun = !running && ready && rulesCount > 0;
-  if (runBtn) runBtn.disabled = !canRun;
+  if (runBtn) runBtn.disabled = !canRun || !!state.tradingLocked;
 
   // Warnings reflect CURRENT conditions, whether or not a backtest ran before.
   const dd = delta || btDelta;
@@ -2837,5 +3036,5 @@ showPendingToast();
 refresh();
 loadConfig();
 loadAccount(true);
-loadExecutionStatus();
 loadRules();
+loadTrading(); // last: it applies the configuration lock on top of the rendered panels

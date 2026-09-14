@@ -16,6 +16,7 @@ from pydantic import BaseModel
 
 from src.web.auth import require_auth
 from src.web.services import config_service
+from src.web.services.trading_service import require_trading_off
 
 router = APIRouter(
     prefix="/api/v1/account",
@@ -36,7 +37,11 @@ def get_account() -> dict:
     return config_service.get_account_schema()
 
 
-@router.post("")
+@router.post("", dependencies=[Depends(require_trading_off)])
 def update_account(body: AccountUpdate) -> dict:
-    """Validate and persist the account settings to the JSON file."""
+    """Validate and persist the account settings to the JSON file.
+
+    Refused while trading is on — credentials are part of what a running
+    strategy is using.
+    """
     return config_service.update_account(body.values)

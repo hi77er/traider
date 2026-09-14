@@ -18,8 +18,9 @@ replay of it.
 | Data pipeline (OpenBB + yfinance, Parquet store, delta backfill) | done |
 | Features, rule model, risk layer, backtest engine + Gate | done |
 | Web portal (chart, config, backtest panel, report page) | done |
-| Tests | 379 passing |
+| Tests | 418 passing |
 | Execution config — Alpaca broker, per-strategy paper/live, fail-closed | done |
+| Trading on/off switch + the "no reconfiguration while trading is on" lock | done |
 | Live order execution (the Alpaca executor itself) | **not implemented** |
 | Portfolio state (DynamoDB) | **not implemented** |
 | Scheduler / bot entry point | **not implemented** - `src/main.py` is a stub |
@@ -42,7 +43,8 @@ OpenBB/yfinance ──> canonical Parquet dataset ──> features ──> rule 
           ┌─────────────┴──────────────┐
           v                            v
    BACKTEST (next-open fills)     EXECUTION (Alpaca paper / live)
-          │                            │   ^ config + switch done,
+          │                            │   ^ config + paper/live switch
+          │                            │     + trading on/off lock done,
           │                            │     executor not implemented
           v                            v
    report page + run store        portfolio state <- not implemented
@@ -96,6 +98,20 @@ The portal is the whole interface:
 
 - **Strategy bar** - switch, create, rename or delete a strategy (each one has
   its own instrument, bar size, rules and risk settings)
+- **Environment dropdown** (header, next to 🌎 Market) - which Alpaca account the
+  active strategy's orders go to. It both selects and displays the mode, coloured
+  by it: teal `Paper`, red `LIVE`, amber when the selected account has no keys (so
+  orders would be refused). Paper vs live is per strategy, so one strategy can run
+  on the live account while another stays on paper.
+- **Execution panel** (top of the right column) - the trading ON/OFF switch and
+  the resolved target (strategy, instrument, bar size, environment, endpoint,
+  which key pairs are set). It is the only place trading is started, because it
+  is the only place the consequences are spelled out.
+- **Trading panel** (appears under the chart while trading is ON) - a standing
+  reminder that the strategy is armed, with a one-click stop. While it is
+  visible every configuration surface is locked and the backtest buttons are
+  disabled: nothing that would change what the bot is running may be edited
+  mid-flight.
 - **Price chart** - candles, indicators, BUY/SELL markers, the held-period
   bands (green when the round trip made money, red when it lost) and the
   stop/take exits
@@ -118,7 +134,7 @@ The portal is the whole interface:
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest tests/ -q      # 379 passed
+.venv/bin/python -m pytest tests/ -q      # 418 passed
 ```
 
 The suite is offline: OpenBB, the broker and the clock are all stubbed, so it
@@ -142,7 +158,7 @@ src/
   state/       portfolio tracker      (not implemented)
   scheduler/   decision loop          (not implemented)
   logging/     structured logging, alerts (not implemented)
-  web/         FastAPI app, routes, services, templates, static assets
+  web/         FastAPI app, routes, services (incl. the trading lock), templates, static assets
 tests/         pytest suite (offline)
 settings/      LOCAL DATA (gitignored): strategies/store.json + account/account.json
 data/          generated at runtime: historical Parquet + backtest results
@@ -155,7 +171,12 @@ data/historical/<SYMBOL>_<bar>.parquet         canonical OHLCV
 data/backtest_results/<strategy>/latest.json   trimmed view the panel reads
 data/backtest_results/<strategy>/runs/<id>.json full, self-describing run
 data/backtest_results/<strategy>/index.json    run-menu index
+data/trading.json                              trading ON/OFF (runtime, not config)
 ```
+
+The trading state is deliberately **not** configuration: it lives beside the
+datasets because the configuration files it freezes cannot hold the switch that
+freezes them.
 
 A run file is deliberately complete: every equity point, every trade with its
 exit reason, and an `inputs` block (settings, rules + fingerprint, window,
@@ -168,12 +189,16 @@ Three layers, each with its own editor in the dashboard:
 | Layer | File | Edited from | Holds |
 |-------|------|-------------|-------|
 | **Global** | `.env` | ⚙ Global Settings | data provider + keys, the paths of the two JSON stores |
-| **Account** | `settings/account/account.json` | 🏦 Account Settings | broker (Trading Account), the data folder, backtest defaults, cloud/state storage |
-| **Strategy** | `settings/strategies/store.json` | Strategy Configuration / Rules / Risk panels | instrument, bar size, features, model, gates, schedule, risk limits, rules |
+| **Account** | `settings/account/account.json` | 🏦 Account Settings | the Alpaca key pairs (paper + live), the data folder, backtest defaults, cloud/state storage |
+| **Strategy** | `settings/strategies/store.json` | Strategy Configuration / Rules / Risk panels, plus the header dropdown for `EXECUTION_ENV` | instrument, bar size, features, model, gates, schedule, risk limits, rules, paper/live |
 
 Precedence is **strategy > account > .env**, and the process environment still
 wins over `.env` (which is why a stray exported variable can silently override
 it). Both JSON files are LOCAL DATA: gitignored, and created on first save.
+
+One key is stored per strategy but edited outside the panels: `EXECUTION_ENV`
+comes from the header dropdown. Saving a panel preserves it (the panel never
+renders it, so a plain Save would otherwise reset a live strategy to paper).
 
 A fresh clone has **no strategy store**: the app starts with an empty one and
 the portal shows its "create your first strategy" form. Point
@@ -197,18 +222,25 @@ configuration, not the code - a strategy is judged against the bar you set.
 
 ## Safety
 
-- **Nothing here places an order yet.** The broker, credentials and the
-  per-strategy paper/live switch are configured and enforced, but the executor
-  itself is still to be written.
-- **Going live needs two independent keys.** A strategy must set
-  `EXECUTION_ENV=live` *and* `EXECUTION_LIVE_ACK=true`, with the LIVE key pair
-  configured. Anything missing is refused outright rather than downgraded to
-  paper - silently falling back would either hide a broken live setup or spend
-  real money. The header badge (🧪 PAPER / 🔴 LIVE) and each run's
-  `inputs.execution` record which environment was in play.
+- **Nothing here places an order yet.** The broker, credentials, the
+  per-strategy paper/live switch and the trading on/off lock are configured and
+  enforced, but the executor itself is still to be written.
+- **Trading starts OFF, and going live is refused rather than downgraded.**
+  Turning trading on is refused outright while the selected Alpaca account has no
+  API keys for it (otherwise "trading on" would be a lie), and on a LIVE strategy
+  it needs a confirmation on the switch itself, every time. Silently falling back
+  to paper would either hide a broken live setup or spend real money. The header
+  dropdown (paper = teal, LIVE = red, amber when orders would be refused) and each
+  run's `inputs.execution` record which environment was in play.
+- **No reconfiguration while trading is on.** With trading on, the server refuses
+  every configuration write with HTTP 409 - settings, account, rules, strategy
+  create/rename/delete/select, the backtest runner, the dataset rebuild/backfill
+  and the delta sync - and the UI disables the matching buttons. A stale browser
+  tab or a scripted POST cannot reconfigure a strategy mid-flight. Reads stay
+  available, and turning trading off is always allowed: that is the only action
+  that releases the lock, so it must not depend on the configuration it freezes.
 - Keep credentials in `.env` (gitignored) or a secret manager - never in code.
-  Note the account file is written with owner-only permissions by accident of
-  its atomic write, not by design.
+  Both the account file and the trading state file are written owner-only (0600).
 - A backtest is not a forecast. The Gate exists to stop a strategy that has not
   earned capital, and passing it is a floor, not a promise.
 - Paper results are optimistic: the paper engine simulates no slippage, fees or

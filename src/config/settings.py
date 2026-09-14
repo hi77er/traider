@@ -218,10 +218,6 @@ class Settings(BaseSettings):
     alpaca_live_api_key: Optional[str] = Field(default=None, description="Alpaca LIVE API key id")
     alpaca_live_api_secret: Optional[str] = Field(default=None, description="Alpaca LIVE API secret")
     execution_env: str = Field(default="paper", description="Which environment orders go to: paper | live")
-    execution_live_ack: bool = Field(
-        default=False,
-        description="Second key required before any LIVE order is sent (live also needs EXECUTION_ENV=live)",
-    )
     execution_max_retries: int = Field(default=3, ge=0)
     execution_retry_base_delay_seconds: float = Field(default=1.0, ge=0.0)
     execution_order_timeout_seconds: int = Field(default=60, ge=1)

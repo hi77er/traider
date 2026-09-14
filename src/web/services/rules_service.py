@@ -249,8 +249,20 @@ def update_strategy(settings: Settings, name: str, ruleset: dict) -> dict:
     name = (name or "").strip()
     if not name:
         return {"ok": False, "message": "Strategy name cannot be empty", "errors": [], "file": str(path)}
+
+    # Keys that no longer exist are dropped BEFORE validation, not after: `config`
+    # is Dict[str, str], and a retired key could hold a non-string (the old
+    # EXECUTION_LIVE_ACK was a bool), which pydantic would reject — leaving a
+    # strategy saved before the removal impossible to save ever again.
+    incoming = dict(ruleset or {})
+    incoming_config = incoming.get("config")
+    if isinstance(incoming_config, dict):
+        incoming["config"] = {
+            k: v for k, v in incoming_config.items()
+            if k not in config_service.RETIRED_STRATEGY_KEYS
+        }
     try:
-        rs = rules_mod.RuleSet.model_validate(ruleset)
+        rs = rules_mod.RuleSet.model_validate(incoming)
     except ValidationError as exc:
         errors = [f"{'.'.join(map(str, e['loc']))}: {e['msg']}" for e in exc.errors()]
         logger.warning("Rules update rejected for %r: %s", name, errors)
@@ -265,6 +277,18 @@ def update_strategy(settings: Settings, name: str, ruleset: dict) -> dict:
 
     store = rules_mod.load_store(settings)
     rs = rs.model_copy(update={"name": name})  # file key is the source of truth
+    # Keys the strategy panel does not render must survive a panel save.
+    # EXECUTION_ENV is owned by the header dropdown, so without this a plain
+    # "Save" on the configuration panel would silently reset a LIVE strategy
+    # back to paper.
+    existing = store.strategies.get(name)
+    if existing is not None:
+        preserved = {
+            k: v for k, v in (existing.config or {}).items()
+            if k in config_service.PANEL_HIDDEN_STRATEGY_KEYS
+        }
+        if preserved:
+            rs = rs.model_copy(update={"config": {**preserved, **rs.config}})
     if rs.config.get("INSTRUMENT"):
         cfg = dict(rs.config)
         cfg["INSTRUMENT"] = str(cfg["INSTRUMENT"]).strip().upper()
@@ -277,6 +301,38 @@ def update_strategy(settings: Settings, name: str, ruleset: dict) -> dict:
             "errors": [],
             "file": str(path),
             "payload": _payload_dict(settings, store, rules_mod.store_error(settings))}
+
+
+def set_execution_env(settings: Settings, env: str) -> dict:
+    """Point the ACTIVE strategy's orders at ``paper`` or ``live``.
+
+    Deliberately not part of the strategy panel: the environment is chosen from
+    the header dropdown, so it gets its own narrow write path instead of being
+    smuggled through a full ruleset save. The value still goes through
+    ``Settings`` validation, so only 'paper' and 'live' are ever stored.
+    """
+    path = rules_mod.rules_file_path(settings)
+    store = rules_mod.load_store(settings)
+    name = store.active
+    if not name or name not in store.strategies or store.strategies[name].deleted:
+        return {"ok": False, "message": "No active strategy", "errors": [], "file": str(path)}
+
+    value = str(env or "").strip().lower() or "paper"
+    ok, errors = config_service.validate_strategy_config({"EXECUTION_ENV": value})
+    if not ok:
+        logger.warning("Execution environment rejected for %r: %s", name, errors)
+        return {"ok": False, "message": "Invalid environment", "errors": errors, "file": str(path)}
+
+    rs = store.strategies[name]
+    rs.config = {**(rs.config or {}), "EXECUTION_ENV": value}
+    rules_mod.save_store(settings, store)
+    return {
+        "ok": True,
+        "message": f"“{name}” now routes orders to {value.upper()}",
+        "errors": [],
+        "file": str(path),
+        "environment": value,
+    }
 
 
 def reset(settings: Settings) -> dict:

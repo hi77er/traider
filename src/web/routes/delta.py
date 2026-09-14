@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends
 from src.config.settings import Settings, get_settings
 from src.web.auth import require_auth
 from src.web.services import delta_service
+from src.web.services.trading_service import require_trading_off
 
 router = APIRouter(
     prefix="/api/v1/delta",
@@ -21,7 +22,10 @@ def delta_status(_: Settings = Depends(get_settings)) -> dict:
     return delta_service.status()
 
 
-@router.post("/sync")
+@router.post("/sync", dependencies=[Depends(require_trading_off)])
 def delta_sync(_: Settings = Depends(get_settings)) -> dict:
-    """Fetch the missing completed days, update the dataset, return new state."""
+    """Fetch the missing completed days, update the dataset, return new state.
+
+    Refused while trading is on — it rewrites the dataset a strategy is using.
+    """
     return delta_service.sync()

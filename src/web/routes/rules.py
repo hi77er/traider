@@ -18,6 +18,7 @@ from src.config.effective import get_effective_settings_dep
 from src.config.settings import Settings
 from src.web.auth import require_auth
 from src.web.services import rules_service
+from src.web.services.trading_service import require_trading_off
 
 router = APIRouter(
     prefix="/api/v1/rules",
@@ -61,19 +62,19 @@ def get_rules(
     return rules_service.payload(settings, default=default)
 
 
-@router.post("/create")
+@router.post("/create", dependencies=[Depends(require_trading_off)])
 def create_strategy(body: StrategyCreate, settings: Settings = Depends(get_effective_settings_dep)) -> dict:
     """Create (or select) a strategy and switch the active one to it."""
     return rules_service.create_strategy(settings, body.name)
 
 
-@router.post("/select")
+@router.post("/select", dependencies=[Depends(require_trading_off)])
 def select_strategy(body: StrategyCreate, settings: Settings = Depends(get_effective_settings_dep)) -> dict:
     """Switch the active strategy to an existing one (same as create-if-exists)."""
     return rules_service.create_strategy(settings, body.name)
 
 
-@router.post("/delete")
+@router.post("/delete", dependencies=[Depends(require_trading_off)])
 def delete_strategy(body: StrategyDelete, settings: Settings = Depends(get_effective_settings_dep)) -> dict:
     """Soft-delete a named strategy (kept in the file, hidden from the panel).
     When ``delete_data`` is set the instrument's dataset file(s) are removed too
@@ -81,19 +82,23 @@ def delete_strategy(body: StrategyDelete, settings: Settings = Depends(get_effec
     return rules_service.delete_strategy(settings, body.name, delete_data=body.delete_data)
 
 
-@router.post("/rename")
+@router.post("/rename", dependencies=[Depends(require_trading_off)])
 def rename_strategy(body: StrategyRename, settings: Settings = Depends(get_effective_settings_dep)) -> dict:
     """Rename a strategy (JSON key + name); the active pointer follows if renamed."""
     return rules_service.rename_strategy(settings, body.name, body.new_name)
 
 
-@router.post("")
+@router.post("", dependencies=[Depends(require_trading_off)])
 def save_strategy(body: StrategySave, settings: Settings = Depends(get_effective_settings_dep)) -> dict:
-    """Validate + save the submitted rules/config under the named strategy."""
+    """Validate + save the submitted rules/config under the named strategy.
+
+    Refused while trading is on: the panel's Save buttons are disabled then too,
+    but the rule has to hold for a direct POST as well.
+    """
     return rules_service.update_strategy(settings, body.name, body.ruleset)
 
 
-@router.post("/reset")
+@router.post("/reset", dependencies=[Depends(require_trading_off)])
 def reset_rules(settings: Settings = Depends(get_effective_settings_dep)) -> dict:
     """Reset the store to a single 'default' example strategy."""
     return rules_service.reset(settings)

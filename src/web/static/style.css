@@ -39,27 +39,56 @@ header h1 { font-size: 20px; margin: 0; }
   color: var(--muted);
 }
 
-/* Execution badge — the one at-a-glance answer to "is this bot about to send
-   REAL orders?". A paper and a live Alpaca account look identical in every
-   other panel, so an unlabelled dashboard is how you trade live by accident.
-   No `display` here on purpose: the UA [hidden] rule must still win. */
-.exec-badge {
+/* Execution — the paper/live dropdown in the header, and the at-a-glance answer
+   to "is this bot about to send REAL orders?". A paper and a live Alpaca account
+   look identical in every other panel, so an unlabelled dashboard is how you
+   trade live by accident. The dropdown both selects and displays the state, and
+   it is coloured by that state rather than by focus.
+   No `display` property in these rules on purpose: the UA [hidden] rule must win. */
+.exec-select {
+  appearance: none;
+  -webkit-appearance: none;
   border-radius: 999px;
-  padding: 4px 12px;
+  padding: 5px 30px 5px 14px;
+  font: inherit;
   font-size: 12px;
   font-weight: 600;
+  letter-spacing: 0.02em;
+  cursor: pointer;
   border: 1px solid var(--border);
-  cursor: default;
-  white-space: nowrap;
+  color: var(--text);
+  background-color: var(--card);
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><path d='M1 1l4 4 4-4' fill='none' stroke='%238a93a6' stroke-width='1.5'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 11px center;
 }
-.exec-badge.paper { color: #7fd1c1; border-color: rgba(38, 166, 154, 0.5); background: rgba(38, 166, 154, 0.10); }
-.exec-badge.live { color: #ff8a80; border-color: rgba(239, 83, 80, 0.6); background: rgba(239, 83, 80, 0.14); }
-.exec-badge.blocked { color: #f0b429; border-color: rgba(240, 180, 41, 0.5); background: rgba(240, 180, 41, 0.12); }
+.exec-select:hover { border-color: #3a4152; }
+.exec-select:focus { outline: 2px solid rgba(76, 141, 255, 0.5); outline-offset: 1px; }
+.exec-select.paper { color: #7fd1c1; border-color: rgba(38, 166, 154, 0.5); background-color: rgba(38, 166, 154, 0.10); }
+.exec-select.live { color: #ff8a80; border-color: rgba(239, 83, 80, 0.6); background-color: rgba(239, 83, 80, 0.14); }
+.exec-select.blocked { color: #f0b429; border-color: rgba(240, 180, 41, 0.5); background-color: rgba(240, 180, 41, 0.12); }
+.exec-select option { background: var(--card); color: var(--text); }
 
 /* The same signal inside a report, next to "What was tested". */
 .rp-exec { font-weight: 600; }
 .rp-exec.paper { color: #7fd1c1; }
 .rp-exec.live { color: #ff8a80; }
+
+/* Execution panel: the trading state line and its warning. */
+.exec-state {
+  font-size: 13px;
+  color: var(--muted);
+  padding: 6px 0 10px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 12px;
+}
+.exec-state.on { color: #7fd1c1; font-weight: 600; }
+.exec-warn { color: #f0b429 !important; }
+
+/* Trading panel under the chart, shown only while trading is ON. */
+.trading-card { border-color: rgba(38, 166, 154, 0.5); box-shadow: inset 3px 0 0 var(--green); }
+body.trading-on #trading-panel { border-color: rgba(38, 166, 154, 0.5); }
+button.primary.small.danger, button.danger { color: #ff8a80; border-color: rgba(239, 83, 80, 0.6); }
 
 main { max-width: 1500px; margin: 24px auto; padding: 0 16px; }
 

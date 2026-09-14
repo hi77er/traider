@@ -59,12 +59,6 @@ _SECTION_RULES: List[Tuple[Tuple[str, ...], str]] = [
 _OPTIONS: Dict[str, List[Any]] = {
     "MODEL_TYPE": ["logistic_regression", "rule_based"],
     "POSITION_SIZING_MODE": ["fixed_risk", "volatility_target"],
-    # The paper/live switch. Paper is first because it is the safe default, and
-    # the labels spell out the consequence rather than leaving a bare "live".
-    "EXECUTION_ENV": [
-        {"label": "Paper — simulated, no real money", "value": "paper"},
-        {"label": "LIVE — REAL ORDERS", "value": "live"},
-    ],
     "HISTORICAL_BAR_SIZE": [
         {"label": "1 hour", "value": "1h"},
         {"label": "2 hours", "value": "2h"},
@@ -81,6 +75,15 @@ _OPTIONS: Dict[str, List[Any]] = {
         {"label": "5 years", "value": "5"},
     ],
 }
+
+# The paper/live switch, served to the header dropdown so the client reads it from
+# the server instead of hard-coding a list. Deliberately NOT in _OPTIONS: no
+# settings panel renders it any more — the environment is chosen from the header,
+# and the trading on/off switch lives in the Execution panel.
+EXECUTION_ENV_OPTIONS: List[Dict[str, str]] = [
+    {"label": "Paper — simulated, no real money", "value": "paper"},
+    {"label": "LIVE — REAL ORDERS", "value": "live"},
+]
 
 # Friendlier labels for the Features Engineering on/off toggles.
 _LABELS: Dict[str, str] = {
@@ -116,7 +119,6 @@ _LABELS: Dict[str, str] = {
     "ALPACA_LIVE_API_KEY": "Alpaca live API key",
     "ALPACA_LIVE_API_SECRET": "Alpaca live API secret",
     "EXECUTION_ENV": "Order environment (paper / live)",
-    "EXECUTION_LIVE_ACK": "Acknowledge LIVE orders",
     "BACKTEST_START_DATE": "Backtest window start",
     "BACKTEST_END_DATE": "Backtest window end",
     "TRAIN_TEST_SPLIT": "Train/test split",
@@ -187,9 +189,7 @@ _HINTS: Dict[str, str] = {
     "(9 = fast, 21 = medium, 50 = slow).",
     "BACKTEST_SLIPPAGE_PERCENT": "Order slippage as a % of price, charged on each fill (e.g. 0.05 = 0.05%).",
     "EXECUTION_ENV": "paper = the simulated account (safe). live = REAL orders, "
-    "and it additionally requires the LIVE acknowledgement below.",
-    "EXECUTION_LIVE_ACK": "Safety catch — with this off, LIVE orders are refused "
-    "even when the environment says live.",
+    "which also needs a confirmation every time trading is turned on.",
     "ALPACA_PAPER_API_KEY": "From the Alpaca dashboard with the Paper account "
     "selected. Paper and live keys are DIFFERENT — never mix them.",
     "ALPACA_PAPER_API_SECRET": "Shown once when generated. Paper key secret.",
@@ -256,16 +256,10 @@ def _field_hints(key: str, info) -> List[str]:
 # in the strategy panel and stored inside each strategy's `config` object in
 # the strategy JSON file — NOT in the global .env form. Order matters (display).
 _STRATEGY_SCOPE: List[Tuple[str, Tuple[str, ...]]] = [
-    (
-        "Execution",
-        (
-            # Per-strategy paper vs live, so a strategy still being developed can
-            # run against the paper account while a proven one trades live. LIVE
-            # needs BOTH keys: the environment AND the acknowledgement. The
-            # broker and its credentials are account-wide (see _ACCOUNT_SECTIONS).
-            "EXECUTION_ENV", "EXECUTION_LIVE_ACK",
-        ),
-    ),
+    # NOTE: there is deliberately no "Execution" group here. The paper/live
+    # environment is still a per-strategy setting, but it is edited from the
+    # header dropdown, and the trading on/off switch lives in its own Execution
+    # panel. See PANEL_HIDDEN_STRATEGY_KEYS below.
     (
         "Instrument",
         (
@@ -338,7 +332,20 @@ _STRATEGY_SCOPE: List[Tuple[str, Tuple[str, ...]]] = [
         ),
     ),
 ]
-STRATEGY_SCOPED_KEYS = frozenset(k for _, keys in _STRATEGY_SCOPE for k in keys)
+# Keys that ARE per-strategy and valid to store, but are NOT rendered by the
+# strategy panel because they have their own home in the UI — EXECUTION_ENV is
+# edited from the header dropdown. rules_service preserves them across a save,
+# otherwise saving the panel would silently reset a live strategy back to paper.
+PANEL_HIDDEN_STRATEGY_KEYS = frozenset({"EXECUTION_ENV"})
+
+# Keys that used to be per-strategy and are now gone. A stored strategy may still
+# carry them, so a save must DROP them rather than reject the whole config —
+# otherwise a strategy saved before the removal could never be saved again.
+RETIRED_STRATEGY_KEYS = frozenset({"EXECUTION_LIVE_ACK"})
+
+STRATEGY_SCOPED_KEYS = (
+    frozenset(k for _, keys in _STRATEGY_SCOPE for k in keys) | PANEL_HIDDEN_STRATEGY_KEYS
+)
 
 # ── Account settings (settings/account/account.json) ──────────────────────
 # What is true of this trading ACCOUNT: the broker it trades through, where its

@@ -10,7 +10,8 @@
   <header>
     <h1>📈 TRAIDER Dashboard</h1>
     <div class="header-actions">
-      <span id="exec-badge" class="exec-badge" title="Where orders would be sent" hidden></span>
+      <select id="exec-env" class="exec-select paper" onchange="onEnvChange()"
+              title="Which Alpaca account this strategy's orders go to"></select>
       <a class="btn-link" href="/market" title="Whole-market screens: screener, gainers, volume, losers, small caps">🌎 Market</a>
       <button id="open-account-settings" class="ghost small" onclick="openAccountSettings()" title="Account-wide settings: broker (Trading Account), data folders, backtest defaults">🏦 Account Settings</button>
       <button id="open-global-settings" class="ghost small" onclick="openGlobalSettings()" title="Edit global (non-strategy) settings in .env">⚙ Global Settings</button>
@@ -73,6 +74,25 @@
             <div id="indicator-panes"></div>
           </div>
 
+          <!-- Trading: appears only while trading is ON, right under the chart so the
+               armed state is impossible to miss, and above the backtest it freezes. -->
+          <div id="trading-panel" class="card trading-card" hidden>
+            <div class="card-head">
+              <h2>Trading</h2>
+              <div class="settings-actions">
+                <button id="trading-off-btn" class="ghost small danger" onclick="toggleTrading()">⏹ Turn trading off</button>
+              </div>
+            </div>
+            <p id="trading-msg" class="muted"></p>
+            <div id="trading-facts" class="rp-kv-grid"></div>
+            <p class="muted note">
+              This strategy is armed. While trading is ON every configuration panel is locked —
+              turn trading off to change anything. <b>No orders are sent yet</b>: the Alpaca
+              executor is still to be implemented, so this panel shows the target the orders
+              <em>will</em> go to, and live activity will be reported here once it exists.
+            </p>
+          </div>
+
           <!-- Backtest: run against the latest saved strategy/rules -->
           <div id="backtest" class="card">
             <div class="bt-head">
@@ -120,8 +140,32 @@
         </section>
       </section>
 
-      <!-- ── Right: Configuration, Rules, data panels ── -->
+      <!-- ── Right: Execution, Configuration, Rules, data panels ── -->
       <aside class="right">
+        <!-- Execution: the single setting is the trading switch. Everything else
+             about the target account lives in the header dropdown. -->
+        <section class="card" id="execution-card">
+          <div class="card-head">
+            <h2>Execution</h2>
+            <div class="settings-actions">
+              <button id="trading-toggle" class="primary small" onclick="toggleTrading()">▶ Turn trading on</button>
+            </div>
+          </div>
+          <p id="exec-msg" class="muted"></p>
+          <div id="exec-state-line" class="exec-state">—</div>
+          <p id="exec-lock-note" class="muted note" hidden>
+            <b>Trading is ON, so configuration is locked.</b> Strategy Configuration, Rules, Risk
+            Management, the account pop-up and global settings, the environment dropdown and the
+            backtest buttons are all disabled until trading is turned off.
+          </p>
+          <p class="muted note">
+            Paper vs live is the dropdown in the header, and it applies to the active strategy.
+            Turning trading on is refused while the selected account has no API keys, so
+            &ldquo;trading on&rdquo; can never be a lie. Trading always starts OFF.
+          </p>
+          <div id="exec-facts" class="rp-kv-grid"></div>
+        </section>
+
         <!-- Per-strategy Configuration -->
         <section class="card collapsible" id="config-card">
           <div class="card-head" onclick="toggleConfigPanel(event)" title="Collapse / expand configuration">

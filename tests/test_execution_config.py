@@ -6,10 +6,11 @@ The design being pinned down here:
   by every strategy); the paper/live MODE belongs to each STRATEGY.
 * Switching is one triple swap (base URL + key pair), because Alpaca's paper and
   live environments are the same API.
-* Going live requires TWO independent keys — the environment AND an explicit
-  acknowledgement — and a misconfiguration is always REFUSED rather than
-  silently resolved somewhere unexpected. Quietly falling back would either hide
-  a broken live setup or spend real money.
+* A misconfiguration is always REFUSED rather than silently resolved somewhere
+  unexpected. Quietly falling back would either hide a broken live setup or
+  spend real money.
+* The acknowledgement that guards real orders is no longer a stored field: it is
+  a per-action confirmation on POST /api/v1/trading/on {confirm_live: true}.
 """
 
 from __future__ import annotations
@@ -54,10 +55,11 @@ def test_defaults_are_the_alpaca_paper_account():
     assert target.label == "PAPER"
 
 
-def test_live_resolves_only_with_both_the_environment_and_the_acknowledgement():
-    target = resolve_execution_target(
-        _s(execution_env="live", execution_live_ack=True, **LIVE_KEYS)
-    )
+def test_live_resolves_from_the_environment_plus_the_live_key_pair():
+    """The env field picks the account; the live key pair is what makes it real.
+    The extra confirmation that guards real orders is a runtime one (see
+    POST /api/v1/trading/on), not a stored setting."""
+    target = resolve_execution_target(_s(execution_env="live", **LIVE_KEYS))
     assert target.live is True
     assert target.label == "LIVE"
     assert target.base_url == LIVE_BASE_URL
@@ -67,9 +69,7 @@ def test_live_resolves_only_with_both_the_environment_and_the_acknowledgement():
 def test_paper_and_live_use_different_endpoints_and_keys():
     """The whole point: same code, one swapped triple."""
     paper = resolve_execution_target(_s(**PAPER_KEYS, **LIVE_KEYS))
-    live = resolve_execution_target(
-        _s(execution_env="live", execution_live_ack=True, **PAPER_KEYS, **LIVE_KEYS)
-    )
+    live = resolve_execution_target(_s(execution_env="live", **PAPER_KEYS, **LIVE_KEYS))
     assert (paper.base_url, live.base_url) == (PAPER_BASE_URL, LIVE_BASE_URL)
     assert paper.key_id != live.key_id
     assert paper.secret != live.secret
@@ -78,12 +78,10 @@ def test_paper_and_live_use_different_endpoints_and_keys():
 @pytest.mark.parametrize(
     "overrides, expected",
     [
-        # The acknowledgement is missing: one field flip must not start real trading.
-        ({"execution_env": "live", **LIVE_KEYS}, "EXECUTION_LIVE_ACK"),
-        # Acknowledged but no live credentials.
-        ({"execution_env": "live", "execution_live_ack": True}, "LIVE API key/secret are missing"),
+        # Selected live but no live credentials: must refuse, not fall back to paper.
+        ({"execution_env": "live"}, "LIVE API key/secret are missing"),
         # Paper keys are NOT accepted for live — they are different key pairs.
-        ({"execution_env": "live", "execution_live_ack": True, **PAPER_KEYS}, "LIVE API key/secret are missing"),
+        ({"execution_env": "live", **PAPER_KEYS}, "LIVE API key/secret are missing"),
         # Paper with no credentials cannot trade either.
         ({}, "PAPER API key/secret are not set"),
     ],
@@ -123,7 +121,7 @@ def test_the_environment_is_normalised_but_typos_are_rejected():
 def test_paper_trading_is_kept_as_a_derived_alias():
     """The old boolean became EXECUTION_ENV; the alias keeps callers working."""
     assert _s(**PAPER_KEYS).paper_trading is True
-    assert _s(execution_env="live", execution_live_ack=True, **LIVE_KEYS).paper_trading is False
+    assert _s(execution_env="live", **LIVE_KEYS).paper_trading is False
     # Derived, not stored: it must not be an editable field or a saved value.
     assert "paper_trading" not in Settings.model_fields
     assert "paper_trading" not in Settings(_env_file=None).model_dump()
@@ -135,24 +133,35 @@ def test_paper_trading_is_kept_as_a_derived_alias():
 def test_the_mode_is_per_strategy_and_credentials_are_account_wide():
     strategy_keys = set(config_service.STRATEGY_SCOPED_KEYS)
     account_keys = set(config_service.ACCOUNT_SCOPED_KEYS)
-    assert {"EXECUTION_ENV", "EXECUTION_LIVE_ACK"} <= strategy_keys
+    # Still a per-strategy setting (a live strategy and a paper one can coexist)…
+    assert "EXECUTION_ENV" in strategy_keys
     assert {"ALPACA_PAPER_API_KEY", "ALPACA_PAPER_API_SECRET",
             "ALPACA_LIVE_API_KEY", "ALPACA_LIVE_API_SECRET"} <= account_keys
-    # Exactly one home for each, or the two layers would fight.
-    assert not {"EXECUTION_ENV", "EXECUTION_LIVE_ACK"} & account_keys
+    # …but with exactly one home for each, or the two layers would fight.
+    assert "EXECUTION_ENV" not in account_keys
     assert "ALPACA_LIVE_API_KEY" not in strategy_keys
     # The old single switch is gone.
     assert "PAPER_TRADING" not in strategy_keys | account_keys
 
 
-def test_the_paper_live_dropdown_spells_out_the_consequence():
+def test_the_mode_is_edited_from_the_header_not_a_settings_panel():
+    """The dropdown in the top nav is the only paper/live control, so it must not
+    also be rendered by the settings panels — and its options come from the server
+    so the client cannot invent a third environment."""
     groups = config_service.strategy_config_groups(_s())
     by_key = {f["key"]: f for g in groups for f in g["fields"]}
-    env = by_key["EXECUTION_ENV"]
-    assert [o["value"] for o in env["options"]] == ["paper", "live"]
-    assert "REAL" in env["options"][1]["label"]
-    # It leads the panel, so the mode is the first thing you see.
-    assert groups[0]["name"] == "Execution"
+    assert "EXECUTION_ENV" not in by_key  # no panel renders it
+    assert not [g for g in groups if g["name"] == "Execution"]
+
+    opts = config_service.EXECUTION_ENV_OPTIONS
+    assert [o["value"] for o in opts] == ["paper", "live"]
+    assert "REAL" in opts[1]["label"]
+
+    # It is still valid to STORE per strategy, and the save path must preserve it
+    # even though the panel never shows it (otherwise saving the panel would
+    # silently reset a live strategy back to paper). See test_trading_gate.py for
+    # the end-to-end save behaviour.
+    assert "EXECUTION_ENV" in config_service.PANEL_HIDDEN_STRATEGY_KEYS
 
 
 # ---------------------------------------------------------------------------
@@ -175,7 +184,7 @@ def test_status_reports_which_key_pairs_are_configured_without_revealing_them():
 
 
 def test_status_flags_a_live_selection_that_cannot_trade():
-    status = execution_status(_s(execution_env="live", execution_live_ack=True))
+    status = execution_status(_s(execution_env="live"))
     assert status["live"] is True
     assert status["ok"] is False
     assert status["base_url"] == LIVE_BASE_URL
@@ -196,9 +205,7 @@ def test_the_run_provenance_records_the_environment_without_secrets():
     assert "PK-paper" not in json.dumps(snapshot)
     # A live strategy is stamped as live, so its results are never confused with
     # a paper run of the same rules.
-    live = engine._execution_snapshot(
-        _s(execution_env="live", execution_live_ack=True, **LIVE_KEYS)
-    )
+    live = engine._execution_snapshot(_s(execution_env="live", **LIVE_KEYS))
     assert live["live"] is True and live["env"] == "live"
 
 
@@ -217,21 +224,25 @@ def test_status_endpoint_returns_the_resolved_environment():
 
 
 def test_the_dashboard_shows_which_environment_orders_would_use():
-    """Both accounts look identical everywhere else, so the badge is the guard."""
+    """Both accounts look identical everywhere else, so the header dropdown — which
+    both selects and displays the environment, coloured by it — is the guard."""
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[1]  # tests/ -> repo root
     html = (root / "src" / "web" / "templates" / "index.html").read_text(encoding="utf-8")
-    assert 'id="exec-badge"' in html
+    assert 'id="exec-env"' in html
+    assert 'onchange="onEnvChange()"' in html
+    # The badge was replaced by the dropdown, not kept alongside it.
+    assert 'id="exec-badge"' not in html
+
     js = (root / "src" / "web" / "static" / "app.js").read_text(encoding="utf-8")
-    assert "async function loadExecutionStatus()" in js
-    assert "/api/v1/execution/status" in js
-    # Rendered at boot, and re-rendered after the account form is saved (the
-    # broker or the keys may have just changed).
-    assert js.count("loadExecutionStatus()") >= 2
-    assert js.count("await loadExecutionStatus()") >= 1
+    assert "async function loadTrading()" in js
+    assert "/api/v1/trading" in js
+    # Rendered at boot, and re-rendered after the account form is saved (the keys
+    # may have just changed, which decides whether trading may start at all).
+    assert js.count("loadTrading()") >= 2
+    assert js.count("await loadTrading()") >= 1
 
     css = (root / "src" / "web" / "static" / "style.css").read_text(encoding="utf-8")
-    # `display` must NOT be set here or the UA [hidden] rule would stop working.
-    assert ".exec-badge {" in css
-    assert ".exec-badge.live" in css and ".exec-badge.paper" in css
+    assert ".exec-select.paper" in css and ".exec-select.live" in css
+    assert ".exec-select.blocked" in css

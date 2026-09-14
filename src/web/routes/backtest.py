@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends
 
 from src.web.auth import require_auth
 from src.web.services import backtest_service
+from src.web.services.trading_service import require_trading_off
 
 router = APIRouter(
     prefix="/api/v1/backtest",
@@ -24,7 +25,11 @@ def get_backtest() -> dict:
     return backtest_service.payload()
 
 
-@router.post("/run")
+@router.post("/run", dependencies=[Depends(require_trading_off)])
 def run_backtest() -> dict:
-    """Run a new backtest against the active strategy's saved rules/config."""
+    """Run a new backtest against the active strategy's saved rules/config.
+
+    Refused while trading is on: the panel's buttons are disabled then too, but
+    the rule has to hold for a direct POST as well.
+    """
     return backtest_service.start_backtest()

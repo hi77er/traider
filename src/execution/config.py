@@ -18,6 +18,12 @@ Two entry points, deliberately different in character:
 Failure is always "refuse", never "fall back": silently downgrading a live
 configuration to paper would hide a broken live setup, and silently upgrading a
 paper configuration to live would spend real money.
+
+Real money is gated at ONE further point, in ``src/web/services/trading_service``:
+trading starts OFF, and turning it on while the environment is live requires an
+explicit per-request confirmation. That is deliberately a runtime action rather
+than a stored flag, because the switch that starts trading is the one the operator
+is looking at when they press it.
 """
 
 from __future__ import annotations
@@ -88,13 +94,6 @@ def resolve_execution_target(settings) -> ExecutionTarget:
     key_id, secret, base_url = _alpaca_target(settings, env)
 
     if env == "live":
-        # Two independent keys must agree, so that no single field flip (or a
-        # mis-click in the settings form) can start trading real money.
-        if not bool(getattr(settings, "execution_live_ack", False)):
-            raise ExecutionConfigError(
-                "EXECUTION_ENV=live but EXECUTION_LIVE_ACK is off — refusing to send "
-                "REAL orders. Turn the acknowledgement on to confirm live trading."
-            )
         if not key_id or not secret:
             raise ExecutionConfigError(
                 "EXECUTION_ENV=live but the Alpaca LIVE API key/secret are missing — "
