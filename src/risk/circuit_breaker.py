@@ -80,24 +80,40 @@ class CircuitBreaker:
     def roll(self, day=None) -> bool:
         """Start a new day when ``day`` differs from the state's day.
 
-        A new day is a clean slate: the streak, the day's P&L and the halt all
-        reset ("stop trading for the day, reset next day").
+        A new day is a clean slate for the things that are scoped to a day: the
+        streak, the day's P&L and the halt all reset ("stop trading for the day,
+        reset next day"). ``trips`` is deliberately CARRIED ACROSS: it is a
+        run-level statistic, not day state, and rebuilding the state without it
+        made the reported count depend on whether the run happened to end inside
+        the tripping day.
 
-        NOTE the consequence for a **daily** bar backtest: a day holds exactly
-        one decision, so a streak of N losses needs N *days* and the streak can
-        never reach N within a single day — the breaker cannot fire there. It
-        bites at intraday bar sizes (or live), which is where it is meant to.
+        NOTE the consequence for a **daily** bar backtest, where a day holds
+        exactly one decision and the day therefore changes between every entry and
+        the next:
+
+        * the *consecutive-losses* trigger can never fire at all — the streak is
+          reset before it can reach the limit;
+        * the *daily-loss* trigger does fire, but the halt is cleared by the next
+          day's roll before any entry is evaluated, so it refuses nothing.
+
+        So on daily bars the breaker is inert either way, and a run's stops and
+        sizing are what protect it. It bites at intraday bar sizes (and live),
+        which is where multiple decisions share a day.
         Returns True when a roll happened."""
         key = _day_key(day)
         if self.state.day == key:
             return False
-        self.state = BreakerState(day=key)
+        self.state = BreakerState(day=key, trips=self.state.trips)
         logger.debug("Circuit breaker reset for a new day (%s)", key)
         return True
 
     def reset(self, day=None) -> None:
-        """Force a reset (new day, or an operator clearing the breaker)."""
-        self.state = BreakerState(day=_day_key(day))
+        """Force a reset (new day, or an operator clearing the breaker).
+
+        The trip COUNT survives, for the same reason it survives a roll: clearing a
+        halt does not un-happen it.
+        """
+        self.state = BreakerState(day=_day_key(day), trips=self.state.trips)
 
     # ── evaluation ──────────────────────────────────────────────────
     def check(self, day=None) -> Tuple[bool, str]:

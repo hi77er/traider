@@ -186,6 +186,49 @@ def test_breaker_trips_on_daily_loss_and_a_win_clears_the_streak():
     assert cb2.tripped("d") is False
 
 
+def test_the_trip_count_survives_the_day_roll():
+    """A halt is per-day; the number of halts is a fact about the RUN.
+
+    Rebuilding the breaker state on roll used to drop ``trips`` with it, so the
+    count surfaced in a run's provenance (`inputs.risk.breaker_trips`) and in the
+    report depended on whether the run happened to END inside the tripping day —
+    a run that tripped and then traded the next morning reported zero.
+    """
+    cb = CircuitBreaker(max_consecutive_losses=1)
+    cb.record_trade(-1.0, day="2024-05-01")
+    assert cb.state.tripped is True and cb.state.trips == 1
+
+    # The next day clears the halt...
+    assert cb.check("2024-05-02") == (False, "")
+    assert cb.state.tripped is False
+    # ...but not the history of it.
+    assert cb.state.trips == 1, "the trip count is run-level, not day-level"
+
+    cb.record_trade(-1.0, day="2024-05-02")
+    assert cb.state.trips == 2
+
+
+def test_a_daily_bar_run_cannot_be_protected_by_the_breaker():
+    """Documented limitation, and the reason it is worth documenting.
+
+    With one decision per day the day changes between every entry and the next, so
+    BOTH triggers come to nothing: the streak is reset before it can reach the
+    limit, and a daily-loss halt is cleared by the following day's roll before an
+    entry is ever evaluated against it. A daily run is protected by its stops, not
+    by the breaker.
+    """
+    # The daily-loss trigger does trip...
+    cb = CircuitBreaker(max_consecutive_losses=99, max_loss_percent=1.0)
+    # ...so a -2% day reaches the limit.
+    cb.record_trade(-2.0, day="2024-05-01")
+    assert cb.state.tripped is True
+
+    # ...but the next day's first evaluation — which is also the next ENTRY on
+    # daily bars — clears it before it can refuse anything.
+    tripped, _ = cb.check("2024-05-02")
+    assert tripped is False
+
+
 def test_breaker_disabled_never_trips_and_snapshot_round_trips():
     cb = CircuitBreaker(max_consecutive_losses=1, enabled=False)
     cb.record_trade(-99.0, day="d")
@@ -363,11 +406,19 @@ def test_circuit_breaker_halts_the_rest_of_the_day_intraday():
     assert len(out.trades) == 3
 
 
-def test_circuit_breaker_cannot_fire_on_daily_bars(tmp_path):
-    """Documented limitation: one decision per day means no streak within a day.
+def test_circuit_breaker_refuses_nothing_on_daily_bars(tmp_path):
+    """Documented limitation: one decision per day means the halt cannot survive.
 
-    Which is why ``APPLY_RISK_LAYER`` still matters for sizing and stops on
-    daily data, but the breaker only bites at intraday bar sizes."""
+    The day changes between every entry and the next, so the streak is reset before
+    it can reach the limit, and a daily-loss halt is cleared by the following day's
+    roll before an entry is evaluated against it. The trip COUNT may therefore be
+    non-zero — the trigger does reach its limit — while the number of entries
+    actually refused is zero. That distinction is the point: a non-zero trip count
+    here is not protection, so the assertion is on the skips.
+
+    Which is why ``APPLY_RISK_LAYER`` still matters on daily data for sizing and
+    stops, and the breaker only bites at intraday bar sizes (or live).
+    """
     settings = _settings(
         tmp_path,
         apply_risk_layer=True,
@@ -377,10 +428,10 @@ def test_circuit_breaker_cannot_fire_on_daily_bars(tmp_path):
     )
     _store_rule(tmp_path, settings, "BUY")
     res = run_backtest(settings, dataset=_ohlc(_declining()))
-    assert res["inputs"]["risk"]["breaker_trips"] == 0
-    assert res["inputs"]["risk"]["breaker_skips"] == 0
-    # The stop is still doing its job on every loss.
-    assert res["inputs"]["risk"]["stop_exits"] > 0
+    risk = res["inputs"]["risk"]
+    assert risk["breaker_skips"] == 0, "on daily bars the halt cannot refuse an entry"
+    # The stop is still doing its job on every loss — that is what protects the run.
+    assert risk["stop_exits"] > 0
 
 
 def test_volatility_target_mode_records_the_volatility_stop(tmp_path):
