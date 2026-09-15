@@ -415,6 +415,27 @@ button.chip-ind.active { border-color: var(--accent); color: var(--accent); back
 .field.readonly input.ro { background: rgba(255, 255, 255, 0.02); color: var(--muted); cursor: not-allowed; }
 .hint.ro-note { color: var(--accent); }
 
+/* Alpaca credential verification: the verdict for a key pair, and the button that
+   asks Alpaca for it. Rendered under the pair (the schema marks the pair's last
+   field), so the control reads as "check these two boxes together". */
+.cred-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 2px 0 4px;
+}
+.cred-badge {
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+.cred-badge.ok { color: #7fd1c1; border-color: rgba(38, 166, 154, 0.5); background: rgba(38, 166, 154, 0.1); }
+.cred-badge.bad { color: #ff8a80; border-color: rgba(239, 83, 80, 0.55); background: rgba(239, 83, 80, 0.12); }
+.cred-badge.none { color: var(--muted); }
+
 /* ---------- Collapsible settings ---------- */
 .settings-head { cursor: pointer; user-select: none; }
 

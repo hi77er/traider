@@ -28,8 +28,10 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from src.config import state_files
 from src.config.effective import get_effective_settings_dep
 from src.config.settings import Settings
+from src.execution import credentials
 from src.execution.config import LIVE_BASE_URL, PAPER_BASE_URL
 from src.web.app import app
 from src.web.services import config_service, rules_service, trading_service
@@ -54,16 +56,39 @@ def _s(tmp_path, **kwargs) -> Settings:
 
 @pytest.fixture
 def state_file(tmp_path, monkeypatch):
-    """Redirect the runtime state file (and the rules store) into tmp_path."""
-    monkeypatch.setattr(trading_service, "state_path", lambda s: tmp_path / "trading.json")
+    """Redirect every runtime state file into tmp_path.
+
+    Both `trading.json` and `credential_checks.json` resolve through the shared
+    `state_files.state_path`, so patching it there covers the switch AND the
+    credential verdicts — no test may touch the repo's real data directory.
+    """
+    monkeypatch.setattr(state_files, "state_path", lambda s, name: tmp_path / name)
     return tmp_path / "trading.json"
+
+
+@pytest.fixture
+def verified(monkeypatch):
+    """Record a PASSING credential verdict for an environment, offline."""
+    monkeypatch.setattr(credentials, "probe", _accepting_probe())
+    return lambda settings, env="paper", ok=True: credentials.verify(settings, env, force=True)
+
+
+def _accepting_probe(ok=True, message="Credentials accepted — account A1 (ACTIVE)"):
+    """A stand-in for the Alpaca call, so tests never touch the network."""
+    calls = []
+
+    def probe(key_id, secret, base_url, timeout=0):
+        calls.append({"key_id": key_id, "base_url": base_url})
+        return {"ok": ok, "message": message, "account_number": "A1", "status": "ACTIVE"}
+
+    probe.calls = calls
+    return probe
 
 
 @pytest.fixture
 def wired(tmp_path, monkeypatch, state_file):
     """A TestClient whose settings point at tmp_path, so no real file is touched."""
     settings = _s(tmp_path)
-    monkeypatch.setattr(trading_service, "state_path", lambda s: state_file)
     app.dependency_overrides[get_effective_settings_dep] = lambda: settings
     try:
         yield settings
@@ -91,8 +116,9 @@ def test_turning_on_is_refused_while_an_order_could_not_be_placed(tmp_path, stat
     assert not state_file.exists()
 
 
-def test_paper_turns_on_and_off(tmp_path, state_file):
+def test_paper_turns_on_and_off(tmp_path, state_file, verified):
     settings = _s(tmp_path, **PAPER_KEYS)
+    verified(settings, "paper")
     on = trading_service.turn_on(settings)
     assert on["ok"] is True
     assert trading_service.is_trading_on(settings) is True
@@ -108,9 +134,10 @@ def test_paper_turns_on_and_off(tmp_path, state_file):
     assert trading_service.get_state(settings)["since"] is None
 
 
-def test_live_needs_an_explicit_confirmation_every_time(tmp_path, state_file):
+def test_live_needs_an_explicit_confirmation_every_time(tmp_path, state_file, verified):
     """Real money costs one deliberate extra action — and it is NOT remembered."""
     settings = _s(tmp_path, execution_env="live", **LIVE_KEYS)
+    verified(settings, "live")
     refused = trading_service.turn_on(settings)
     assert refused["ok"] is False
     assert refused["needs_live_confirmation"] is True
@@ -135,8 +162,9 @@ def test_the_live_confirmation_is_not_a_stored_setting():
     assert "EXECUTION_LIVE_ACK" in config_service.RETIRED_STRATEGY_KEYS
 
 
-def test_the_state_file_is_private_and_atomic(tmp_path, state_file):
+def test_the_state_file_is_private_and_atomic(tmp_path, state_file, verified):
     settings = _s(tmp_path, **PAPER_KEYS)
+    verified(settings, "paper")
     trading_service.turn_on(settings)
     mode = stat.S_IMODE(state_file.stat().st_mode)
     assert mode == 0o600  # owner-only, like the account file
@@ -238,13 +266,17 @@ def test_turn_off_is_always_allowed_even_when_the_account_is_broken(wired, state
 def test_get_trading_reports_the_state_the_lock_and_the_options(wired):
     body = client.get("/api/v1/trading").json()
     assert set(body) == {
-        "trading", "locked", "execution", "env_options", "strategy", "instrument", "bar_size",
+        "trading", "locked", "execution", "env_options", "strategy", "instrument",
+        "bar_size", "verification",
     }
     assert body["trading"]["on"] is False and body["locked"] is False
     assert [o["value"] for o in body["env_options"]] == ["paper", "live"]
     # The dropdown's options come from the server, so the client cannot invent a
     # third environment.
     assert body["env_options"] == config_service.EXECUTION_ENV_OPTIONS
+    # The header can see WHY the switch would refuse, before it is pressed.
+    assert body["verification"]["env"] == "paper"
+    assert body["verification"]["verified"] is False
 
 
 def test_turning_on_through_the_api_reports_why_it_cannot(wired):
@@ -254,16 +286,106 @@ def test_turning_on_through_the_api_reports_why_it_cannot(wired):
     assert body["state"]["on"] is False
 
 
-def test_turning_on_a_live_strategy_through_the_api_needs_the_flag(tmp_path, monkeypatch, state_file):
+def test_turning_on_a_live_strategy_through_the_api_needs_the_flag(tmp_path, monkeypatch, state_file, verified):
     settings = _s(tmp_path, execution_env="live", **LIVE_KEYS)
-    monkeypatch.setattr(trading_service, "state_path", lambda s: state_file)
     app.dependency_overrides[get_effective_settings_dep] = lambda: settings
     try:
+        # Unverified first: the API reports THAT as the reason, not the flag.
+        blocked = client.post("/api/v1/trading/on", json={}).json()
+        assert blocked["ok"] is False and blocked["needs_verification"] is True
+
+        verified(settings, "live")
         assert client.post("/api/v1/trading/on", json={}).json()["needs_live_confirmation"] is True
         assert client.post("/api/v1/trading/on", json={"confirm_live": True}).json()["ok"] is True
         assert client.get("/api/v1/trading").json()["locked"] is True
     finally:
         app.dependency_overrides.clear()
+
+
+# ---------------------------------------------------------------------------
+# configured is not the same as WORKING
+# ---------------------------------------------------------------------------
+def test_turning_on_is_refused_until_the_credentials_are_verified(tmp_path, state_file, monkeypatch):
+    """The new gate: keys that have never been checked against Alpaca are not
+    enough. "Trading is ON" must not be a promise the bot cannot keep."""
+    settings = _s(tmp_path, **PAPER_KEYS)
+    refused = trading_service.turn_on(settings)
+    assert refused["ok"] is False
+    assert refused["needs_verification"] is True
+    assert "not been verified" in refused["message"]
+    assert "Account Settings" in refused["message"], "the refusal must say what to do"
+    assert trading_service.is_trading_on(settings) is False
+    assert not state_file.exists()
+
+    # After a passing check it starts.
+    monkeypatch.setattr(credentials, "probe", _accepting_probe())
+    assert credentials.verify(settings, "paper", force=True)["ok"] is True
+    assert trading_service.turn_on(settings)["ok"] is True
+
+
+def test_a_failed_check_blocks_trading_and_says_why(tmp_path, state_file, monkeypatch):
+    settings = _s(tmp_path, **PAPER_KEYS)
+    monkeypatch.setattr(credentials, "probe", _accepting_probe(ok=False, message="Alpaca rejected these credentials (401)"))
+    assert credentials.verify(settings, "paper", force=True)["ok"] is False
+
+    refused = trading_service.turn_on(settings)
+    assert refused["ok"] is False
+    assert "FAILED verification" in refused["message"]
+    assert "401" in refused["message"], "the operator needs the reason, not just a no"
+
+
+def test_changing_the_key_expires_the_verdict(tmp_path, state_file, monkeypatch):
+    """A verdict belongs to the key that earned it, or swapping keys would inherit
+    a check that never happened."""
+    monkeypatch.setattr(credentials, "probe", _accepting_probe())
+    settings = _s(tmp_path, **PAPER_KEYS)
+    credentials.verify(settings, "paper", force=True)
+    assert trading_service.turn_on(settings)["ok"] is True
+    trading_service.turn_off(settings)
+
+    replaced = _s(tmp_path, alpaca_paper_api_key="PK-other", alpaca_paper_api_secret="PS-other")
+    state = credentials.check_for(replaced, "paper")
+    assert state["verified"] is False and state["stale"] is True
+    refused = trading_service.turn_on(replaced)
+    assert refused["ok"] is False
+    assert "changed since they were verified" in refused["message"]
+
+
+def test_a_passing_check_is_not_repeated_but_a_failure_is(tmp_path, state_file, monkeypatch):
+    """The operator asked for exactly this economy: verify a pair once, not on every
+    save. A FAILURE is not cached, because it may just be the network."""
+    probe = _accepting_probe()
+    monkeypatch.setattr(credentials, "probe", probe)
+    settings = _s(tmp_path, **PAPER_KEYS)
+
+    first = credentials.verify(settings, "paper")
+    assert first["ok"] is True and first["checked"] is True and len(probe.calls) == 1
+
+    again = credentials.verify(settings, "paper")
+    assert again["checked"] is False
+    assert len(probe.calls) == 1, "a known-good pair must not cost another call"
+
+    # ...but a failing check is retried rather than remembered.
+    failing = _accepting_probe(ok=False, message="boom")
+    monkeypatch.setattr(credentials, "probe", failing)
+    other = _s(tmp_path, alpaca_paper_api_key="PK-bad", alpaca_paper_api_secret="PS-bad")
+    assert credentials.verify(other, "paper")["ok"] is False
+    assert credentials.verify(other, "paper")["ok"] is False
+    assert len(failing.calls) == 2, "a failure may be a blip: check again next time"
+
+
+def test_verify_new_checks_only_pairs_without_a_verdict(tmp_path, state_file, monkeypatch):
+    from src.execution import credentials as creds
+
+    probe = _accepting_probe()
+    monkeypatch.setattr(creds, "probe", probe)
+    settings = _s(tmp_path, **PAPER_KEYS, **LIVE_KEYS)
+
+    first = creds.verify_new(settings)
+    assert set(first) == {"paper", "live"} and len(probe.calls) == 2
+    second = creds.verify_new(settings)
+    assert len(probe.calls) == 2, "nothing new to check: no further calls"
+    assert all(not r["checked"] for r in second.values())
 
 
 def test_the_endpoint_body_cannot_arrive_empty(wired):

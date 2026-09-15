@@ -249,6 +249,28 @@ paper one is about the strategy acting on the next signal. Turning it off never
 asks. While trading is on, a **Trading** panel under the chart shows the resolved
 target and spells out the lock.
 
+### Verifying the Alpaca credentials
+
+A key pair being configured is not the same as a key pair that **works** — keys get
+copied from the wrong account page, revoked, or paired with the other environment's
+secret. Nothing local can tell, so the bot asks Alpaca (`GET /v2/account`) and
+remembers the answer:
+
+- **🏦 Account Settings** shows a verdict next to each pair (`✓ verified · <account>
+  · <time>`, `⚠ not valid`, `— not checked`) with a **Validate** button that re-checks
+  on demand whatever the state.
+- A pair is checked **automatically when it is new** (as the form is saved). A pair
+  that already passed is not re-asked on every save; a pair that *failed* is retried,
+  because a failure may just be the network.
+- A verdict belongs to the key that earned it: change the key and it expires, so a
+  swapped key cannot inherit an old pass.
+- Trading **cannot be turned on** until the pair for the environment in play has
+  passed. The switch says so on hover, and refuses with the reason if pressed.
+
+The verdicts live in `data/credential_checks.json`, beside `trading.json` — runtime
+state, not configuration, and it stores a hash of the key id rather than the key.
+Credentials themselves are never written to it and never appear in a message.
+
 While trading is ON, a **Trading** panel appears under the chart and the server
 refuses every configuration write with HTTP 409 — settings, account, rules,
 strategy create/rename/delete/select, the backtest runner, the dataset

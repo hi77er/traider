@@ -26,8 +26,9 @@ from typing import Any, Dict, List, Optional, Tuple
 from pydantic import ValidationError
 
 from src.config import account as account_mod
-from src.config.effective import invalidate
+from src.config.effective import get_effective_settings, invalidate
 from src.config.settings import Settings
+from src.execution import credentials as credentials_mod
 
 logger = logging.getLogger(__name__)
 
@@ -726,6 +727,16 @@ def _is_sensitive(key: str) -> bool:
     return any(key.endswith(s) for s in _SENSITIVE_SUFFIXES)
 
 
+# A key pair can only be proved to WORK by asking Alpaca (see
+# ``src/execution/credentials.py``), so the popup gets a Validate button and a
+# verdict line next to each pair. Attached to the SECRET — the last field of the
+# pair — so the control lands under the pair it checks, not between its halves.
+_VERIFY_ENV_BY_KEY: Dict[str, str] = {
+    "ALPACA_PAPER_API_SECRET": "paper",
+    "ALPACA_LIVE_API_SECRET": "live",
+}
+
+
 def _section_for(key: str) -> str:
     for prefixes, name in _SECTION_RULES:
         if any(key == p or key.startswith(p) for p in prefixes):
@@ -764,16 +775,20 @@ def account_sections(settings: Optional[Settings] = None) -> List[dict]:
         for key in keys:
             field_name = field_by_key[key]
             info = Settings.model_fields[field_name]
-            default_value = _format_value(getattr(shown, field_name))
+            shown_value = _format_value(getattr(shown, field_name))
             raw = stored.get(key)
             sensitive = _is_sensitive(key)
+            effective = _format_value(raw) if raw is not None else shown_value
             field = {
                 "key": key,
                 "label": _LABELS.get(key, _human_label(key)),
                 "type": _field_type(info.annotation),
-                # A set secret is never sent to the browser.
-                "value": (MASK if sensitive and raw else (raw if raw is not None else default_value)),
-                "default_value": default_value,
+                # A secret is never sent to the browser — in ANY field of the payload.
+                # `default_value` is the value in force, so it leaks exactly as badly as
+                # `value`, and a secret can arrive from `.env` as well as from the account
+                # file; masking only the "stored" case left both of those open.
+                "value": _mask_secret(effective, sensitive),
+                "default_value": _mask_secret(shown_value, sensitive),
                 "set": raw is not None,
                 "sensitive": sensitive,
                 "readonly": key in _DERIVED_ACCOUNT_KEYS,
@@ -783,6 +798,9 @@ def account_sections(settings: Optional[Settings] = None) -> List[dict]:
                 "description": info.description or "",
                 "options": _OPTIONS.get(key),
                 "hints": _field_hints(key, info),
+                # Set on the last field of a credential pair: the popup renders a
+                # Validate button + verdict for that environment there.
+                "verify_env": _VERIFY_ENV_BY_KEY.get(key),
             }
             field.update(_field_bounds(info))
             fields.append(field)
@@ -799,7 +817,39 @@ def get_account_schema() -> dict:
         "file_exists": path.exists(),
         "groups": account_sections(settings),
         "error": account_mod.account_error(settings),
+        # Whether each key pair has been proved to WORK, so the popup can show it
+        # without a second request. Read from the EFFECTIVE settings: the pair the
+        # bot would trade with lives in the account file (or .env), and a bare
+        # ``Settings()`` would report every stored key as unset.
+        "credentials": credentials_mod.all_checks(get_effective_settings()),
     }
+
+
+def verify_credentials(env: str) -> dict:
+    """Check one environment's credentials against Alpaca, on demand.
+
+    The effective settings are used (not the raw account file) because a key can
+    also come from ``.env`` — what matters is the pair the bot would actually
+    trade with.
+    """
+    settings = get_effective_settings()
+    result = credentials_mod.verify(settings, env, force=True)
+    return {
+        "ok": bool(result["ok"]),
+        "message": result["message"],
+        "result": result,
+        "credentials": credentials_mod.all_checks(settings),
+    }
+
+
+def verify_new_credentials() -> Dict[str, dict]:
+    """Verify any credential pair that has no passing verdict yet.
+
+    Called straight after an account save: a pair added (or changed) just now is
+    checked at the moment it is added, while an unchanged pair that already passed
+    costs no call at all.
+    """
+    return credentials_mod.verify_new(get_effective_settings())
 
 
 def update_account(values: Dict[str, str]) -> dict:
@@ -839,17 +889,39 @@ def update_account(values: Dict[str, str]) -> dict:
     path = account_mod.save_account(settings, merged)
     invalidate()  # the account layer feeds resolve_effective()
     logger.info("Account settings saved to %s", path)
+
+    # A key pair that has never been verified is checked now, at the moment it
+    # arrives. A network failure must not lose the save: the settings are already
+    # on disk, and the verdict is reported alongside them.
+    try:
+        verifications = verify_new_credentials()
+    except Exception:  # noqa: BLE001 - verification must never fail a save
+        logger.exception("Credential verification after save failed")
+        verifications = {}
+
     return {
         "ok": True,
         "message": f"Saved {len(merged)} setting(s) to {path.name}",
         "errors": [],
         "file": str(path),
         "groups": account_sections(Settings()),
+        "verifications": verifications,
     }
 
 
 def _human_label(key: str) -> str:
     return key.replace("_", " ").title()
+
+
+def _mask_secret(text: str, sensitive: bool) -> str:
+    """Hide a secret wherever it would otherwise be sent to the browser.
+
+    Used for BOTH the field's value and its ``default_value``: the schema describes
+    what is in force, so a stored key would otherwise be readable straight out of the
+    account popup's payload — and the whole point of the mask is that a re-opened form
+    can submit it back unchanged without ever knowing it.
+    """
+    return MASK if (sensitive and text) else text
 
 
 def _format_value(value: Any) -> str:

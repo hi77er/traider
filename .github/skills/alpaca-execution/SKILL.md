@@ -58,6 +58,18 @@ for again every time trading is turned on. It used to be the `EXECUTION_LIVE_ACK
 config field, which meant one saved setting could arm real trading — wrong shape
 for a gate whose whole job is to make one action deliberate.
 
+**Keys must be VERIFIED, not merely present.** `src/execution/credentials.py` proves
+a pair works by calling `GET /v2/account` with it, and cache the verdict in
+`data/credential_checks.json` (a hash of the key id, never the key).
+`trading_service.turn_on` refuses while the environment in play has no passing
+verdict, so the executor can rely on "trading ON" meaning the key actually
+authenticates. A verdict belongs to the key that earned it: swapping keys expires
+it. A pass is cached, a failure is not (it may be the network). Verification is the
+Account popup's **Validate** button (`POST /api/v1/account/verify`), and a newly
+saved pair is checked as the form is saved. If you change how credentials are read,
+keep `credentials.keys_for()` the single place that maps an environment to its key
+pair — the check and the executor must never disagree about which key is in play.
+
 **The trading lock.** While `data/trading.json` says `on`, the server refuses
 every configuration write with HTTP 409 (`require_trading_off`): settings,
 account, rules, strategy create/rename/delete/select, `/backtest/run`,
@@ -78,7 +90,9 @@ acts on stale state.
    `trading_service.is_trading_on(settings)`. With trading OFF no order may be
    sent, whatever the signal says — the executor refuses and logs why. Reading the
    switch is cheap; ignoring it means the bot trades while the dashboard says it
-   is stopped.
+   is stopped. A green switch also implies the credentials passed verification:
+   if a call comes back 401/403 anyway, treat it as a revoked key — report it, and
+   do not retry past the backoff, since retrying a rejected key cannot help.
 3. **Authenticate** with HTTP Basic on every request — `APCA-API-KEY-ID` and
    `APCA-API-SECRET-KEY` headers. There is no login call and no token refresh.
 4. **Build the order** in `place_order(instrument, side, quantity,
