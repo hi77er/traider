@@ -287,14 +287,12 @@ def test_turning_on_through_the_api_reports_why_it_cannot(wired):
 
 
 def test_turning_on_a_live_strategy_through_the_api_needs_the_flag(tmp_path, monkeypatch, state_file, verified):
+    monkeypatch.setattr(credentials, "probe", _accepting_probe())
     settings = _s(tmp_path, execution_env="live", **LIVE_KEYS)
     app.dependency_overrides[get_effective_settings_dep] = lambda: settings
     try:
-        # Unverified first: the API reports THAT as the reason, not the flag.
-        blocked = client.post("/api/v1/trading/on", json={}).json()
-        assert blocked["ok"] is False and blocked["needs_verification"] is True
-
-        verified(settings, "live")
+        # The credentials are checked first, and they pass — so the next thing in the
+        # way is the acknowledgement, not the keys.
         assert client.post("/api/v1/trading/on", json={}).json()["needs_live_confirmation"] is True
         assert client.post("/api/v1/trading/on", json={"confirm_live": True}).json()["ok"] is True
         assert client.get("/api/v1/trading").json()["locked"] is True
@@ -305,14 +303,14 @@ def test_turning_on_a_live_strategy_through_the_api_needs_the_flag(tmp_path, mon
 # ---------------------------------------------------------------------------
 # configured is not the same as WORKING
 #
-# What proof is required depends on what is at stake:
-#   PAPER — verified AT the moment trading is turned on (a passing verdict on file
-#           is reused, so the first time costs one call and later ones cost none).
-#   LIVE  — must have passed BEFORE the click, against the key configured now.
+# Turning trading on re-checks the credentials of the environment in play against
+# the broker, every time, in BOTH environments — a second layer under the stored
+# verdict. A key can be revoked or rotated without the fingerprint changing, so
+# "it passed last week" is not evidence about now.
 # ---------------------------------------------------------------------------
-def test_paper_is_verified_when_trading_is_turned_on(tmp_path, state_file, monkeypatch):
-    """Nobody has to press Validate first for paper: the switch checks the pair
-    itself. Keys that were never looked at must still not be trusted."""
+def test_paper_is_revalidated_every_time_trading_is_turned_on(tmp_path, state_file, monkeypatch):
+    """Nobody has to press Validate first, and nobody gets to rely on an old pass
+    either: the switch asks the broker, and asking again is the point."""
     probe = _accepting_probe()
     monkeypatch.setattr(credentials, "probe", probe)
     settings = _s(tmp_path, **PAPER_KEYS)
@@ -321,17 +319,61 @@ def test_paper_is_verified_when_trading_is_turned_on(tmp_path, state_file, monke
     assert trading_service.turn_on(settings)["ok"] is True
     assert len(probe.calls) == 1, "turning trading on is where paper gets checked"
 
-    # ...and the verdict is reused, so a second start costs no call.
     trading_service.turn_off(settings)
     assert trading_service.turn_on(settings)["ok"] is True
-    assert len(probe.calls) == 1
+    assert len(probe.calls) == 2, "...and checked again, not remembered"
+
+
+def test_a_revoked_key_cannot_be_armed_from_a_stored_pass(tmp_path, state_file, monkeypatch):
+    """The case the second layer exists for: the verdict on file says the pair works,
+    and it does not work any more."""
+    monkeypatch.setattr(credentials, "probe", _accepting_probe())
+    settings = _s(tmp_path, **PAPER_KEYS)
+    assert trading_service.turn_on(settings)["ok"] is True
+    trading_service.turn_off(settings)
+    assert credentials.check_for(settings, "paper")["verified"] is True, "a pass is on file"
+
+    # Alpaca revokes it between then and now.
+    monkeypatch.setattr(
+        credentials, "probe",
+        _accepting_probe(ok=False, message="Alpaca rejected these credentials (401)"),
+    )
+    refused = trading_service.turn_on(settings)
+    assert refused["ok"] is False
+    assert "401" in refused["message"]
+    assert trading_service.is_trading_on(settings) is False, "trading must stay off"
+    assert credentials.check_for(settings, "paper")["verified"] is False, "the pass is spent"
+
+
+def test_a_broker_that_cannot_be_reached_leaves_trading_off(tmp_path, state_file, monkeypatch):
+    """Fail closed. A key we cannot prove is not a key we can claim to trade with."""
+    monkeypatch.setattr(
+        credentials, "probe",
+        lambda *a, **k: {"ok": False, "reason": "unreachable", "message": "Could not reach https://paper-api.alpaca.markets — timeout"},
+    )
+    settings = _s(tmp_path, **PAPER_KEYS)
+    refused = trading_service.turn_on(settings)
+    assert refused["ok"] is False
+    assert "Could not reach" in refused["message"]
+    assert trading_service.is_trading_on(settings) is False
 
 
 def test_paper_with_no_credentials_is_refused_and_nothing_is_written(tmp_path, state_file):
     settings = _s(tmp_path)  # no keys at all
     refused = trading_service.turn_on(settings)
     assert refused["ok"] is False
-    assert "not set" in refused["message"]
+    assert "Account Settings" in refused["message"], "the refusal must say what to do"
+    assert trading_service.is_trading_on(settings) is False
+    assert not state_file.exists(), "a refusal must not leave a half-written state file"
+
+
+def test_half_a_pair_is_not_enough_to_start(tmp_path, state_file):
+    """A key without its secret is not a credential. The execution gate catches it
+    before the credential check is even reached, and still says what to do."""
+    settings = _s(tmp_path, alpaca_paper_api_key="PK-key-only")
+    refused = trading_service.turn_on(settings)
+    assert refused["ok"] is False
+    assert "not set" in refused["message"] and "Account Settings" in refused["message"]
     assert trading_service.is_trading_on(settings) is False
     assert not state_file.exists()
 
@@ -349,29 +391,33 @@ def test_a_failed_check_blocks_paper_trading_and_says_why(tmp_path, state_file, 
     assert trading_service.is_trading_on(settings) is False
 
 
-def test_live_must_have_passed_BEFORE_the_click(tmp_path, state_file, monkeypatch):
-    """Real money is the case where discovering a bad key in the same click that
-    arms the bot is unacceptable: the check has to have happened already."""
+def test_live_is_revalidated_at_the_click_too(tmp_path, state_file, monkeypatch):
+    """Real money does not get a weaker gate than paper: the same fresh check runs,
+    and the only extra step is the acknowledgement."""
     probe = _accepting_probe()
     monkeypatch.setattr(credentials, "probe", probe)
     settings = _s(tmp_path, execution_env="live", **LIVE_KEYS)
 
-    refused = trading_service.turn_on(settings, confirm_live=True)
-    assert refused["ok"] is False
-    assert refused["needs_verification"] is True
-    assert "not been verified" in refused["message"]
-    assert "Account Settings" in refused["message"], "the refusal must say what to do"
-    assert probe.calls == [], "a refusal must not silently check the live key instead"
-
-    credentials.verify(settings, "live", force=True)
+    # Nothing on file, and it still starts — because the check happens NOW.
+    assert credentials.check_for(settings, "live")["verified"] is False
     result = trading_service.turn_on(settings, confirm_live=True)
-    assert result["ok"] is True
-    assert len(probe.calls) == 1, "the pass is reused, not re-checked"
+    assert result["ok"] is True and len(probe.calls) == 1
+
+    trading_service.turn_off(settings)
+    monkeypatch.setattr(
+        credentials, "probe",
+        _accepting_probe(ok=False, message="Alpaca rejected these credentials (401)"),
+    )
+    refused = trading_service.turn_on(settings, confirm_live=True)
+    assert refused["ok"] is False and refused["needs_verification"] is True
+    assert "401" in refused["message"]
+    assert trading_service.is_trading_on(settings) is False
+    assert len(probe.calls) == 1, "...and the refusal came from the fresh check"
 
 
-def test_changing_the_stored_key_expires_its_verdict(tmp_path, state_file, monkeypatch):
-    """A verdict belongs to the key that earned it, or swapping keys would inherit a
-    check that never happened."""
+def test_changing_the_stored_key_is_checked_at_the_next_start(tmp_path, state_file, monkeypatch):
+    """Swapping a key expires its verdict — and since the switch re-checks anyway,
+    what matters is whether the key in place now works."""
     monkeypatch.setattr(credentials, "probe", _accepting_probe())
     settings = _s(tmp_path, execution_env="live", **LIVE_KEYS)
     credentials.verify(settings, "live", force=True)
@@ -380,14 +426,11 @@ def test_changing_the_stored_key_expires_its_verdict(tmp_path, state_file, monke
 
     replaced = _s(tmp_path, execution_env="live", alpaca_live_api_key="LK-other", alpaca_live_api_secret="LS-other")
     state = credentials.check_for(replaced, "live")
-    assert state["verified"] is False and state["stale"] is True
-    refused = trading_service.turn_on(replaced, confirm_live=True)
-    assert refused["ok"] is False
-    assert "changed since they were verified" in refused["message"]
+    assert state["verified"] is False and state["stale"] is True, "the old pass is not inherited"
+    assert trading_service.turn_on(replaced, confirm_live=True)["ok"] is True
 
 
 def test_a_changed_paper_key_is_checked_again_rather_than_refused(tmp_path, state_file, monkeypatch):
-    """Paper is not gated on a prior pass, so a changed key simply gets looked at."""
     probe = _accepting_probe()
     monkeypatch.setattr(credentials, "probe", probe)
     settings = _s(tmp_path, **PAPER_KEYS)

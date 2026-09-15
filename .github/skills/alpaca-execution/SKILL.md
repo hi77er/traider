@@ -61,14 +61,12 @@ for a gate whose whole job is to make one action deliberate.
 **Keys must be VERIFIED, not merely present.** `src/execution/credentials.py` proves
 a pair works by calling `GET /v2/account` with it, and caches the verdict in
 `data/credential_checks.json` (a hash of the key id, never the key).
-`trading_service.turn_on` refuses while the environment in play has no passing
-verdict, so the executor can rely on "trading ON" meaning the key actually
-authenticates. Where the check happens depends on what is at stake: **paper is
-verified inside `turn_on`** (nothing to do beforehand, and a pass on file is reused
-so it costs one call ever), while **live requires a verdict obtained BEFORE the
-click** — arming real orders must not be the moment a bad key is discovered. A
-verdict belongs to the key that earned it: swapping keys expires it. A pass is
-cached, a failure is not (it may be the network). Verification is the Account
+`trading_service.turn_on` RE-CHECKS the pair of the environment in play on every
+attempt, in both environments, with `force=True`: the stored verdict is what the UI
+shows and what a save records, never what arms the bot, because a key can be revoked
+without its fingerprint changing. A failed re-check leaves trading OFF and returns
+the broker's reason as `message`; unreachable counts as failure, so there is no
+window where "trading ON" means a key that cannot place an order.
 popup's **Validate** button (`POST /api/v1/account/verify`), which checks the values
 submitted from the form — unsaved pairs included, and ONLY those: an empty box is
 answered as "nothing to validate" rather than falling back to the stored pair, so a
@@ -95,6 +93,13 @@ account, rules, strategy create/rename/delete/select, `/backtest/run`,
 Turning trading OFF is always allowed — that is what releases the lock, so it must
 not depend on the configuration it freezes. Never add a configuration write that
 skips this dependency.
+
+**Never arm the switch without asking the broker.** `turn_on` must keep calling
+`credentials.verify(..., force=True)` before it writes the ON state. Removing that
+call, reusing a stored verdict instead, or catching its failure to let trading start
+anyway would each restore the exact bug the check exists to prevent: a green switch
+and an order Alpaca refuses. If a new environment or broker is added, it gets the
+same gate — the check belongs to the switch, not to one broker's happy path.
 
 Key any cached broker state (positions, open orders) by
 **(environment, account)**, not by symbol. Caching by symbol alone means

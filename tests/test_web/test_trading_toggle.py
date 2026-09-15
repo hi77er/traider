@@ -232,9 +232,11 @@ def test_a_failed_check_is_quoted_rather_than_called_unverified(tooltips):
     assert "not been verified yet" not in tooltips["failed"]
 
 
-def test_an_unchecked_pair_says_where_to_validate_it(tooltips):
-    assert "not been verified yet" in tooltips["unchecked"]
-    assert "Account Settings" in tooltips["unchecked"]
+def test_an_unchecked_pair_is_checked_by_the_switch_itself(tooltips):
+    """There is nothing to press first: validating is no longer a prerequisite, the
+    switch does it. So the hint says when, not where."""
+    assert "checked when you switch it on" in tooltips["unchecked"]
+    assert "cannot start" not in tooltips["unchecked"], "nothing has failed yet"
 
 
 def test_a_verified_pair_is_only_an_invitation(tooltips):

@@ -13,10 +13,13 @@ confirmation is deliberately NOT a stored flag: the switch that starts trading i
 the one the operator is looking at when they press it.
 
 A key pair being *configured* is not the same as it *working*, so turning trading
-on also requires the credential check for that environment to have passed (see
+on re-checks the credentials of the environment in play against the broker — every
+time, both environments, whether or not a verdict is already on file (see
 ``src/execution/credentials.py``). Without it, "trading is ON" would be a promise
 the bot cannot keep: the switch would sit there green while every order bounced off
-a rejected key.
+a key that was revoked an hour ago. A failed check leaves trading OFF and says why;
+an unreachable broker counts as failure, because a key we cannot prove is not a key
+we can trade with.
 
 The state is runtime, not configuration — so it does not live in the strategy
 store (which the lock itself would otherwise block), it lives beside the datasets
@@ -88,27 +91,31 @@ def turn_on(settings, *, confirm_live: bool = False) -> dict:
             "execution": status_info,
         }
 
-    # Configured ≠ working. Which proof is required depends on what is at stake:
+    # Configured ≠ working, and "worked yesterday" ≠ works now: the switch is the
+    # last gate before orders exist, so the credentials in play are checked against
+    # the broker AT THIS MOMENT, whatever the stored verdict says. A key can be
+    # revoked, rotated, or belong to a restricted account, and none of that changes
+    # the fingerprint — so a cached pass is not evidence about right now.
     #
-    #   * PAPER — simulated orders, so there is nothing to lose by checking now
-    #     rather than demanding that the operator pressed Validate first. The pair is
-    #     verified at this moment (using a passing verdict if one is already on file,
-    #     so this costs no call after the first time).
-    #   * LIVE — real money, so the check must have happened BEFORE this click, and
-    #     must belong to the key that is configured now. Being asked to look at a
-    #     verdict is the point; discovering a bad key in the same click that arms the
-    #     bot is not.
+    # Both environments, because the same thing is at stake in both: an order the
+    # broker will refuse (a paper order is still a broken setup the operator should
+    # hear about, and the same code path runs live). `force=True` is what makes this
+    # a fresh call rather than a lookup; the verdict it reaches is recorded, so the
+    # popup and the header agree with the decision that was just made.
+    #
+    # Unreachable counts as failure here — fail closed. If we cannot prove the key
+    # works, we do not claim the bot is trading.
     env = status_info["env"]
-    if status_info["live"]:
-        unverified = credentials.require_verified(settings, env)
-    else:
-        check = credentials.verify(settings, env)
-        unverified = None if check["ok"] else check["message"]
-    if unverified:
+    check = credentials.verify(settings, env, force=True)
+    if not check["ok"]:
+        # The gate above already refused a half-configured pair, so the check either
+        # reached Alpaca or could not be made at all — both come back as a message.
+        reason = check["message"]
+        logger.warning("TRADING REFUSED: %s credentials failed revalidation — %s", env.upper(), reason)
         return {
             "ok": False,
             "needs_verification": True,
-            "message": f"Trading cannot start — {unverified}",
+            "message": f"Trading cannot start — {reason}",
             "state": get_state(settings),
             "execution": status_info,
             "credentials": credentials.check_for(settings, env),

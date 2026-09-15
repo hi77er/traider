@@ -285,10 +285,11 @@ remembers the answer:
   evidence about a credential.
 - A verdict belongs to the key that earned it: change the key and it expires, so a
   swapped key cannot inherit an old pass.
-- Trading **cannot be turned on** unless the pair for the environment in play passes:
-  **paper** is verified as part of turning trading on, **live** must have been
-  verified before the switch is armed. The switch says so on hover, and refuses with
-  the reason if pressed.
+- Trading **cannot be turned on** unless the pair for the environment in play works
+  **right now**: the switch re-checks it against Alpaca on every attempt, paper and
+  live alike. A verdict already on file is what the UI shows, not what arms the bot —
+  a key revoked between two clicks is caught here, and a failed re-check leaves
+  trading OFF and says why.
 
 The verdicts live in `data/credential_checks.json`, beside `trading.json` — runtime
 state, not configuration, and it stores a hash of the key id rather than the key.

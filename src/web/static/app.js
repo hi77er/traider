@@ -1427,13 +1427,15 @@ function renderTradingControls(d) {
       ? `Trading is ON (${env}) for ${d.strategy || "this strategy"} — click to stop`
       : !exec.ok
         ? `Trading cannot start — ${exec.message}`
-        : !ver.verified
-          // Configured keys are not verified keys: say so before the click, not
-          // only after the refusal — and when a check has already FAILED, quote it,
-          // because "not verified yet" would send the operator to press Validate
-          // when what they actually need is to fix the keys.
-          ? `Trading cannot start — ${ver.has_verdict && ver.message ? ver.message : `the ${env} credentials have not been verified yet (Account Settings → Validate)`}`
-          : `Start sending orders for ${d.strategy || "the active strategy"}`;
+        : ver.verified
+          // Verified is not a promise: the check is repeated on every attempt, so a
+          // key revoked an hour ago cannot be armed from a green light that is stale.
+          ? `Start sending orders for ${d.strategy || "the active strategy"} — the ${env} credentials are re-checked first`
+          : ver.has_verdict && ver.message
+            // A check has already FAILED: quote it. There is nothing to press first,
+            // so pointing at the Validate button would send the operator in a circle.
+            ? `Trading cannot start unless the ${env} credentials work — ${ver.message} They are re-checked when you switch it on.`
+            : `Start sending orders for ${d.strategy || "the active strategy"} — the ${env} credentials are checked when you switch it on`;
     btn.disabled = false; // the off switch must always be reachable
   }
   renderStatusDots(d); // this owns the label text, dot included

@@ -208,17 +208,21 @@ def test_an_unknown_environment_is_rejected():
         credentials.keys_for(Settings(_env_file=None), "production")
 
 
-def test_require_verified_explains_each_of_the_three_refusals(tmp_path, monkeypatch):
+def test_a_pass_and_a_failure_are_not_the_same_verdict(tmp_path, monkeypatch):
+    """Both are verdicts ABOUT the pair in play, which is what the UI keys off — the
+    difference is whether trading may start, and that is decided by a fresh check at
+    the switch, not by this record."""
     settings = _s(tmp_path, **PAPER)
-    assert "have not been verified yet" in credentials.require_verified(settings, "paper")
-
-    monkeypatch.setattr(credentials, "probe", lambda *a, **k: {"ok": False, "message": "401 nope"})
+    monkeypatch.setattr(credentials, "probe", lambda *a, **k: {"ok": False, "reason": "rejected", "message": "FAILED verification (bad key)"})
     credentials.verify(settings, "paper", force=True)
-    assert "FAILED verification" in credentials.require_verified(settings, "paper")
+    state = credentials.check_for(settings, "paper")
+    assert state["has_verdict"] is True and state["verified"] is False
+    assert state["reason"] == "rejected"
 
-    monkeypatch.setattr(credentials, "probe", lambda *a, **k: {"ok": True, "message": "ok", "account_number": "A1", "status": "ACTIVE"})
-    credentials.verify(settings, "paper", force=True)
-    assert credentials.require_verified(settings, "paper") is None
+    monkeypatch.setattr(credentials, "probe", lambda *a, **k: {"ok": True, "message": "ok", "account_number": "A1"})
+    assert credentials.verify(settings, "paper", force=True)["ok"] is True
+    state = credentials.check_for(settings, "paper")
+    assert state["verified"] is True and state["reason"] == "accepted"
 
 
 # ---------------------------------------------------------------------------

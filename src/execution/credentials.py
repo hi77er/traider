@@ -20,9 +20,11 @@ Three rules shape it:
   the account file is exactly what the trading lock freezes, so a verdict stored
   there could not even be refreshed while trading is on.
 
-The point of all of it: ``trading_service.turn_on`` refuses to start trading on an
-environment whose credentials have not been verified. "Trading is ON" must never be
-a promise the bot cannot keep.
+The point of all of it: ``trading_service.turn_on`` RE-CHECKS the credentials of the
+environment in play, every time it is pressed, in both environments. The stored
+verdict is what the UI shows and what a save records — it is never what arms the
+bot, because a key can be revoked without its fingerprint changing. "Trading is ON"
+must never be a promise the bot cannot keep.
 """
 
 from __future__ import annotations
@@ -270,10 +272,14 @@ def verify(
         return {**check_for(settings, env), "checked": False, "saved": True, "message": "Already verified"}
 
     result = probe(keys["key_id"], keys["secret"], keys["base_url"])
+    # A probe that does not classify its own answer still gets one: only a definite
+    # rejection may hold a pair back from being saved, and "not accepted" is otherwise
+    # an unknown, not a verdict of wrong.
+    reason = result.get("reason") or ("accepted" if result["ok"] else "unknown")
     record = {
         "fingerprint": fingerprint(env, keys["key_id"]),
         "ok": bool(result["ok"]),
-        "reason": result.get("reason", ""),
+        "reason": reason,
         "checked_at": _now_iso(),
         "message": result["message"],
         "account_number": result.get("account_number", ""),
@@ -295,9 +301,9 @@ def verify(
         # the badge. Without it a fresh result would be reported and then hidden.
         "has_verdict": True,
         # ``rejected`` means the broker said no (so this pair cannot be stored),
-        # ``unreachable``/``unexpected`` only mean we do not know yet.
-        "reason": result.get("reason", ""),
-        "rejected": result.get("reason") == "rejected",
+        # ``unreachable``/``unknown`` only mean we do not know yet.
+        "reason": reason,
+        "rejected": reason == "rejected",
         # False when the checked pair is NOT the stored one: it is valid, but it is
         # not what the bot would trade with until the form is saved.
         "saved": stored_match,
@@ -328,31 +334,3 @@ def verify_new(settings, skip_envs=()) -> Dict[str, Dict[str, Any]]:
             continue
         out[env] = verify(settings, env, force=True)
     return out
-
-
-def require_verified(settings, env: str) -> Optional[str]:
-    """The reason trading may not start on ``env``, or None when it may.
-
-    Returns a message rather than raising, because the caller's job is to explain
-    the refusal to an operator, not to fail a request.
-    """
-    keys = keys_for(settings, env)
-    if not keys["key_id"] or not keys["secret"]:
-        return f"The Alpaca {env.upper()} API key and secret are not set."
-    state = check_for(settings, env)
-    if state["verified"]:
-        return None
-    if state["stale"]:
-        return (
-            f"The Alpaca {env.upper()} credentials changed since they were verified — "
-            "verify them again in Account Settings before trading."
-        )
-    if state["checked_at"]:
-        return (
-            f"The Alpaca {env.upper()} credentials FAILED verification ({state['message']}). "
-            "Fix them in Account Settings, then verify again."
-        )
-    return (
-        f"The Alpaca {env.upper()} credentials have not been verified yet. "
-        "Open Account Settings and press Validate next to them."
-    )

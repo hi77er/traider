@@ -275,19 +275,20 @@ configuration, not the code - a strategy is judged against the bar you set.
   hide a broken live setup or spend real money. The header pills say which account
   and whether trading is on, and each run's `inputs.execution` records which
   environment was in play.
-- **Keys must be verified, not just configured.** The environment in play has to
-  have passed a real check against the broker before trading can start
-  (`GET /v2/account`, one call). Presence proves nothing: keys get copied from the
-  wrong account page, revoked, or paired with the other environment's secret, and
-  every one of those would previously have shown as a green "trading ON" while
-  every order bounced off a rejected key. Where the check happens differs by what
-  is at stake: **paper is verified as part of turning trading on** (nothing to do
-  first - and it is not asked twice once it has passed), while **live must have
-  passed before the switch is armed**, because discovering a bad key in the same
-  click that starts real orders is not a discovery worth having. The verdict is per
-  environment and belongs to the KEY that earned it, so swapping keys expires it
-  automatically. A pass is cached - editing an unrelated setting does not re-ask
-  Alpaca - while a failure is not, since it may just be the network.
+- **Keys must be verified, not just configured.** The environment in play is
+  re-checked against the broker (`GET /v2/account`, one call) **every time trading is
+  turned on**, paper and live alike, whether or not a verdict is on file. Presence
+  proves nothing: keys get copied from the wrong account page, revoked, or paired
+  with the other environment's secret, and every one of those would previously have
+  shown a green "trading ON" while every order bounced off a rejected key. A stored
+  pass is not enough on its own either, because a key can be **revoked between two
+  clicks** without its fingerprint changing — so the switch asks again rather than
+  trusting what it was told earlier, and a failed re-check leaves trading OFF and
+  says why. An unreachable broker counts as failure: a key we cannot prove is not a
+  key we can claim to trade with. The verdict is per environment and belongs to the
+  KEY that earned it, so swapping keys expires it automatically; a pass is cached
+  for display and saves - editing an unrelated setting does not re-ask Alpaca - while
+  a failure is not, since it may just be the network.
 - **A key pair the broker rejects is never written down.** Saving the account form
   checks the pairs it is about to add or change, and a pair Alpaca answers 401/403
   for is left out of the account file: a stored credential that cannot work would
