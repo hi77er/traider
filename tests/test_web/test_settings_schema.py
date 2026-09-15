@@ -13,6 +13,7 @@ exist.
 
 import json
 
+import pytest
 from fastapi.testclient import TestClient
 
 from src.config.settings import Settings as S
@@ -63,8 +64,32 @@ def test_the_model_section_is_gone():
     # The settings themselves stay: the code that reads them is still there, and
     # `.env` is where they are set now.
     s = S(_env_file=None)
-    assert s.model_type == "logistic_regression" and s.model_buy_threshold == 0.6
+    assert s.model_type == "rule_based" and s.model_buy_threshold == 0.6
     assert s.model_retrain_interval_days == 30
+
+
+def test_rule_based_is_the_model_in_force_by_default():
+    """rule_based is the only model implemented, and both the backtester and the
+    signal service refuse to run under anything else — so a fresh install must not
+    start on a model that cannot run. The other value stays legal for the day it is
+    built; a typo is still refused."""
+    assert S(_env_file=None).model_type == "rule_based"
+    assert S(_env_file=None, model_type="logistic_regression").model_type == "logistic_regression"
+    with pytest.raises(Exception):
+        S(_env_file=None, model_type="nope")
+
+
+def test_the_confidence_thresholds_still_gate_signals():
+    """They were retired from the strategy layer, not because they are dead: the
+    rule-based generator suppresses a signal whose confidence does not clear its
+    side's threshold. Removing the section moved them to `.env`, and this pins that
+    they are still read from the settings (a future cleanup must not delete them)."""
+    from src.model import simple_model
+
+    low = simple_model.resolve_signal([("BUY", 0.4)], buy_threshold=0.6, sell_threshold=0.6)
+    assert low.signal == "HOLD" and "below threshold" in low.reason
+    high = simple_model.resolve_signal([("BUY", 0.9)], buy_threshold=0.6, sell_threshold=0.6)
+    assert high.signal == "BUY"
 
 
 def test_validate_strategy_config():

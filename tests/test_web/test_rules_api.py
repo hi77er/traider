@@ -374,8 +374,9 @@ def test_update_strategy_saves_config(tmp_path):
 def test_update_strategy_drops_retired_model_keys(tmp_path):
     """A strategy saved while the Model section existed still carries its keys, and
     the panel posts the strategy back verbatim — so the save must DROP them rather
-    than reject a config the operator can no longer see or fix. The values came from
-    `.env` in the first place, so dropping them changes nothing in effect."""
+    than reject a config the operator can no longer see or fix. MODEL_TYPE was set to
+    the only value it could usefully take, and the two thresholds equal the `.env`
+    value, so dropping them changes nothing in effect."""
     st = _settings(tmp_path)
     rules_service.create_strategy(st, "alpha")
     rs = rules_mod.empty_strategy("alpha", "AAPL")

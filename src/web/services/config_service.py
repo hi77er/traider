@@ -304,12 +304,15 @@ PANEL_HIDDEN_STRATEGY_KEYS = frozenset({"EXECUTION_ENV"})
 RETIRED_STRATEGY_KEYS = frozenset(
     {
         "EXECUTION_LIVE_ACK",
-        # The Model group is gone from the panel: the only model that exists is the
-        # rule-based one (the backtester and the signal service both refuse to run
-        # under any other), so MODEL_TYPE was a switch between a working model and a
-        # non-existent one. The thresholds it sat beside only fed the model that is
-        # not implemented, and a retrain cadence has nothing to retrain. The settings
-        # stay on ``Settings`` for the code that reads them, and `.env` carries them.
+        # The Model group is gone from the panel. MODEL_TYPE was a switch between the
+        # one model that exists and one that does not (the backtester and the signal
+        # service both refuse to run under anything else), and a retrain cadence has
+        # nothing to retrain. The two THRESHOLDS are a different case: the rule-based
+        # generator really does read them — a fired rule becomes a signal only when
+        # its confidence clears its side's threshold — so retiring them here makes
+        # that gate a single `.env` value rather than one per strategy. Every stored
+        # strategy held the same 0.6 as `.env`, so nothing changed in effect. All
+        # four stay on ``Settings`` for the code that reads them.
         "MODEL_TYPE",
         "MODEL_BUY_THRESHOLD",
         "MODEL_SELL_THRESHOLD",

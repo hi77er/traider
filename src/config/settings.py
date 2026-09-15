@@ -153,7 +153,13 @@ class Settings(BaseSettings):
     features_min_lookback: int = Field(default=50, ge=1, description="Warmup bars before emitting features")
 
     # ── Model (signal generator) ─────────────────────────────────────
-    model_type: str = Field(default="logistic_regression", description="logistic_regression | rule_based")
+    # rule_based is the only model implemented: the backtester and the signal service
+    # both refuse to run under anything else, so it is the default rather than a value
+    # that has to be set correctly in .env to get a working bot.
+    model_type: str = Field(
+        default="rule_based",
+        description="rule_based (the only implemented model) | logistic_regression (planned)",
+    )
     model_buy_threshold: float = Field(default=0.6, ge=0.0, le=1.0)
     model_sell_threshold: float = Field(default=0.6, ge=0.0, le=1.0)
     model_retrain_interval_days: int = Field(default=30, ge=1)
