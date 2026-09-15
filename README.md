@@ -128,12 +128,13 @@ The portal is the whole interface:
 - **Account Settings** (🏦 header popup) - the Alpaca key pairs, the single data
   folder, backtest defaults and cloud/state storage; shared by all strategies. Each
   key pair has a **Validate** button, which checks the values **in the form** (typed
-  but unsaved included; a blank or masked box means "unchanged"). A badge appears
-  only once there is a verdict about the pair in play - `✓ verified · <account> ·
-  <time>` or `⚠ not valid`, the reason on hover - because "nobody has checked this"
-  is not news and a label sitting there before anyone asked is just noise. A newly
-  added pair is also checked as the form is saved, and a pair that already passed is
-  not re-checked on every save.
+  but unsaved included; a blank or masked box means "unchanged"). The badge is the
+  **result of a check, not stored state**: the rows are clean when the popup opens,
+  and a pair is labelled only once it has been checked in that visit - by Validate
+  (`✓ verified · <account> · <time>`, or `⚠ not valid` with the reason on hover) or
+  by the check a save runs on a newly added pair. A stored verdict is not painted on
+  open, because a masked box with "⚠ not valid" beside it reads as a bug rather than
+  as news. A pair that already passed is not re-checked on every save.
 - **Global Settings** (⚙ header popup) - the data provider + keys in `.env`
 - **Backtest panel** - run the engine, read the Gate and the metrics
 - **Historical Delta** - gap-check the dataset against the provider and refill

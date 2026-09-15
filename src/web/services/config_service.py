@@ -826,10 +826,14 @@ def get_account_schema() -> dict:
         "file_exists": path.exists(),
         "groups": account_sections(settings),
         "error": account_mod.account_error(settings),
-        # Whether each key pair has been proved to WORK, so the popup can show it
-        # without a second request. Read from the EFFECTIVE settings: the pair the
-        # bot would trade with lives in the account file (or .env), and a bare
-        # ``Settings()`` would report every stored key as unset.
+        # Whether each key pair has been proved to WORK. Read from the EFFECTIVE
+        # settings: the pair the bot would trade with lives in the account file (or
+        # .env), and a bare ``Settings()`` would report every stored key as unset.
+        #
+        # Deliberately NOT rendered by the popup when it opens: a stored verdict
+        # next to a masked (or empty) box reads as a bug — see `credentialRow` in
+        # app.js. The row shows only the answer to a check the operator asked for.
+        # This stays in the payload for API consumers and for debugging.
         "credentials": credentials_mod.all_checks(get_effective_settings()),
     }
 

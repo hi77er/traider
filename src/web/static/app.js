@@ -753,11 +753,11 @@ function fieldInput(f, prefix) {
     hint.textContent = f.readonly_note || "Read-only — change it directly in .env";
     wrap.appendChild(hint);
   }
-  // A credential pair gets its verdict and a Validate button, placed by the schema
-  // (f.verify) rather than by a hard-coded key list.
+  // A credential pair gets a Validate button, placed by the schema (f.verify)
+  // rather than by a hard-coded key list. The row renders CLEAN: a verdict is the
+  // answer to a question someone asked, and nobody has asked one in this form yet.
   if (f.verify) {
-    const creds = (state.account && state.account.credentials) || {};
-    wrap.appendChild(credentialRow(f.verify, creds[f.verify.env]));
+    wrap.appendChild(credentialRow(f.verify));
   }
   return wrap;
 }
@@ -768,23 +768,25 @@ function fieldInput(f, prefix) {
    environment's secret. Nothing local can tell, so the popup offers to ask Alpaca
    and reports what it said — and turning trading on is gated on the answer.
 
-   The badge reports a VERDICT and nothing else: no verdict about the pair in play
-   means no badge at all, because "not checked" is not news and a label sitting there
-   before anyone has asked is just noise. */
+   The badge is a RESULT, not a state: it is painted by the answer to a check
+   (the Validate button, or the check a save runs on a new pair) and by nothing
+   else. A stored verdict is therefore not shown when the popup opens, because the
+   box beside it is empty or masked and "⚠ not valid" next to what looks like no
+   credentials reads as a bug — the row is clean until someone asks. */
 function credWhen(iso) {
   if (!iso) return "";
   const d = new Date(iso);
   return isNaN(d.getTime()) ? "" : `${d.toISOString().slice(11, 16)} UTC`;
 }
 
-function credentialRow(spec, cred) {
+function credentialRow(spec) {
   const row = document.createElement("div");
   row.className = "cred-row";
   row.dataset.env = spec.env;
   const badge = document.createElement("span");
   badge.id = "cred-badge-" + spec.env;
+  clearCredentialBadge(badge);
   row.appendChild(badge);
-  applyCredentialBadge(badge, cred || {});
   const btn = document.createElement("button");
   btn.type = "button";
   btn.id = "cred-verify-" + spec.env;
@@ -796,15 +798,32 @@ function credentialRow(spec, cred) {
   return row;
 }
 
+// An empty badge — the state a row is in until something is checked.
+function clearCredentialBadge(badge) {
+  if (!badge) return;
+  badge.hidden = true;
+  badge.className = "cred-badge";
+  badge.textContent = "";
+  badge.title = "";
+}
+
+// Clears every row. Called when the popup opens: the verdicts from the last visit
+// are stale by definition (the keys may have changed since), so the operator gets
+// one clean surface and an explicit reason to press Validate.
+function clearCredentialBadges() {
+  for (const env of ["paper", "live"]) {
+    clearCredentialBadge(document.getElementById("cred-badge-" + env));
+  }
+}
+
 function applyCredentialBadge(badge, cred) {
   if (!badge) return;
   const c = cred || {};
-  // Only a verdict ABOUT the pair in play is worth showing.
-  badge.hidden = !c.has_verdict;
+  // Only a verdict ABOUT the pair in play is worth showing. A check that had
+  // nothing to look at ("both fields are needed") is an answer to the press, not a
+  // verdict about a pair, so it leaves the row alone and speaks in the message area.
   if (!c.has_verdict) {
-    badge.className = "cred-badge";
-    badge.textContent = "";
-    badge.title = "";
+    clearCredentialBadge(badge);
     return;
   }
   if (c.verified) {
@@ -812,25 +831,17 @@ function applyCredentialBadge(badge, cred) {
     if (c.account_number) bits.push(c.account_number);
     const when = credWhen(c.checked_at);
     if (when) bits.push(when);
+    badge.hidden = false;
     badge.className = "cred-badge ok";
     badge.textContent = bits.join(" · ");
     badge.title = c.message || "These credentials were accepted by Alpaca.";
   } else {
     // The reason matters more than the verdict, but it can be long: short label,
     // full text on hover, and the popup's message area repeats it.
+    badge.hidden = false;
     badge.className = "cred-badge bad";
     badge.textContent = "⚠ not valid";
     badge.title = c.message || "Verification failed.";
-  }
-}
-
-// Updates the badges IN PLACE. The popup must never be re-rendered here: the
-// operator may have just typed new keys, and a re-render would discard them.
-function renderCredentialState(creds, exceptEnv) {
-  if (!creds) return;
-  for (const env of Object.keys(creds)) {
-    if (env === exceptEnv) continue; // its own verdict is applied separately
-    applyCredentialBadge(document.getElementById("cred-badge-" + env), creds[env]);
   }
 }
 
@@ -855,7 +866,9 @@ async function validateCredentials(spec, btn) {
       body: JSON.stringify(body),
     });
     const res = r.result || r;
-    renderCredentialState(r.credentials, env); // the other pair, from stored state
+    // Only the pair that was just checked: the response also carries the stored
+    // state of every other pair, and painting that here is how a stale "not valid"
+    // ended up next to a row nobody had asked about.
     applyCredentialBadge(document.getElementById("cred-badge-" + env), res);
     showAccountErrors(credentialMessage(env, res), res.ok ? "ok" : "warn");
     flashToast(res.message || "", res.ok ? "ok" : "warn");
@@ -1137,6 +1150,9 @@ function openAccountSettings() {
   if (!backdrop) return;
   if (!state.account) loadAccount(true); // render the fields before showing
   showAccountErrors(""); // no stale validation notice from a previous open/save
+  // ...and no stale verdict either: rows only carry a badge for a check performed
+  // while this popup has been open.
+  clearCredentialBadges();
   backdrop.hidden = false;
 }
 
@@ -1504,6 +1520,11 @@ async function saveAccount() {
     const good = checks.filter(([, c]) => c.checked && c.ok);
     await loadAccount(true); // re-read so secrets re-mask and values refresh
     await loadTrading(); // the keys may have just changed, so re-resolve the target
+    // The re-render wiped the rows, so repaint the verdicts THIS save produced —
+    // they are answers to the save, which is a check someone asked for.
+    for (const [env, c] of checks) {
+      applyCredentialBadge(document.getElementById("cred-badge-" + env), c);
+    }
     if (bad.length) {
       showAccountErrors(
         bad.map(([env, c]) => `${env.toUpperCase()} credentials are NOT valid: ${c.message}`).join("\n"),

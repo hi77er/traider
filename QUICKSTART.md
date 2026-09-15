@@ -260,9 +260,11 @@ remembers the answer:
 - **🏦 Account Settings** has a **Validate** button per pair, which checks the values
   **currently in the boxes** — so a pair can be tested before it is saved. A blank or
   masked box means "unchanged" and falls back to what is stored, exactly like Save.
-- A badge appears next to a pair **only once there is a verdict about it**:
-  `✓ verified · <account> · <time>`, or `⚠ not valid` with the reason on hover. Before
-  anyone has asked, the row is clean — no label, no message.
+- A badge appears next to a pair **only after it has been checked in that visit**:
+  `✓ verified · <account> · <time>`, or `⚠ not valid` with the reason on hover. The
+  rows are clean when the popup opens - a verdict already on file is not painted,
+  because a masked box with "⚠ not valid" beside it reads as a bug rather than as
+  news. Every visit starts from "press Validate to find out".
 - Pressing Validate with nothing in the boxes says so; a rejection shows what Alpaca
   answered; a pass shows the account that answered.
 - A pair is also checked **automatically when it is new** (as the form is saved). A

@@ -514,9 +514,14 @@ def test_the_popup_renders_a_validate_button_and_a_verdict():
     assert "spec.key_key" in js and "spec.secret_key" in js
     assert "/api/v1/account/verify" in js
     assert "async function validateCredentials(" in js
-    assert "renderCredentialState(" in js
+    # The row is built with NO verdict: a badge is the answer to a check, and no
+    # check has been run yet. Painting the stored state here is what showed
+    # "⚠ not valid" next to a box the operator had not filled in.
+    assert "credentialRow(f.verify)" in js
+    assert "renderCredentialState(" not in js, "stored verdicts must never be painted"
+    assert "clearCredentialBadges();" in js, "opening the popup clears the last visit"
     # No verdict about the pair in play => no badge at all (not "not checked").
-    assert "badge.hidden = !c.has_verdict" in js
+    assert "if (!c.has_verdict) {\n    clearCredentialBadge(badge);" in js
     assert "function credentialMessage(" in js
     css = (ROOT / "src" / "web" / "static" / "style.css").read_text(encoding="utf-8")
     assert ".cred-row" in css and ".cred-badge" in css
