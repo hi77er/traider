@@ -1063,7 +1063,10 @@ function renderEnvSelect(d, force) {
     }
   }
   if (force || document.activeElement !== sel) sel.value = exec.env || "paper";
-  sel.className = `exec-select ${exec.ok ? (exec.live ? "live" : "paper") : "blocked"}`;
+  // The tint is the ACCOUNT TYPE (teal paper / red live) and must not change when
+  // orders would be refused — `blocked` only adds a ring, so the switch never
+  // hides which account is selected while it warns about it.
+  sel.className = `exec-select ${exec.live ? "live" : "paper"}${exec.ok ? "" : " blocked"}`;
   sel.title = exec.ok
     ? `${exec.broker} · ${exec.env} — ${exec.base_url}`
     : `Orders would be REFUSED — ${exec.message}`;
@@ -1172,7 +1175,14 @@ function renderExecutionPanel(d) {
   const btn = $("trading-toggle");
   if (btn) {
     btn.textContent = tr.on ? "⏹ Turn trading off" : "▶ Turn trading on";
-    btn.className = tr.on ? "ghost small danger" : "primary small";
+    // Grey = nothing running, green = armed; the extra `live` ring means armed with
+    // real money. The label always names the ACTION, the colour carries the STATE.
+    btn.className = `exec-toggle ${tr.on ? "on" : "off"}${tr.on && exec.live ? " live" : ""}`;
+    btn.title = tr.on
+      ? `Trading is ON (${String(tr.env || "").toUpperCase()}) for ${d.strategy || "this strategy"} — click to stop`
+      : exec.ok
+        ? `Start sending orders for ${d.strategy || "the active strategy"}`
+        : `Trading cannot start — ${exec.message}`;
     btn.disabled = false; // the off switch must always be reachable
   }
   const msg = $("exec-msg");

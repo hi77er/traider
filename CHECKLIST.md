@@ -437,9 +437,10 @@ The unfinished Phase 2 & 3 work lives here so Risk & Execution can proceed first
 ### Go Live
 - [ ] **live-go-live** (39) — Switch to live trading
   - [ ] Add the Alpaca LIVE key pair in Account Settings (paper keys are not accepted for live)
-  - [ ] Switch the header dropdown to `LIVE — REAL ORDERS` and confirm it turns red
-  - [ ] Confirm the Execution panel shows no amber warning (green = the keys resolve)
-  - [ ] Turn trading ON and accept the live confirmation prompt (asked every time)
+  - [ ] Switch the header dropdown to `LIVE — REAL ORDERS` and confirm the pill turns red
+  - [ ] Confirm the Execution panel shows no ⚠ refusal message (an amber ring on the pill = the keys do not resolve)
+  - [ ] Turn trading ON from the header switch and accept the live confirmation prompt (asked every time)
+  - [ ] Confirm the green switch gains its red ring (armed, with real money)
   - [ ] Confirm the Trading panel appears under the chart and the config/backtest buttons are disabled
   - [ ] Start with 1% of capital
   - [ ] Verify first week:

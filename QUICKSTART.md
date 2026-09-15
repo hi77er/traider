@@ -230,12 +230,17 @@ window/period parameters under **Feature Parameters** (`FEATURES_*`). The
 
 ### Trading switch and the configuration lock
 
-The **Execution** panel (top of the right column) holds one setting: **Turn trading
-on / off**. Trading always starts OFF, and turning it on is refused while the
-selected Alpaca account has no API keys — so "trading on" can never be a lie. A
-strategy pointed at the **live** account asks for a confirmation every time, and the
-header dropdown answers "which account is this?" at a glance: teal `Paper`, red
-`LIVE`, amber when orders would be refused.
+The two controls that decide what gets traded live in the header, beside the logo:
+
+| Control | Colour says |
+|---------|-------------|
+| **Account pill** (outlined, with a caret) | **Teal `Paper`** / **red `LIVE`** — which account the orders go to. An amber ring means orders would be refused (no keys for that account); the pill keeps its tint, because the warning must not hide the account type it is warning about. |
+| **Master switch** (filled button) | **Neutral outline = nothing running**, **solid green = armed**, and a **red ring** around the green when it is armed on the **live** account. The label always names the action. |
+
+Trading always starts OFF, and turning it on is refused while the selected Alpaca
+account has no API keys — so "trading on" can never be a lie. A strategy pointed at
+the **live** account asks for a confirmation every time, and the **Execution** panel
+on the right reports the resolved target and spells out the lock.
 
 While trading is ON, a **Trading** panel appears under the chart and the server
 refuses every configuration write with HTTP 409 — settings, account, rules,
@@ -372,7 +377,7 @@ MAX_CONSECUTIVE_LOSSES=3
 # Execution — Alpaca credentials (account-wide). Which environment an order goes
 # to (paper or live) is chosen PER STRATEGY from the header dropdown in the
 # dashboard — it is not a field in any settings panel. Orders are only ever sent
-# while trading is ON (the Execution panel's switch, stored in data/trading.json).
+# while trading is ON (the header's master switch, stored in data/trading.json).
 ALPACA_PAPER_API_KEY=YOUR_PAPER_KEY_ID
 ALPACA_PAPER_API_SECRET=YOUR_PAPER_SECRET  # ← AWS Secrets Manager in prod
 ALPACA_LIVE_API_KEY=

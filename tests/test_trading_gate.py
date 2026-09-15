@@ -22,6 +22,7 @@ freeze switch is stored.
 from __future__ import annotations
 
 import json
+import re
 import stat
 from pathlib import Path
 
@@ -343,7 +344,8 @@ def test_a_retired_key_is_dropped_not_rejected(tmp_path):
 # ---------------------------------------------------------------------------
 def test_the_trading_switch_and_its_lock_are_wired_into_the_dashboard():
     html = (ROOT / "src" / "web" / "templates" / "index.html").read_text(encoding="utf-8")
-    # The Execution panel: one setting — the trading toggle — plus honest context.
+    # The Execution panel reports the resolved target and explains the lock; the
+    # switch itself lives in the header (see the layout test below).
     assert 'id="execution-card"' in html
     assert 'id="trading-toggle"' in html
     assert 'id="exec-state-line"' in html
@@ -370,15 +372,44 @@ def test_the_trading_switch_and_its_lock_are_wired_into_the_dashboard():
 
 
 def test_the_header_keeps_identity_and_the_switch_left_and_config_right():
-    """Which account the bot trades is identity, not a setting: it sits beside the
-    logo, always on screen. Configuration and navigation stay on the right."""
+    """Which account the bot trades and whether it is trading are identity, not
+    settings: both sit beside the logo, always on screen. Configuration and
+    navigation stay on the right."""
     html = (ROOT / "src" / "web" / "templates" / "index.html").read_text(encoding="utf-8")
     left = html.index('class="header-left"')
     switch = html.index('id="exec-env"')
+    toggle = html.index('id="trading-toggle"')
     actions = html.index('class="header-actions"')
     assert left < switch < actions, "the paper/live switch must sit in the left group"
+    assert left < toggle < actions, "the master switch must sit in the left group too"
     for el in ("open-account-settings", "open-global-settings"):
         assert html.index(el) > actions, f"{el} must stay in the right group"
     # The logo is the product name, not the page name.
     assert "TRAIDER Dashboard" not in html
     assert "📈 TRAIDER<" in html
+
+
+def test_the_two_header_controls_are_coloured_by_different_things():
+    """The account type tints the outlined pill; the run state fills the button.
+    They are deliberately different shapes AND different scales, because a live
+    account with trading off and a paper account with trading on must not look
+    alike at a glance."""
+    css = (ROOT / "src" / "web" / "static" / "style.css").read_text(encoding="utf-8")
+
+    def rule(selector):
+        start = css.index(selector + " {")
+        return css[start:css.index("}", start)]
+
+    paper, live = rule(".exec-select.paper"), rule(".exec-select.live")
+    assert paper != live
+    # "Would be refused" is a RING. If it also repainted the pill, the warning
+    # would hide the account type it is warning about.
+    blocked = rule(".exec-select.blocked")
+    assert "box-shadow" in blocked
+    assert not re.search(r"(?<![-a-z])color\s*:", blocked), "blocked must not recolour the pill"
+    assert not re.search(r"(?<![-a-z])background-color\s*:", blocked)
+
+    off, on = rule(".exec-toggle.off"), rule(".exec-toggle.on")
+    assert off != on
+    # Green = armed, grey = not. The extra ring is for "armed with real money".
+    assert ".exec-toggle.on.live" in css

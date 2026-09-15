@@ -45,11 +45,15 @@ header h1 { font-size: 20px; margin: 0; }
   color: var(--muted);
 }
 
-/* Execution — the paper/live dropdown in the header, and the at-a-glance answer
-   to "is this bot about to send REAL orders?". A paper and a live Alpaca account
-   look identical in every other panel, so an unlabelled dashboard is how you
-   trade live by accident. The dropdown both selects and displays the state, and
-   it is coloured by that state rather than by focus.
+/* Execution — the two header controls, and the at-a-glance answer to "is this bot
+   about to send REAL orders?". A paper and a live Alpaca account look identical in
+   every other panel, so an unlabelled dashboard is how you trade live by accident.
+
+   They read as two different KINDS of control, because they answer two different
+   questions:
+     - the account type is an OUTLINED pill, tinted teal (paper) or red (live);
+     - the master switch is a FILLED button, grey when nothing is running and
+       green when it is.
    No `display` property in these rules on purpose: the UA [hidden] rule must win. */
 .exec-select {
   appearance: none;
@@ -70,10 +74,37 @@ header h1 { font-size: 20px; margin: 0; }
 }
 .exec-select:hover { border-color: #3a4152; }
 .exec-select:focus { outline: 2px solid rgba(76, 141, 255, 0.5); outline-offset: 1px; }
-.exec-select.paper { color: #7fd1c1; border-color: rgba(38, 166, 154, 0.5); background-color: rgba(38, 166, 154, 0.10); }
-.exec-select.live { color: #ff8a80; border-color: rgba(239, 83, 80, 0.6); background-color: rgba(239, 83, 80, 0.14); }
-.exec-select.blocked { color: #f0b429; border-color: rgba(240, 180, 41, 0.5); background-color: rgba(240, 180, 41, 0.12); }
+/* PAPER: simulated money. Teal reads as "safe", so it is the calm state. */
+.exec-select.paper { color: #6fdbc4; border-color: rgba(38, 166, 154, 0.75); background-color: rgba(38, 166, 154, 0.16); }
+/* LIVE: real money. Red is the state that must never be a surprise. */
+.exec-select.live { color: #ff8a80; border-color: rgba(239, 83, 80, 0.85); background-color: rgba(239, 83, 80, 0.20); }
+/* "Orders would be refused" is a RING, not a replacement colour: the account type
+   must stay readable, or the warning would hide the very thing it warns about. */
+.exec-select.blocked { border-color: rgba(240, 180, 41, 0.9); box-shadow: 0 0 0 2px rgba(240, 180, 41, 0.35); }
 .exec-select option { background: var(--card); color: var(--text); }
+
+/* The master switch: colour is the RUN state, not the account. Idle is a neutral
+   outlined button — NOT dimmed, or it reads as disabled and nobody clicks the one
+   control that starts the bot — and armed is a solid green fill. */
+.exec-toggle {
+  border-radius: 999px;
+  padding: 5px 14px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  cursor: pointer;
+  border: 1px solid var(--border);
+}
+.exec-toggle.off { color: var(--text); border-color: var(--border); background: transparent; }
+.exec-toggle.off:hover { border-color: #3a4152; background: rgba(255, 255, 255, 0.05); }
+.exec-toggle.on { color: #04231a; border-color: #2ecc8f; background: #2ecc8f; font-weight: 700; }
+.exec-toggle.on:hover { background: #46dda1; border-color: #46dda1; }
+/* Armed for real: green says "running", the red ring says "with real money". */
+.exec-toggle.on.live { box-shadow: 0 0 0 2px rgba(239, 83, 80, 0.65); }
+.exec-toggle:focus-visible { outline: 2px solid rgba(76, 141, 255, 0.6); outline-offset: 2px; }
+.exec-toggle:disabled { opacity: 0.55; cursor: not-allowed; }
 
 /* The same signal inside a report, next to "What was tested". */
 .rp-exec { font-weight: 600; }
@@ -88,7 +119,7 @@ header h1 { font-size: 20px; margin: 0; }
   border-bottom: 1px solid var(--border);
   margin-bottom: 12px;
 }
-.exec-state.on { color: #7fd1c1; font-weight: 600; }
+.exec-state.on { color: #6fdbc4; font-weight: 600; }
 .exec-warn { color: #f0b429 !important; }
 
 /* Trading panel under the chart, shown only while trading is ON. */
