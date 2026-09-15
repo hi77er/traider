@@ -54,6 +54,12 @@ HARNESS = r"""
 const log = { api: [], toasts: [], renders: [], dialogs: [], loads: 0 };
 let confirmAnswer = true;
 
+// The guard arms a safety timeout. These tests are about the flags, not the clock,
+// and a pending timer would keep node alive for 15 seconds after the last case.
+const scheduled = [];
+function setTimeout(cb, ms) { scheduled.push({ cb: cb, ms: ms }); return scheduled.length; }
+function clearTimeout() {}
+
 function makeEl(id) {
   const listeners = {};
   const registered = [];
@@ -69,13 +75,13 @@ function makeEl(id) {
       (listeners[type] = listeners[type] || []).push({ cb: cb, once: !!(opts && opts.once) });
     },
     fire: function (type) {
-      // Honour {once: true} the way the DOM does, so a second fire cannot arm
-      // the guard twice.
-      listeners[type] = (listeners[type] || []).filter(function (entry) {
-        if (!entry.once) return true;
-        entry.cb({});
-        return false;
-      });
+      // Fire every listener, exactly as the DOM does, and drop the ones registered
+      // with {once: true} afterwards. A fake that only ever followed the `once` path
+      // would stop calling the listener the moment one lost that option — which is
+      // how a broken guard can look tested.
+      const entries = listeners[type] || [];
+      listeners[type] = entries.filter(function (entry) { return !entry.once; });
+      entries.forEach(function (entry) { entry.cb({}); });
     },
   };
 }
@@ -158,7 +164,31 @@ function loadTrading() { log.loads += 1; return Promise.resolve(); }
   await onEnvChange();
   out.unchanged = { api: log.api.length, loads: log.loads };
 
-  // 6. Nothing is registered on the document: only the select can arm the guard.
+  // 6. Once a change has been dealt with, the guard is released — so a restore that
+  //    arrives later is refused again, and a second deliberate switch still works.
+  //    (The first version latched `true` forever and armed its listeners once.)
+  log.api = []; log.renders = []; log.dialogs = []; log.loads = 0;
+  sel.value = "paper";              // a restore of the stored value
+  await onEnvChange();
+  out.afterHandled = { api: log.api.length, restoredTo: sel.value };
+
+  log.api = []; log.dialogs = []; log.loads = 0;
+  sel.fire("pointerdown");
+  sel.value = "live";
+  confirmAnswer = true;
+  await onEnvChange();
+  out.secondSelection = { api: log.api.length, loads: log.loads };
+
+  // 7. The keyboard works for a SECOND switch too: with `{once: true}` listeners the
+  //    guard was already disarmed by then, and the choice was silently thrown away.
+  log.api = []; log.dialogs = []; log.loads = 0;
+  sel.value = "paper";
+  sel.fire("keydown");
+  sel.value = "live";
+  await onEnvChange();
+  out.secondKeySelection = { api: log.api.length };
+
+  // 8. Nothing is registered on the document: only the select can arm the guard.
   out.documentListeners = docAdds.slice();
   out.selectRegistrations = sel.registered.slice();
 
@@ -225,4 +255,23 @@ def test_reselecting_the_stored_value_is_a_noop(guard_results):
 def test_only_the_dropdown_itself_can_arm_the_guard(guard_results):
     """A click elsewhere on the page is not a decision about the account."""
     assert guard_results["documentListeners"] == []
-    assert set(guard_results["selectRegistrations"]) == {"pointerdown", "keydown"}
+    # pointerdown/keydown arm it; blur releases it when the menu closes with no choice.
+    assert set(guard_results["selectRegistrations"]) == {"pointerdown", "keydown", "blur"}
+
+
+def test_the_guard_is_released_after_each_change(guard_results):
+    """It must not become a latch: a restore arriving after a handled change is
+    still refused, and the next deliberate switch still gets through."""
+    after = guard_results["afterHandled"]
+    assert after["api"] == 0, "a restore after a switch must not be written either"
+    assert after["restoredTo"] == "paper"
+
+    assert guard_results["secondSelection"]["api"] == 1
+    assert guard_results["secondSelection"]["loads"] == 1
+
+
+def test_a_second_keyboard_switch_also_works(guard_results):
+    """Regression: the listeners were registered with `{once: true}`, so after the
+    first interaction nothing armed the guard and every later choice was discarded as
+    if a browser had restored it."""
+    assert guard_results["secondKeySelection"]["api"] == 1

@@ -114,7 +114,12 @@ The portal is the whole interface:
   on the live account while another stays on paper. Only a real gesture on the
   dropdown can change it: a browser-restored value (bfcache, back/forward, crash
   recovery) fires `change` without anyone choosing anything, so it is ignored and
-  the display snaps back to what the server said.
+  the display snaps back to what the server said. That guard is released after every
+  handled change, on blur, and by a timeout, so it protects the control without
+  becoming a latch — and while a gesture is in flight the control is left completely
+  untouched, because the status dots live in the option TEXT and rewriting a
+  `<select>` under its open popup cancels the menu (macOS renders it natively). The
+  dots pause for that moment; the click lands.
 - **Trading panel** (appears under the chart while trading is ON) - a standing
   reminder that the strategy is armed, with a one-click stop. While it is
   visible every configuration surface is locked and the backtest buttons are

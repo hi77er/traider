@@ -68,7 +68,15 @@ const sel = makeEl("exec-env");
 function $(id) { return id === "exec-env" ? sel : id === "trading-toggle" ? btn : null; }
 
 function makeOption(value) {
-  return { value: value, textContent: "" };
+  // Every assignment is counted, so "the dropdown was not rewritten" is measurable
+  // rather than a matter of reading the source.
+  let text = "";
+  return {
+    value: value,
+    writes: 0,
+    get textContent() { return text; },
+    set textContent(v) { this.writes += 1; text = v; },
+  };
 }
 function syncOptions(d) {
   const wanted = (d.env_options || []).map((o) => o.value);
@@ -97,6 +105,8 @@ global.window = global;
 global.window.matchMedia = function (q) { return { matches: reducedMotion && q.indexOf("reduce") > -1 }; };
 
 const state = { tradingPayload: null };
+// `_envInUse` (set by the gesture guard while the dropdown is being used) comes with
+// the extracted block, which runs from the dot constants down through the guard.
 function setPayload(env, live, ok, on) {
   const p = {
     env_options: OPTIONS,
@@ -156,6 +166,31 @@ reducedMotion = false;
 // 6. an account with no keys says so in words, next to its dot.
 render(setPayload("paper", false, false, false));
 snap("blockedPaper");
+
+// 7. An idle dropdown is not rewritten. In the calm state nothing changes, and in
+//    the blinking one only the blinking glyph does — writing the same string back
+//    would churn the DOM for nothing.
+function resetWrites() { sel.options.forEach(function (o) { o.writes = 0; }); }
+function totalWrites() { return sel.options.reduce(function (n, o) { return n + o.writes; }, 0); }
+render(setPayload("paper", false, true, false));
+resetWrites();
+render(state.tradingPayload);
+render(state.tradingPayload);
+out.idleWrites = totalWrites();
+
+// 8. WHILE A GESTURE IS IN FLIGHT the select is never touched. Mutating it under an
+//    open popup cancels the native menu on macOS, which is why choosing an
+//    environment used to need several attempts.
+render(setPayload("live", true, true, false)); // state change => the dot starts LIT
+resetWrites();
+_envInUse = true;
+tick(); // the phase flips, but the control is frozen
+out.textWhileFrozen = optionText("live");
+out.writesWhileInUse = totalWrites();
+_envInUse = false;
+render(state.tradingPayload); // released: the text must catch up to the phase
+out.textAfterRelease = optionText("live");
+out.writesAfterRelease = totalWrites();
 
 process.stdout.write(JSON.stringify(out));
 """
@@ -239,3 +274,26 @@ def test_an_account_that_cannot_trade_says_so_beside_its_dot(dot_results):
     assert got["paper"] == f"Paper — simulated, no real money — ⚠ no keys {CALM}"
     # The other option is untouched: only the SELECTED account's problem is ours.
     assert got["live"] == f"LIVE — REAL ORDERS {ALERT}"
+
+
+def test_an_idle_dropdown_is_not_rewritten(dot_results):
+    """Writing the same string back costs nothing visible and everything measurable:
+    it churns a native control for no reason."""
+    assert dot_results["idleWrites"] == 0
+
+
+def test_the_dropdown_is_left_alone_while_it_is_in_use(dot_results):
+    """The reported bug: choosing paper/live needed several attempts.
+
+    The dots are part of the option TEXT, so a blinking live dot rewrote an option
+    ~1.4 times a second — and mutating a <select> under its open popup cancels the
+    menu on macOS (that popup is a native menu), so the click never became a change
+    event. With a gesture in flight the select is frozen; the text catches up on the
+    next tick once it is released.
+    """
+    assert dot_results["writesWhileInUse"] == 0, "not one write under an open popup"
+    # ...and once released it catches up in a single write, so the freeze cannot
+    # leave the pill showing a stale dot.
+    assert dot_results["writesAfterRelease"] == 1
+    assert dot_results["textAfterRelease"] != dot_results["textWhileFrozen"]
+    assert dot_results["textAfterRelease"].endswith(ALERT_OFF)

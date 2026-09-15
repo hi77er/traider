@@ -1220,7 +1220,7 @@ function renderEnvSelect(d, force) {
       sel.appendChild(opt);
     }
   }
-  if (force || document.activeElement !== sel) sel.value = exec.env || "paper";
+  if (force || (!_envInUse && document.activeElement !== sel)) sel.value = exec.env || "paper";
   // The class is CONSTANT: the pill is styled in exactly one way, in every state,
   // and matches the master switch. So nothing may ride on the class list — the
   // only places a state can show are the words and the status dot.
@@ -1282,14 +1282,23 @@ function renderStatusDots(d) {
       statusDot(tr.on ? "on" : "off");
   }
   const sel = $("exec-env");
-  if (sel) {
+  // Left alone while a gesture is in flight. The dots live in the option TEXT, so a
+  // blinking live dot rewrites an option ~1.4 times a second — and mutating a
+  // <select> beneath its open popup cancels the menu on macOS (the popup there is a
+  // native menu), so the click never became a change event. Switching modes needed
+  // several attempts for exactly that reason. The dots pause for those moments; the
+  // switch's own dot keeps blinking.
+  if (sel && !_envInUse) {
     for (const o of p.env_options || []) {
       const opt = Array.from(sel.options).find((x) => x.value === o.value);
       if (!opt) continue;
       // Every option carries its own dot, so the open list shows what each choice
       // means. The account that cannot trade says so in words.
       const blocked = !exec.ok && o.value === (exec.env || "paper");
-      opt.textContent = `${o.label}${blocked ? " — ⚠ no keys" : ""} ${statusDot(o.value)}`;
+      const next = `${o.label}${blocked ? " — ⚠ no keys" : ""} ${statusDot(o.value)}`;
+      // Only when it actually moved: a calm 🔵 and a static label never change, so an
+      // idle dropdown is not rewritten at all.
+      if (opt.textContent !== next) opt.textContent = next;
     }
   }
   syncDotTimer(!!(tr.on || exec.live));
@@ -1314,16 +1323,44 @@ function syncDotTimer(needed) {
 // A browser may restore a form's value on its own — bfcache, back/forward, a
 // crash-recovery session restart — and fire `change` with no user involved. For
 // the control that decides which account gets REAL orders, a restore must never
-// be mistaken for a deliberate choice, so a change may only be persisted after a
-// real gesture on the select itself.
+// be taken for a choice, so a change is honoured only when a gesture on the select
+// preceded it.
+//
+// The flag means "a gesture JUST happened", not "a gesture once happened": it is
+// released once a change has been dealt with, on blur, and by a safety timeout. The
+// first version armed the listeners with `{once: true}` and never cleared the flag —
+// which made the guard a latch that quietly stopped protecting anything after the
+// opening seconds of a page.
 let _envGesture = false;
+let _envGestureTimer = null;
+// ...and WHILE a gesture is in flight the control must be left untouched: see
+// `renderStatusDots`, which pauses the dots for the duration and says why.
+let _envInUse = false;
+
+const ENV_GESTURE_TIMEOUT_MS = 15000; // a menu left open must not pause the dots forever
+
+function armEnvGesture() {
+  _envGesture = true;
+  _envInUse = true;
+  clearTimeout(_envGestureTimer);
+  _envGestureTimer = setTimeout(releaseEnvGesture, ENV_GESTURE_TIMEOUT_MS);
+}
+
+function releaseEnvGesture() {
+  _envGesture = false;
+  _envInUse = false;
+  clearTimeout(_envGestureTimer);
+  _envGestureTimer = null;
+}
 
 function watchEnvSelect() {
   const sel = $("exec-env");
   if (!sel) return;
-  const arm = () => { _envGesture = true; };
-  sel.addEventListener("pointerdown", arm, { once: true });
-  sel.addEventListener("keydown", arm, { once: true });
+  sel.addEventListener("pointerdown", armEnvGesture);
+  sel.addEventListener("keydown", armEnvGesture);
+  // The menu closed without a choice (clicked away, Escape): nothing left to protect,
+  // and the dots may move again.
+  sel.addEventListener("blur", releaseEnvGesture);
 }
 
 async function onEnvChange() {
@@ -1338,30 +1375,40 @@ async function onEnvChange() {
   }
   const previous = (state.executionStatus || {}).env || "paper";
   const env = sel.value;
-  if (env === previous) return;
-  if (env === "live") {
-    const ok = await confirmDialog({
-      title: "Route orders to the LIVE account?",
-      messageHtml:
-        "Every order for this strategy will go to your <b>real</b> Alpaca account. " +
-        "Nothing is sent until you turn trading on.",
-      confirmText: "Use the live account",
-    });
-    if (!ok) {
-      sel.value = previous;
-      return;
-    }
+  if (env === previous) {
+    releaseEnvGesture();
+    return;
   }
-  const r = await api("/api/v1/execution/env", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ env: env }),
-  });
-  if (r && r.ok === false) {
-    flashToast((r.errors || []).join("; ") || r.message || "Could not change the environment", "warn");
-    sel.value = previous;
-  } else {
-    flashToast(r && r.message ? r.message : "Environment updated", "ok");
+  let r = null;
+  try {
+    if (env === "live") {
+      const ok = await confirmDialog({
+        title: "Route orders to the LIVE account?",
+        messageHtml:
+          "Every order for this strategy will go to your <b>real</b> Alpaca account. " +
+          "Nothing is sent until you turn trading on.",
+        confirmText: "Use the live account",
+      });
+      if (!ok) {
+        sel.value = previous;
+        return;
+      }
+    }
+    r = await api("/api/v1/execution/env", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ env: env }),
+    });
+    if (r && r.ok === false) {
+      flashToast((r.errors || []).join("; ") || r.message || "Could not change the environment", "warn");
+      sel.value = previous;
+    } else {
+      flashToast(r && r.message ? r.message : "Environment updated", "ok");
+    }
+  } finally {
+    // Dealt with. Anything that arrives later without a new gesture — a browser
+    // restore, say — must be refused again, so the flag is not left standing.
+    releaseEnvGesture();
   }
   await loadTrading();
 }
