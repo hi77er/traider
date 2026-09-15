@@ -310,6 +310,11 @@ Daily schedule (all HH:MM in `MARKET_TIMEZONE`): `DECISION_TIME` (signal/decisio
 
 Auth: set `WEB_PORTAL_AUTH_ENABLED=true` (plus `WEB_PORTAL_USERNAME`/`WEB_PORTAL_PASSWORD`) to require login. Default (empty password) is open for local dev.
 
+> **Restart after editing code.** uvicorn loads each module once, so a server started
+> before your edit keeps running the old logic. The trading gate watches itself for
+> this: if `credentials.py` or `trading_service.py` changed after the process started,
+> the switch's tooltip says so and the dashboard warns once — restart to clear it.
+
 ---
 
 ## Success Criteria at Each Gate

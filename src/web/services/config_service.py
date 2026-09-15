@@ -766,18 +766,21 @@ def account_sections(settings: Optional[Settings] = None) -> List[dict]:
     settings = settings or Settings()
     stored = account_mod.account_values(settings)
     field_by_key = _field_by_env_key()
-    # Show values as the bot would USE them: the account layer applied on top of
-    # the .env defaults, so the derived folders reflect the account's own DATA_DIR.
-    try:
-        shown_kwargs: Dict[str, str] = {
-            field_by_key[k]: v for k, v in stored.items()
-            if k in ACCOUNT_SCOPED_KEYS and k in field_by_key
-        }
-        if shown_kwargs.get("data_dir") and not {"historical_data_dir", "backtest_dir"} & set(shown_kwargs):
-            shown_kwargs.update(account_mod.derived_dirs(shown_kwargs["data_dir"]))
-        shown = Settings(**shown_kwargs)
-    except ValidationError:
-        shown = settings
+    # Show values as the bot would USE them: the caller's settings with the account
+    # file on top, so the derived folders reflect the account's own DATA_DIR.
+    #
+    # The overlay is a copy of THOSE settings, not a fresh ``Settings()``: building a
+    # new one dropped whatever the caller had passed in, so a credential that arrived
+    # any way other than .env or the account file (the two a bare Settings can see)
+    # was reported as unset — the popup said "nothing is configured" about a pair it
+    # had just been handed.
+    shown_kwargs: Dict[str, str] = {
+        field_by_key[k]: v for k, v in stored.items()
+        if k in ACCOUNT_SCOPED_KEYS and k in field_by_key
+    }
+    if shown_kwargs.get("data_dir") and not {"historical_data_dir", "backtest_dir"} & set(shown_kwargs):
+        shown_kwargs.update(account_mod.derived_dirs(shown_kwargs["data_dir"]))
+    shown = settings.model_copy(update=shown_kwargs)
     groups: List[dict] = []
     for name, keys in _ACCOUNT_SECTIONS:
         fields: List[dict] = []

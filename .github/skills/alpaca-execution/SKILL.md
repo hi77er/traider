@@ -86,6 +86,14 @@ read, keep `credentials.keys_for()` the single place that maps an environment to
 key pair — the check and the executor must never disagree about which key is in
 play.
 
+**A stale process is a silent gate failure.** `src/web/services/freshness.py` watches
+`credentials.py` and `trading_service.py` by mtime and the trading payload reports
+whether the running server is older than them. Trust it: a server started before an
+edit enforces the previous rules while every test passes, because tests import the
+code fresh and the server does not. That is how a live switch once armed trading on
+credentials the broker had already revoked. When you change the gate, restart uvicorn
+and check `freshness.stale` is false.
+
 **The trading lock.** While `data/trading.json` says `on`, the server refuses
 every configuration write with HTTP 409 (`require_trading_off`): settings,
 account, rules, strategy create/rename/delete/select, `/backtest/run`,

@@ -289,6 +289,12 @@ configuration, not the code - a strategy is judged against the bar you set.
   KEY that earned it, so swapping keys expires it automatically; a pass is cached
   for display and saves - editing an unrelated setting does not re-ask Alpaca - while
   a failure is not, since it may just be the network.
+- **A process older than its own source says so.** Python loads a module once, so a
+  server started before an edit keeps enforcing the previous gate — the dashboard,
+  the popup and the tests all look current while the thing deciding whether orders
+  may start is not. The gate modules are watched by mtime and the trading payload
+  carries the verdict: the switch's tooltip says so, and the dashboard warns once per
+  page load, naming the files that moved on without it. Restart uvicorn to clear it.
 - **A key pair the broker rejects is never written down.** Saving the account form
   checks the pairs it is about to add or change, and a pair Alpaca answers 401/403
   for is left out of the account file: a stored credential that cannot work would

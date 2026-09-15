@@ -39,7 +39,7 @@ from src.config import state_files
 from src.config.effective import active_strategy_name, get_effective_settings_dep
 from src.execution import credentials
 from src.execution.config import execution_status
-from src.web.services import config_service
+from src.web.services import config_service, freshness
 
 logger = logging.getLogger(__name__)
 
@@ -186,6 +186,10 @@ def payload(settings) -> dict:
         # Why the switch would refuse, so the label can say so before it is pressed:
         # the credentials for the environment in play must have been verified.
         "verification": credentials.check_for(settings, status_info["env"]),
+        # ...and whether this process is still the gate those files describe. A server
+        # that quietly serves last week's rules is worse than a stale button, because
+        # the thing it would get wrong is whether real orders may start.
+        "freshness": freshness.info(),
     }
 
 

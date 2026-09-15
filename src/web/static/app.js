@@ -1196,6 +1196,14 @@ async function loadTrading() {
   renderTradingControls(d);
   renderTradingPanel(d);
   applyConfigLock();
+  // Said once per page load, not on every poll: a server that is older than the files
+  // it was started from will keep answering with the gate it loaded, and only a
+  // restart fixes that. Silence would make the switch look trustworthy.
+  const fresh = d.freshness || {};
+  if (fresh.stale && !state.staleGateWarned) {
+    state.staleGateWarned = true;
+    flashToast(fresh.message, "warn");
+  }
 }
 
 function renderEnvSelect(d, force) {
@@ -1419,6 +1427,7 @@ function renderTradingControls(d) {
   const exec = d.execution || {};
   const tr = d.trading || {};
   const ver = d.verification || {};
+  const fresh = d.freshness || {};
   const env = String(exec.env || "").toUpperCase();
   const btn = $("trading-toggle");
   if (btn) {
@@ -1436,6 +1445,9 @@ function renderTradingControls(d) {
             // so pointing at the Validate button would send the operator in a circle.
             ? `Trading cannot start unless the ${env} credentials work — ${ver.message} They are re-checked when you switch it on.`
             : `Start sending orders for ${d.strategy || "the active strategy"} — the ${env} credentials are checked when you switch it on`;
+    // A process running older gate code than the files on disk will answer the switch
+    // with last week's rules. Nothing on screen would show it, so the tooltip says it.
+    if (fresh.stale && fresh.message) btn.title += ` ⚠ ${fresh.message}`;
     btn.disabled = false; // the off switch must always be reachable
   }
   renderStatusDots(d); // this owns the label text, dot included

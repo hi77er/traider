@@ -267,8 +267,11 @@ def test_get_trading_reports_the_state_the_lock_and_the_options(wired):
     body = client.get("/api/v1/trading").json()
     assert set(body) == {
         "trading", "locked", "execution", "env_options", "strategy", "instrument",
-        "bar_size", "verification",
+        "bar_size", "verification", "freshness",
     }
+    # The payload says whether the process is still the gate the files describe.
+    assert body["freshness"]["stale"] is False, "the test process just imported it"
+    assert any(p.endswith("trading_service.py") for p in body["freshness"]["watched"])
     assert body["trading"]["on"] is False and body["locked"] is False
     assert [o["value"] for o in body["env_options"]] == ["paper", "live"]
     # The dropdown's options come from the server, so the client cannot invent a

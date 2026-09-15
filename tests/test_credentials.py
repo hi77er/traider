@@ -708,12 +708,16 @@ def test_a_saved_pair_is_marked_as_set_in_the_form_payload(tmp_path, monkeypatch
     assert fields["ALPACA_LIVE_API_KEY"]["value"] == ""
 
 
-def test_a_pair_supplied_by_env_is_not_reported_as_unset(tmp_path):
+def test_a_pair_supplied_by_env_is_not_reported_as_unset(tmp_path, monkeypatch):
     """"Set" means a value is in force, not "this key is in the account file". A pair
     from .env is a credential the bot really uses, and calling it unset told the
     operator their configuration had gone missing."""
+    from src.config import account as account_mod
     from src.web.services import config_service
 
+    # Hermetic: no account file at all, so the only credentials in play are the ones
+    # handed in as if they came from .env.
+    monkeypatch.setattr(account_mod, "account_file_path", lambda s: tmp_path / "absent.json")
     groups = config_service.account_sections(_s(tmp_path, **PAPER))
     fields = {f["key"]: f for f in groups[0]["fields"]}
     assert fields["ALPACA_PAPER_API_KEY"]["set"] is True
