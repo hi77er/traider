@@ -1065,19 +1065,92 @@ function renderEnvSelect(d, force) {
   if (force || document.activeElement !== sel) sel.value = exec.env || "paper";
   // The class is CONSTANT: the pill is styled in exactly one way, in every state,
   // and matches the master switch. So nothing may ride on the class list — the
-  // only place a state can show is the text, and the tooltip.
+  // only places a state can show are the words and the status dot.
   sel.className = "exec-pill exec-select";
-  // "Orders would be refused" therefore has to be said in WORDS: mark the account
-  // that cannot trade, rather than recolouring a control to say it.
-  for (const o of opts) {
-    const opt = Array.from(sel.options).find((x) => x.value === o.value);
-    if (!opt) continue;
-    const blocked = !exec.ok && o.value === (exec.env || "paper");
-    opt.textContent = blocked ? `${o.label} — ⚠ no keys` : o.label;
-  }
   sel.title = exec.ok
     ? `${exec.broker} · ${exec.env} — ${exec.base_url}`
     : `Orders would be REFUSED — ${exec.message}`;
+}
+
+/* ---------- status dots ----------
+   Each pill ends with a dot that repeats what the words say, in colour:
+     blue  = the calm state  (paper account, trading off)
+     red   = the state that spends money or is live (live account, trading on)
+   The red one blinks, because that is the state nobody should miss.
+
+   The dot is part of the TEXT, not a styled element. The account control is a
+   native <select>: its options can only contain text, and a select always sizes
+   itself to its WIDEST option (width: min-content/fit-content make no difference —
+   measured), so a positioned element could never sit at the end of the selected
+   label. A glyph behaves the same in both pills, which is what keeps them one
+   style. Emoji carry their own colour; a plain text glyph could only inherit the
+   pill's text colour, which is identical in every state by design. */
+const DOT_CALM = "🔵";
+const DOT_ALERT = "🔴";
+const DOT_ALERT_OFF = "⚫"; // the invisible half of the blink (dark on dark)
+const DOT_PERIOD_MS = 700; // ~1.4 blinks/s: visible, and under the 3 Hz threshold
+let _dotPhase = true; // is the alert dot showing right now?
+let _dotTimer = null;
+let _dotStateKey = ""; // which set of states the current phase belongs to
+
+function prefersReducedMotion() {
+  return !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+}
+
+function statusDot(state) {
+  if (state !== "live" && state !== "on") return DOT_CALM;
+  // A blinking dot is motion, so it is the first thing to go when motion is
+  // reduced: the alert colour still shows, it just stops flashing.
+  if (prefersReducedMotion()) return DOT_ALERT;
+  return _dotPhase ? DOT_ALERT : DOT_ALERT_OFF;
+}
+
+function renderStatusDots(d) {
+  const p = d || state.tradingPayload;
+  if (!p) return;
+  const tr = p.trading || {};
+  const exec = p.execution || {};
+  // A state change starts with the dot LIT: inheriting a mid-blink phase would
+  // leave a dot that has just turned red dark for up to a period, which reads as
+  // "nothing happened".
+  const key = `${tr.on}|${exec.live}|${exec.env}|${exec.ok}`;
+  if (key !== _dotStateKey) {
+    _dotStateKey = key;
+    _dotPhase = true;
+  }
+  const btn = $("trading-toggle");
+  if (btn) {
+    btn.textContent = `${tr.on ? "⏹ Turn trading off" : "▶ Turn trading on"} ` +
+      statusDot(tr.on ? "on" : "off");
+  }
+  const sel = $("exec-env");
+  if (sel) {
+    for (const o of p.env_options || []) {
+      const opt = Array.from(sel.options).find((x) => x.value === o.value);
+      if (!opt) continue;
+      // Every option carries its own dot, so the open list shows what each choice
+      // means. The account that cannot trade says so in words.
+      const blocked = !exec.ok && o.value === (exec.env || "paper");
+      opt.textContent = `${o.label}${blocked ? " — ⚠ no keys" : ""} ${statusDot(o.value)}`;
+    }
+  }
+  syncDotTimer(!!(tr.on || exec.live));
+}
+
+// ONE timer for both pills, so their dots blink together, and it only runs while
+// something is actually blinking.
+function syncDotTimer(needed) {
+  const should = needed && !prefersReducedMotion();
+  if (should && !_dotTimer) {
+    _dotTimer = setInterval(() => {
+      _dotPhase = !_dotPhase;
+      renderStatusDots();
+    }, DOT_PERIOD_MS);
+  } else if (!should && _dotTimer) {
+    clearInterval(_dotTimer);
+    _dotTimer = null;
+  }
+  if (!should) _dotPhase = true; // never leave a dot dark when nothing blinks
 }
 
 // A browser may restore a form's value on its own — bfcache, back/forward, a
@@ -1190,14 +1263,13 @@ async function toggleTrading() {
 }
 
 // The two header controls. They are ONE pill: identical border, tint, background,
-// font and geometry, in every state — only the words differ. The label always
-// names the ACTION, and nothing is styled per state (see renderEnvSelect).
+// font and geometry, in every state — only the words (and the status dot that ends
+// them) differ. The label always names the ACTION; nothing is styled per state.
 function renderTradingControls(d) {
   const exec = d.execution || {};
   const tr = d.trading || {};
   const btn = $("trading-toggle");
   if (btn) {
-    btn.textContent = tr.on ? "⏹ Turn trading off" : "▶ Turn trading on";
     btn.className = "exec-pill exec-toggle"; // constant, like the account pill
     btn.title = tr.on
       ? `Trading is ON (${String(tr.env || "").toUpperCase()}) for ${d.strategy || "this strategy"} — click to stop`
@@ -1206,6 +1278,7 @@ function renderTradingControls(d) {
         : `Trading cannot start — ${exec.message}`;
     btn.disabled = false; // the off switch must always be reachable
   }
+  renderStatusDots(d); // this owns the label text, dot included
 }
 
 function renderTradingPanel(d) {

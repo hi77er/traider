@@ -147,6 +147,15 @@ words (`LIVE — REAL ORDERS` next to `▶ Turn trading on`) rather than by a pa
 you have to remember. The dropdown is forced into the button's box for this: no
 caret, the same 34px height, and its label centred like the button's.
 
+Each label ends with a **status dot**: blue for the calm state (paper account,
+trading off), and a red one that blinks for the state that spends money or is live
+(live account, trading on). Both dots are driven by one clock, so when both are red
+they blink in step. A dot is part of the TEXT rather than a styled element: the
+account control is a native `<select>`, whose options can only hold text and which
+always sizes itself to its widest option, so a positioned element could never sit
+at the end of the selected label. Under `prefers-reduced-motion: reduce` the alert
+dot stays red and simply stops flashing.
+
 ## Tests
 
 ```bash

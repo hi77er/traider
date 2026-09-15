@@ -241,10 +241,16 @@ def test_account_schema_groups_and_derived_folders(tmp_path):
     assert names == ["Trading Account", "Data & Folders", "Backtest",
                      "Cloud Storage", "State Storage"]
     by_key = {f["key"]: f for g in groups for f in g["fields"]}
-    # Both Alpaca key pairs are secrets, and both start unset.
-    assert by_key["ALPACA_PAPER_API_SECRET"]["sensitive"] is True
-    assert by_key["ALPACA_LIVE_API_SECRET"]["sensitive"] is True
-    assert by_key["ALPACA_PAPER_API_KEY"]["value"] == ""
+    # All four Alpaca credential fields are secrets, and a secret is never echoed
+    # back through the schema — this machine may or may not have keys configured
+    # (settings/account/account.json is local data), so the assertion is about the
+    # MASK, not about the value being absent.
+    for key in ("ALPACA_PAPER_API_KEY", "ALPACA_PAPER_API_SECRET",
+                "ALPACA_LIVE_API_KEY", "ALPACA_LIVE_API_SECRET"):
+        assert by_key[key]["sensitive"] is True, f"{key} must be treated as a secret"
+        assert by_key[key]["value"] in ("", "********"), f"{key} leaked its value"
+    # The model's own default is unset, whatever the local files hold.
+    assert not S(_env_file=None).alpaca_paper_api_key
     assert by_key["EXECUTION_MAX_RETRIES"]["type"] == "int"
     # IBKR was dropped in favour of Alpaca; nothing may linger.
     assert not [k for k in by_key if "IBKR" in k]

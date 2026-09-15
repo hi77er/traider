@@ -234,10 +234,13 @@ Both pills are **one style in every state** — same border, radius, padding, he
 font, tint, background and text colour, whichever account is selected and whether or
 not trading is on. The state is carried by the words:
 
-| Control | Says |
-|---------|------|
-| **Account pill** | `Paper — simulated, no real money` / `LIVE — REAL ORDERS` — which account the orders go to. When that account has no keys the label adds `— ⚠ no keys`, because orders would be refused. |
-| **Master switch** | `▶ Turn trading on` / `⏹ Turn trading off`. |
+| Control | Says | Dot |
+|---------|------|-----|
+| **Account pill** | `Paper — simulated, no real money` / `LIVE — REAL ORDERS` — which account the orders go to. When that account has no keys the label adds `— ⚠ no keys`, because orders would be refused. | 🔵 paper · 🔴 (blinking) live |
+| **Master switch** | `▶ Turn trading on` / `⏹ Turn trading off`. | 🔵 off · 🔴 (blinking) on |
+
+One clock drives both dots, so when both are red they blink together. With
+`prefers-reduced-motion` the red dot stops flashing but keeps its colour.
 
 Trading always starts OFF, and turning it on is refused while the selected Alpaca
 account has no API keys — so "trading on" can never be a lie. Turning it on **always
