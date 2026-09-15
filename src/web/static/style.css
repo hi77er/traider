@@ -7,14 +7,12 @@
   --accent: #4c8dff;
   --green: #26a69a;
   --red: #ef5350;
-  /* The header controls' ONE palette and finish. Defined here because both the
-     account pill and the master switch use them in every state, and a single
-     source is what keeps them from drifting apart. */
-  --pill-text: #c6d2ea;
-  --pill-border: rgba(165, 190, 235, 0.6);
-  --pill-bg: rgba(96, 132, 200, 0.16);
-  --pill-glow: rgba(110, 160, 255, 0.3);
-  --pill-glow-strong: rgba(120, 175, 255, 0.45);
+  /* The header controls' ONE palette. Defined here because both the account pill
+     and the master switch use it in every state, and a single source is what keeps
+     them from drifting apart. */
+  --pill-text: #a8b2c6;
+  --pill-border: rgba(138, 147, 166, 0.6);
+  --pill-bg: rgba(138, 147, 166, 0.16);
 }
 
 * { box-sizing: border-box; }
@@ -73,62 +71,32 @@ header h1 { font-size: 20px; margin: 0; }
   font: inherit;
   font-size: 12px;
   font-weight: 600;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.02em;
   white-space: nowrap;
   cursor: pointer;
   border: 1px solid var(--pill-border);
   color: var(--pill-text);
   background-color: var(--pill-bg);
-  /* HUD finish: a glass highlight along the top, a bloom around the pill, and a
-     glow on the label — which rims the status dot at its end too, so the dot reads
-     as a lit LED rather than a sticker. Every value here is state-independent:
-     that is what lets the two pills stay identical in all four situations while
-     the dot colour does the telling. */
-  background-image: linear-gradient(
-    180deg,
-    rgba(255, 255, 255, 0.13),
-    rgba(255, 255, 255, 0.02) 48%,
-    rgba(0, 0, 0, 0.14)
-  );
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.18),
-    inset 0 -1px 0 rgba(0, 0, 0, 0.25),
-    0 0 1px rgba(200, 225, 255, 0.45),
-    0 0 18px var(--pill-glow),
-    0 2px 6px rgba(0, 0, 0, 0.45);
-  text-shadow: 0 0 8px rgba(255, 255, 255, 0.4), 0 0 18px var(--pill-glow-strong);
-  transition: box-shadow 0.18s ease, border-color 0.18s ease;
   text-align: center;
 }
 .exec-pill:focus-visible { outline: 2px solid rgba(76, 141, 255, 0.6); outline-offset: 2px; }
-/* The same move in every state: the edge lights up to the label's colour and the
-   bloom widens. */
-.exec-pill:hover {
-  border-color: currentColor;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.22),
-    inset 0 -1px 0 rgba(0, 0, 0, 0.25),
-    0 0 1px rgba(210, 232, 255, 0.6),
-    0 0 26px var(--pill-glow-strong),
-    0 2px 6px rgba(0, 0, 0, 0.45);
-}
+.exec-pill:hover { border-color: currentColor; }
 .exec-pill:disabled { opacity: 0.55; cursor: not-allowed; }
 
-/* The select is forced to the button's box: no caret, the same 34px height (the
-   global button height), the same padding, and its label centred like the
-   button's. `appearance: none` is what removes the native arrow — it must not also
-   override `background-image`, or the select would lose the glass fill the button
-   has. */
+/* The select is forced to the button's box: no caret, no extra padding, the same
+   34px height (the global button height) and the same centring of its text, so
+   the two are the same shape as well as the same colours. */
 .exec-select {
   appearance: none;
   -webkit-appearance: none;
   -moz-appearance: none;
   height: 34px;
   padding: 5px 14px;
+  background-image: none;
   text-align-last: center;
 }
 /* The popup list keeps the app's own colours — it is an OS surface, not the pill. */
-.exec-select option { background: var(--card); color: var(--text); text-shadow: none; }
+.exec-select option { background: var(--card); color: var(--text); }
 
 /* The same signal inside a report, next to "What was tested". */
 .rp-exec { font-weight: 600; }

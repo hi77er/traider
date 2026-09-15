@@ -147,12 +147,6 @@ words (`LIVE — REAL ORDERS` next to `▶ Turn trading on`) rather than by a pa
 you have to remember. The dropdown is forced into the button's box for this: no
 caret, the same 34px height, and its label centred like the button's.
 
-The finish is a HUD panel: a glass highlight along the top of the pill, a cool
-bloom around it and a glow on the label - which rims the status dot at its end, so
-the dot reads as a lit LED. All of it comes from the same three `--pill-*` variables
-as the base palette, so the two pills cannot diverge, and the only thing that
-changes between states is the words and the dot's colour.
-
 Each label ends with a **status dot**: blue for the calm state (paper account,
 trading off), and a red one that blinks for the state that spends money or is live
 (live account, trading on). Both dots are driven by one clock, so when both are red
