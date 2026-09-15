@@ -7,6 +7,12 @@
   --accent: #4c8dff;
   --green: #26a69a;
   --red: #ef5350;
+  /* The header controls' ONE palette. Defined here because both the account pill
+     and the master switch use it in every state, and a single source is what keeps
+     them from drifting apart. */
+  --pill-text: #a8b2c6;
+  --pill-border: rgba(138, 147, 166, 0.6);
+  --pill-bg: rgba(138, 147, 166, 0.16);
 }
 
 * { box-sizing: border-box; }
@@ -45,16 +51,18 @@ header h1 { font-size: 20px; margin: 0; }
   color: var(--muted);
 }
 
-/* Execution — the two header controls, and the at-a-glance answer to "is this bot
-   about to send REAL orders?". A paper and a live Alpaca account look identical in
-   every other panel, so an unlabelled dashboard is how you trade live by accident.
+/* TWO HEADER CONTROLS, ONE PILL, EVERY STATE.
 
-   Both controls are THE SAME PILL: same border, radius, padding, height, weight and
-   tinted background. The only difference is the COLOUR, which is the state:
-     - the account type tints teal (paper) or red (live);
-     - the master switch tints grey (idle) or green (armed).
-   Building them from one rule set is the point: if they looked like different kinds
-   of control, a glance would have to be a careful read.
+   The account type and the master switch are the same widget: identical border,
+   radius, padding, height, font, tint, background and text colour — in all four
+   situations (paper/live x idle/armed). Nothing here is styled per state, so the
+   state classes in the DOM are hooks, not appearances: a rule that targeted
+   `.exec-pill.live` would break the invariant a test enforces, and the pair would
+   start looking like two different kinds of control again.
+
+   The state is carried by the WORDS: "Paper — simulated, no real money" next to
+   "▶ Turn trading on" says everything a colour was saying, without asking anyone
+   to remember a palette.
 
    No `display` property on the select on purpose: the UA [hidden] rule must win. */
 .exec-pill {
@@ -66,40 +74,29 @@ header h1 { font-size: 20px; margin: 0; }
   letter-spacing: 0.02em;
   white-space: nowrap;
   cursor: pointer;
-  border: 1px solid var(--border);
-  color: var(--text);
-  background-color: var(--card);
+  border: 1px solid var(--pill-border);
+  color: var(--pill-text);
+  background-color: var(--pill-bg);
+  text-align: center;
 }
 .exec-pill:focus-visible { outline: 2px solid rgba(76, 141, 255, 0.6); outline-offset: 2px; }
-/* Hover is the same move in every state: the border sharpens to the text colour. */
 .exec-pill:hover { border-color: currentColor; }
 .exec-pill:disabled { opacity: 0.55; cursor: not-allowed; }
 
-/* A native select needs its caret, and the global button height is 34px — matched
-   here so the two pills line up exactly. */
+/* The select is forced to the button's box: no caret, no extra padding, the same
+   34px height (the global button height) and the same centring of its text, so
+   the two are the same shape as well as the same colours. */
 .exec-select {
   appearance: none;
   -webkit-appearance: none;
+  -moz-appearance: none;
   height: 34px;
-  padding-right: 30px;
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6'><path d='M1 1l4 4 4-4' fill='none' stroke='%238a93a6' stroke-width='1.5'/></svg>");
-  background-repeat: no-repeat;
-  background-position: right 11px center;
+  padding: 5px 14px;
+  background-image: none;
+  text-align-last: center;
 }
+/* The popup list keeps the app's own colours — it is an OS surface, not the pill. */
 .exec-select option { background: var(--card); color: var(--text); }
-
-/* PAPER: simulated money. Teal reads as "safe", so it is the calm state. */
-.exec-pill.paper { color: #6fdbc4; border-color: rgba(38, 166, 154, 0.75); background-color: rgba(38, 166, 154, 0.16); }
-/* LIVE: real money. Red is the state that must never be a surprise. */
-.exec-pill.live { color: #ff8a80; border-color: rgba(239, 83, 80, 0.85); background-color: rgba(239, 83, 80, 0.20); }
-/* "Orders would be refused" is a RING, not a replacement colour: the account type
-   must stay readable, or the warning would hide the very thing it warns about. */
-.exec-pill.blocked { border-color: rgba(240, 180, 41, 0.9); box-shadow: 0 0 0 2px rgba(240, 180, 41, 0.35); }
-
-/* IDLE: nothing is being sent — the safe default, and a colour that reads as a
-   control rather than as a disabled one. ARMED: green, because it is running. */
-.exec-pill.off { color: #a8b2c6; border-color: rgba(138, 147, 166, 0.6); background-color: rgba(138, 147, 166, 0.16); }
-.exec-pill.on { color: #4bdc9a; border-color: rgba(46, 204, 143, 0.85); background-color: rgba(46, 204, 143, 0.18); }
 
 /* The same signal inside a report, next to "What was tested". */
 .rp-exec { font-weight: 600; }

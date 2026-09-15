@@ -1063,10 +1063,18 @@ function renderEnvSelect(d, force) {
     }
   }
   if (force || document.activeElement !== sel) sel.value = exec.env || "paper";
-  // The tint is the ACCOUNT TYPE (teal paper / red live) and must not change when
-  // orders would be refused — `blocked` only adds a ring, so the switch never
-  // hides which account is selected while it warns about it.
-  sel.className = `exec-pill exec-select ${exec.live ? "live" : "paper"}${exec.ok ? "" : " blocked"}`;
+  // The class is CONSTANT: the pill is styled in exactly one way, in every state,
+  // and matches the master switch. So nothing may ride on the class list — the
+  // only place a state can show is the text, and the tooltip.
+  sel.className = "exec-pill exec-select";
+  // "Orders would be refused" therefore has to be said in WORDS: mark the account
+  // that cannot trade, rather than recolouring a control to say it.
+  for (const o of opts) {
+    const opt = Array.from(sel.options).find((x) => x.value === o.value);
+    if (!opt) continue;
+    const blocked = !exec.ok && o.value === (exec.env || "paper");
+    opt.textContent = blocked ? `${o.label} — ⚠ no keys` : o.label;
+  }
   sel.title = exec.ok
     ? `${exec.broker} · ${exec.env} — ${exec.base_url}`
     : `Orders would be REFUSED — ${exec.message}`;
@@ -1181,16 +1189,16 @@ async function toggleTrading() {
   if (state.rulesPayload && typeof renderStrategyBar === "function") renderStrategyBar();
 }
 
-// The two header controls. They share one pill style and differ only in colour:
-// the account tints teal (paper) or red (live), the switch tints grey (idle) or
-// green (armed). The label always names the ACTION, the colour carries the STATE.
+// The two header controls. They are ONE pill: identical border, tint, background,
+// font and geometry, in every state — only the words differ. The label always
+// names the ACTION, and nothing is styled per state (see renderEnvSelect).
 function renderTradingControls(d) {
   const exec = d.execution || {};
   const tr = d.trading || {};
   const btn = $("trading-toggle");
   if (btn) {
     btn.textContent = tr.on ? "⏹ Turn trading off" : "▶ Turn trading on";
-    btn.className = `exec-pill exec-toggle ${tr.on ? "on" : "off"}`;
+    btn.className = "exec-pill exec-toggle"; // constant, like the account pill
     btn.title = tr.on
       ? `Trading is ON (${String(tr.env || "").toUpperCase()}) for ${d.strategy || "this strategy"} — click to stop`
       : exec.ok

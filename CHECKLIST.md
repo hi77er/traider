@@ -438,9 +438,9 @@ The unfinished Phase 2 & 3 work lives here so Risk & Execution can proceed first
 - [ ] **live-go-live** (39) — Switch to live trading
   - [ ] Add the Alpaca LIVE key pair in Account Settings (paper keys are not accepted for live)
   - [ ] Switch the header dropdown to `LIVE — REAL ORDERS` and confirm the pill turns red
-  - [ ] Confirm the pill has no amber ring (an amber ring = the keys do not resolve)
+  - [ ] Confirm the pill's label carries no `— ⚠ no keys` (that marker = the keys do not resolve)
   - [ ] Turn trading ON from the header switch and accept the confirmation prompt (asked for paper too)
-  - [ ] Confirm the switch turns green (armed) and the Trading panel appears under the chart
+  - [ ] Confirm the switch label flips to `⏹ Turn trading off` and the Trading panel appears under the chart
   - [ ] Confirm the Trading panel appears under the chart and the config/backtest buttons are disabled
   - [ ] Start with 1% of capital
   - [ ] Verify first week:

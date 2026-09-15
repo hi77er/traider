@@ -11,14 +11,13 @@
     <!-- Left: identity, the account type, and the master switch. Which account the
          bot trades and whether it is trading at all are part of what it IS, not
          settings buried in a panel, so both sit beside the name and are always on
-         screen. They share one pill style and differ only in colour: the account
-         tints teal (paper) or red (live), the switch tints grey (idle) or green
-         (armed). -->
+         screen. They are the SAME pill in every state — same border, tint, font and
+         geometry — and the state is carried entirely by the words. -->
     <div class="header-left">
       <h1>📈 TRAIDER</h1>
-      <select id="exec-env" class="exec-pill exec-select paper" onchange="onEnvChange()"
+      <select id="exec-env" class="exec-pill exec-select" onchange="onEnvChange()"
               title="Which Alpaca account this strategy's orders go to"></select>
-      <button id="trading-toggle" class="exec-pill exec-toggle off" onclick="toggleTrading()"
+      <button id="trading-toggle" class="exec-pill exec-toggle" onclick="toggleTrading()"
               title="Start or stop sending orders for the active strategy">▶ Turn trading on</button>
     </div>
     <!-- Right: everything that configures or navigates away. -->

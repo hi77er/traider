@@ -230,13 +230,14 @@ window/period parameters under **Feature Parameters** (`FEATURES_*`). The
 
 ### Trading switch and the configuration lock
 
-Both pills share one style — same border, radius, height, weight and tinted
-background — and only the colour differs, which is the state:
+Both pills are **one style in every state** — same border, radius, padding, height,
+font, tint, background and text colour, whichever account is selected and whether or
+not trading is on. The state is carried by the words:
 
-| Control | Colour says |
-|---------|-------------|
-| **Account pill** (with a caret) | **Teal `Paper`** / **red `LIVE`** — which account the orders go to. An amber ring means orders would be refused (no keys for that account); the pill keeps its tint, because the warning must not hide the account type it is warning about. |
-| **Master switch** | **Grey = nothing running**, **green = armed**. The label always names the action. |
+| Control | Says |
+|---------|------|
+| **Account pill** | `Paper — simulated, no real money` / `LIVE — REAL ORDERS` — which account the orders go to. When that account has no keys the label adds `— ⚠ no keys`, because orders would be refused. |
+| **Master switch** | `▶ Turn trading on` / `⏹ Turn trading off`. |
 
 Trading always starts OFF, and turning it on is refused while the selected Alpaca
 account has no API keys — so "trading on" can never be a lie. Turning it on **always

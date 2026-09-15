@@ -106,15 +106,15 @@ The portal is the whole interface:
   is about the strategy acting on the next signal. Stopping never asks, so it is
   always one click.
 - **Environment dropdown** (header, left, beside the logo) - which Alpaca account the
-  active strategy's orders go to. It both selects and displays the mode, tinted by
-  it: teal `Paper`, red `LIVE`. When the selected account has no keys (so orders
-  would be refused) the pill keeps its tint and gains an amber ring - the warning
-  must never hide the account type it is warning about. Paper vs live is per
-  strategy, so one strategy can run on the live account while another stays on
-  paper. Only a real gesture on the dropdown can change it: a browser-restored
-  value (bfcache, back/forward, crash recovery) fires `change` without anyone
-  choosing anything, so it is ignored and the display snaps back to what the
-  server said.
+  active strategy's orders go to. It both selects and displays the mode, and the
+  labels spell out the consequence rather than tinting the control: `Paper —
+  simulated, no real money` / `LIVE — REAL ORDERS`. When the selected account has no
+  keys, so orders would be refused, the label says so (`— ⚠ no keys`) and the
+  tooltip carries the reason. Paper vs live is per strategy, so one strategy can run
+  on the live account while another stays on paper. Only a real gesture on the
+  dropdown can change it: a browser-restored value (bfcache, back/forward, crash
+  recovery) fires `change` without anyone choosing anything, so it is ignored and
+  the display snaps back to what the server said.
 - **Trading panel** (appears under the chart while trading is ON) - a standing
   reminder that the strategy is armed, with a one-click stop. While it is
   visible every configuration surface is locked and the backtest buttons are
@@ -139,11 +139,13 @@ The portal is the whole interface:
   volume, top losers and the small-cap gainers/volume lists. The two long tables
   are collapsible and start collapsed so the page opens as an overview
 
-The two header controls are **one pill in four colours** - same border, radius,
-height, weight and tinted background, so neither reads as a different kind of
-thing. Only the colour carries the state: the account tints teal (paper) or red
-(live), the switch tints grey (idle) or green (armed). The label always names the
-action, the colour always carries the state.
+The two header controls are **one pill in every state** - same border, radius,
+padding, height, font, tint, background and text colour, whichever account is
+selected and whether or not trading is on. Nothing is styled per state, and the
+class list is constant, so the pair cannot drift apart; the state is carried by the
+words (`LIVE — REAL ORDERS` next to `▶ Turn trading on`) rather than by a palette
+you have to remember. The dropdown is forced into the button's box for this: no
+caret, the same 34px height, and its label centred like the button's.
 
 ## Tests
 
@@ -241,11 +243,12 @@ configuration, not the code - a strategy is judged against the bar you set.
   enforced, but the executor itself is still to be written.
 - **Trading starts OFF, and going live is refused rather than downgraded.**
   Turning trading on is refused outright while the selected Alpaca account has no
-  API keys for it (otherwise "trading on" would be a lie), and on a LIVE strategy
-  it needs a confirmation on the switch itself, every time. Silently falling back
-  to paper would either hide a broken live setup or spend real money. The header
-  dropdown (paper = teal, LIVE = red, amber when orders would be refused) and each
-  run's `inputs.execution` record which environment was in play.
+  API keys for it (otherwise "trading on" would be a lie), and it is confirmed on
+  the switch itself every time - the live prompt is about real money, the paper one
+  about the strategy starting to act. Silently falling back to paper would either
+  hide a broken live setup or spend real money. The header pills say which account
+  and whether trading is on, and each run's `inputs.execution` records which
+  environment was in play.
 - **No reconfiguration while trading is on.** With trading on, the server refuses
   every configuration write with HTTP 409 - settings, account, rules, strategy
   create/rename/delete/select, the backtest runner, the dataset rebuild/backfill

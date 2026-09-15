@@ -22,7 +22,6 @@ freeze switch is stored.
 from __future__ import annotations
 
 import json
-import re
 import stat
 from pathlib import Path
 
@@ -389,49 +388,46 @@ def test_the_header_keeps_identity_and_the_switch_left_and_config_right():
     assert "📈 TRAIDER<" in html
 
 
-def test_the_two_header_controls_are_one_pill_in_four_colours():
-    """Both controls are built from ONE rule set, so they cannot drift apart: same
-    border, radius, padding, height, weight and tinted background. Every state rule
-    is allowed to change COLOUR only — the moment one of them also sets a layout or
-    a shape, the pair stops reading as the same kind of control."""
+def test_the_two_header_controls_are_one_pill_in_every_state():
+    """Both controls are the same widget, and NO state gets its own styling: same
+    border, radius, padding, height, font, tint, background and text colour,
+    whatever is selected. One rule that restyles a single state is enough to make
+    the pair look like two different kinds of control, which is the thing this
+    guards."""
     css = (ROOT / "src" / "web" / "static" / "style.css").read_text(encoding="utf-8")
     html = (ROOT / "src" / "web" / "templates" / "index.html").read_text(encoding="utf-8")
 
-    # Both elements wear the shared class...
-    assert 'class="exec-pill exec-select paper"' in html
-    assert 'class="exec-pill exec-toggle off"' in html
-    # ...and the JS keeps it on when it re-styles them by state.
+    # Both wear the shared class and nothing that varies with state...
+    assert 'class="exec-pill exec-select"' in html
+    assert 'class="exec-pill exec-toggle"' in html
+    # ...and the JS keeps the class list CONSTANT, so no state can be styled.
     js = (ROOT / "src" / "web" / "static" / "app.js").read_text(encoding="utf-8")
-    assert '`exec-pill exec-select ' in js
-    assert '`exec-pill exec-toggle ' in js
+    assert 'sel.className = "exec-pill exec-select";' in js
+    assert 'btn.className = "exec-pill exec-toggle";' in js
+
+    # No selector may target a state: paper/live/off/on/blocked are hooks, not looks.
+    state_rules = [ln for ln in css.splitlines() if ln.startswith(".exec-pill.")]
+    assert state_rules == [], f"a state is styled separately: {state_rules}"
 
     def rule(selector):
         start = css.index(selector + " {")
         return css[start:css.index("}", start) + 1]
 
-    def props(text):
-        """The property names a rule declares (values dropped)."""
-        body = text[text.index("{") + 1: text.rindex("}")]
-        return {part.split(":", 1)[0].strip() for part in body.split(";") if ":" in part}
+    base = rule(".exec-pill")
+    for prop in ("border", "border-radius", "padding", "color", "background-color", "font-size", "font-weight"):
+        assert prop in base, f"the shared pill must define {prop}"
 
-    base = props(rule(".exec-pill"))
-    assert {"border-radius", "padding", "border", "background-color", "font-size"} <= base
+    # The select is forced into the button's box: no caret, the same height and
+    # padding, and its text centred like the button's.
+    sel = rule(".exec-select")
+    assert "height: 34px" in sel, "must match the global button height"
+    assert "background-image: none" in sel, "a caret would make it a different shape"
+    assert "padding: 5px 14px" in sel
+    assert "text-align-last: center" in sel, "the button centres its label"
 
-    # Colour is the ONLY thing a state may change.
-    colour_only = {"color", "border-color", "background-color"}
-    for selector in (".exec-pill.paper", ".exec-pill.live", ".exec-pill.off", ".exec-pill.on"):
-        assert props(rule(selector)) <= colour_only, f"{selector} must only set colour"
+    # One palette, defined once, used by both.
+    assert "--pill-text" in css and "--pill-bg" in css and "--pill-border" in css
 
-    # All four states are actually different colours, or the distinction is a lie.
-    seen = {rule(s) for s in (".exec-pill.paper", ".exec-pill.live", ".exec-pill.off", ".exec-pill.on")}
-    assert len(seen) == 4
-
-    # "Would be refused" is a RING. If it also repainted the pill, the warning
-    # would hide the account type it is warning about.
-    blocked = rule(".exec-pill.blocked")
-    assert "box-shadow" in blocked
-    assert not re.search(r"(?<![-a-z])color\s*:", blocked), "blocked must not recolour the pill"
-    assert not re.search(r"(?<![-a-z])background-color\s*:", blocked)
-    # The red ring on "armed with real money" is gone: it made one state of the
-    # switch a different shape from the other.
-    assert ".exec-pill.on.live" not in css
+    # "Orders would be refused" is said in words now (the label is marked), so the
+    # warning does not need a colour — but it must still be said.
+    assert "⚠ no keys" in js

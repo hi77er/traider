@@ -244,5 +244,6 @@ def test_the_dashboard_shows_which_environment_orders_would_use():
     assert js.count("await loadTrading()") >= 1
 
     css = (root / "src" / "web" / "static" / "style.css").read_text(encoding="utf-8")
-    assert ".exec-pill.paper" in css and ".exec-pill.live" in css
-    assert ".exec-pill.blocked" in css
+    # One pill style for both header controls, with nothing styled per state.
+    assert ".exec-pill {" in css
+    assert [ln for ln in css.splitlines() if ln.startswith(".exec-pill.")] == []
