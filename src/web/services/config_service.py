@@ -41,8 +41,16 @@ _SENSITIVE_SUFFIXES = ("_PASSWORD", "_API_KEY", "_SECRET", "_TOKEN")
 # plain string (value == label) or a dict {label, value} for human labels with
 # an underlying code (e.g. "1 hour" -> "1h").
 _OPTIONS: Dict[str, List[Any]] = {
-    "MODEL_TYPE": ["logistic_regression", "rule_based"],
     "POSITION_SIZING_MODE": ["fixed_risk", "volatility_target"],
+    # The exchanges the bot can be pointed at, by their IANA zone. The zone is what
+    # the code uses (trading hours, chart timestamps, the "today" a lookback counts
+    # back from), and it carries the exchange's own DST rules, so the standard-time
+    # name in the label is the zone's winter offset rather than a fixed one.
+    "MARKET_TIMEZONE": [
+        {"label": "Nasdaq / NYSE — Eastern Standard Time", "value": "America/New_York"},
+        {"label": "Frankfurt Stock Exchange — Central European Standard Time", "value": "Europe/Berlin"},
+        {"label": "London Stock Exchange — Greenwich Mean Time", "value": "Europe/London"},
+    ],
     # HISTORICAL_BAR_SIZE and HISTORICAL_LOOKBACK are NOT here: the period a bar
     # size may be fetched for depends on the bar size, so both lists are built
     # from src/config/history.py in ``strategy_config_groups``.
@@ -103,7 +111,6 @@ _LABELS: Dict[str, str] = {
     "MARKET_TIMEZONE": "Market timezone",
     "DECISION_TIME": "Daily decision time",
     "DATA_DELTA_PULL_TIME": "Daily delta pull time",
-    "MODEL_TYPE": "Model type",
     "GATE_MIN_SHARPE": "Gate: min Sharpe",
     "GATE_MAX_DRAWDOWN_PERCENT": "Gate: max drawdown (%)",
     "GATE_MIN_WIN_RATE_PERCENT": "Gate: min win rate (%)",
@@ -143,7 +150,6 @@ def _field_bounds(field) -> Dict[str, Any]:
 # Curated examples/clarifications shown as their own hint line under a field,
 # for keys whose description is thin or missing. Keep them short.
 _HINTS: Dict[str, str] = {
-    "MODEL_RETRAIN_INTERVAL_DAYS": "Ignored by the rule-based model.",
     "FEATURES_EMA_PERIODS": "An EMA weights recent bars more than an SMA, so it turns faster "
     "(9 = fast, 21 = medium, 50 = slow).",
     "BACKTEST_SLIPPAGE_PERCENT": "Order slippage as a % of price, charged on each fill (e.g. 0.05 = 0.05%).",
@@ -163,7 +169,6 @@ _HINTS: Dict[str, str] = {
     "BACKTEST_START_DATE": "Optional window start, YYYY-MM-DD; empty = start of the dataset.",
     "BACKTEST_END_DATE": "Optional window end, YYYY-MM-DD; empty = end of the dataset.",
     "TRAIN_TEST_SPLIT": "0.8 = use 80% for training, 20% held out.",
-    "MARKET_TIMEZONE": "IANA name of the exchange's timezone, e.g. America/New_York.",
 }
 
 
@@ -240,13 +245,6 @@ _STRATEGY_SCOPE: List[Tuple[str, Tuple[str, ...]]] = [
         ),
     ),
     (
-        "Model",
-        (
-            "MODEL_TYPE", "MODEL_BUY_THRESHOLD", "MODEL_SELL_THRESHOLD",
-            "MODEL_RETRAIN_INTERVAL_DAYS",
-        ),
-    ),
-    (
         "Features",
         (
             "FEATURE_SMA_ENABLED", "FEATURE_EMA_ENABLED", "FEATURE_MACD_ENABLED",
@@ -303,7 +301,21 @@ PANEL_HIDDEN_STRATEGY_KEYS = frozenset({"EXECUTION_ENV"})
 # Keys that used to be per-strategy and are now gone. A stored strategy may still
 # carry them, so a save must DROP them rather than reject the whole config —
 # otherwise a strategy saved before the removal could never be saved again.
-RETIRED_STRATEGY_KEYS = frozenset({"EXECUTION_LIVE_ACK"})
+RETIRED_STRATEGY_KEYS = frozenset(
+    {
+        "EXECUTION_LIVE_ACK",
+        # The Model group is gone from the panel: the only model that exists is the
+        # rule-based one (the backtester and the signal service both refuse to run
+        # under any other), so MODEL_TYPE was a switch between a working model and a
+        # non-existent one. The thresholds it sat beside only fed the model that is
+        # not implemented, and a retrain cadence has nothing to retrain. The settings
+        # stay on ``Settings`` for the code that reads them, and `.env` carries them.
+        "MODEL_TYPE",
+        "MODEL_BUY_THRESHOLD",
+        "MODEL_SELL_THRESHOLD",
+        "MODEL_RETRAIN_INTERVAL_DAYS",
+    }
+)
 
 STRATEGY_SCOPED_KEYS = (
     frozenset(k for _, keys in _STRATEGY_SCOPE for k in keys) | PANEL_HIDDEN_STRATEGY_KEYS

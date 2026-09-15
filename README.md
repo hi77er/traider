@@ -138,6 +138,13 @@ The portal is the whole interface:
   with moves the selection onto that bar size's own list — the panel cannot submit
   a pair the rule forbids. Both settings are one value each: the period carries its
   unit (`2y`, `30d`), so a window can never be half-specified in two places.
+  **Market timezone** is a dropdown of the exchanges the bot can be pointed at —
+  Nasdaq/NYSE (`America/New_York`), Frankfurt (`Europe/Berlin`) and London
+  (`Europe/London`) — rather than free text, because the zone is what the trading
+  hours, chart timestamps and period windows are measured in, and a typo there would
+  be silent. There is no **Model** group: rule-based is the only model implemented
+  (the backtester and the signal service both refuse to run under any other), so
+  `MODEL_TYPE` and its thresholds are set in `.env` and are no longer per-strategy.
 - **Account Settings** (🏦 header popup) - the Alpaca key pairs, the single data
   folder and the backtest costs; shared by all strategies. Three sections and nothing
   else — what belongs to a *trading account*. The history window, the backtest window
@@ -253,7 +260,7 @@ Three layers, two editors in the dashboard:
 |-------|------|-------------|-------|
 | **Global** | `.env` | by hand | data provider + keys, the paths of the two JSON stores, cloud storage (read by the dataset sync, off by default) and state persistence (unbuilt) |
 | **Account** | `settings/account/account.json` | 🏦 Account Settings | the Alpaca key pairs (paper + live), the data folder, backtest costs |
-| **Strategy** | `settings/strategies/store.json` | Strategy Configuration / Rules / Risk panels, plus the header dropdown for `EXECUTION_ENV` | instrument, bar size + history period, features, model, gates, schedule, risk limits, rules, paper/live |
+| **Strategy** | `settings/strategies/store.json` | Strategy Configuration / Rules / Risk panels, plus the header dropdown for `EXECUTION_ENV` | instrument, bar size + history period, trading hours + exchange, features, gates, schedule, risk limits, rules, paper/live |
 
 Precedence is **strategy > account > .env**, and the process environment still
 wins over `.env` (which is why a stray exported variable can silently override

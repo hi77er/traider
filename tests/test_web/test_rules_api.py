@@ -108,7 +108,7 @@ def test_reset_only_resets_active_strategy_rules(tmp_path):
     a = rules_mod.empty_strategy("alpha", "MSFT")
     a.rules = [rules_mod.Rule(side="BUY", conditions=[
         rules_mod.RuleCondition(feature="close", op="<", ref="sma_50")])]
-    a.config = {"INSTRUMENT": "MSFT", "MODEL_BUY_THRESHOLD": "0.3"}
+    a.config = {"INSTRUMENT": "MSFT", "GATE_MIN_SHARPE": "0.3"}
     rules_service.update_strategy(st, "alpha", a.model_dump())
     b = rules_mod.empty_strategy("beta", "AAPL")
     b.rules = [rules_mod.Rule(side="SELL", conditions=[
@@ -128,7 +128,7 @@ def test_reset_only_resets_active_strategy_rules(tmp_path):
     # alpha is untouched (custom rule + MSFT instrument + threshold kept)
     assert len(p["strategies"]["alpha"]["rules"]) == 1
     assert p["strategies"]["alpha"]["config"]["INSTRUMENT"] == "MSFT"
-    assert p["strategies"]["alpha"]["config"]["MODEL_BUY_THRESHOLD"] == "0.3"
+    assert p["strategies"]["alpha"]["config"]["GATE_MIN_SHARPE"] == "0.3"
 
 
 def test_reset_requires_active_strategy(tmp_path):
@@ -277,13 +277,13 @@ def test_rename_strategy_preserves_rules_and_config(tmp_path):
     rs = rules_mod.empty_strategy("alpha", "AAPL")
     rs.rules = [rules_mod.Rule(side="BUY", conditions=[
         rules_mod.RuleCondition(feature="close", op="<", ref="sma_50")])]
-    rs.config = {"INSTRUMENT": "AAPL", "MODEL_BUY_THRESHOLD": "0.7"}
+    rs.config = {"INSTRUMENT": "AAPL", "GATE_MIN_SHARPE": "0.7"}
     rules_service.update_strategy(st, "alpha", rs.model_dump())
     res = rules_service.rename_strategy(st, "alpha", "renamed")
     assert res["ok"] is True
     saved = rules_service.payload(st)["strategies"]["renamed"]
     assert saved["rules"][0]["side"] == "BUY"
-    assert saved["config"]["MODEL_BUY_THRESHOLD"] == "0.7"
+    assert saved["config"]["GATE_MIN_SHARPE"] == "0.7"
 
 
 def test_rename_strategy_requires_both_names(tmp_path):
@@ -346,7 +346,9 @@ def test_payload_includes_strategy_config_schema(tmp_path):
         "MAX_CONSECUTIVE_LOSSES", "CIRCUIT_BREAKER_ENABLED", "APPLY_RISK_LAYER",
     } <= risk_keys
     assert not (keys & risk_keys)  # every key renders in exactly one panel
-    assert "MODEL_BUY_THRESHOLD" in keys
+    # The Model section is gone: the only model is the rule-based one, so MODEL_TYPE
+    # and the thresholds that fed the unimplemented one are not offered at all.
+    assert not [k for k in keys if k.startswith("MODEL_")], sorted(keys)
 
 
 def test_create_strategy_prefills_config_with_globals(tmp_path):
@@ -361,19 +363,39 @@ def test_update_strategy_saves_config(tmp_path):
     st = _settings(tmp_path)
     rules_service.create_strategy(st, "alpha")
     rs = rules_mod.empty_strategy("alpha", "AAPL")
-    rs.config = {"MODEL_BUY_THRESHOLD": "0.7", "FEATURE_RSI_ENABLED": "off"}
+    rs.config = {"GATE_MIN_SHARPE": "0.7", "FEATURE_RSI_ENABLED": "off"}
     res = rules_service.update_strategy(st, "alpha", rs.model_dump())
     assert res["ok"] is True
     saved = rules_service.payload(st)["strategies"]["alpha"]["config"]
-    assert saved["MODEL_BUY_THRESHOLD"] == "0.7"
+    assert saved["GATE_MIN_SHARPE"] == "0.7"
     assert saved["FEATURE_RSI_ENABLED"] == "off"
+
+
+def test_update_strategy_drops_retired_model_keys(tmp_path):
+    """A strategy saved while the Model section existed still carries its keys, and
+    the panel posts the strategy back verbatim — so the save must DROP them rather
+    than reject a config the operator can no longer see or fix. The values came from
+    `.env` in the first place, so dropping them changes nothing in effect."""
+    st = _settings(tmp_path)
+    rules_service.create_strategy(st, "alpha")
+    rs = rules_mod.empty_strategy("alpha", "AAPL")
+    rs.config = {
+        "MODEL_TYPE": "rule_based", "MODEL_BUY_THRESHOLD": "0.6",
+        "MODEL_SELL_THRESHOLD": "0.6", "MODEL_RETRAIN_INTERVAL_DAYS": "30",
+        "INSTRUMENT": "AAPL",
+    }
+    res = rules_service.update_strategy(st, "alpha", rs.model_dump())
+    assert res["ok"] is True, res
+    saved = rules_service.payload(st)["strategies"]["alpha"]["config"]
+    assert [k for k in saved if k.startswith("MODEL_")] == []
+    assert saved["INSTRUMENT"] == "AAPL", "and nothing else was lost"
 
 
 def test_update_strategy_rejects_invalid_config(tmp_path):
     st = _settings(tmp_path)
     rules_service.create_strategy(st, "alpha")
     rs = rules_mod.empty_strategy("alpha", "AAPL")
-    rs.config = {"MODEL_BUY_THRESHOLD": "3.0"}  # out of 0..1
+    rs.config = {"GATE_MIN_SHARPE": "99.0"}  # out of 0..10
     res = rules_service.update_strategy(st, "alpha", rs.model_dump())
     assert res["ok"] is False
     assert res["errors"]

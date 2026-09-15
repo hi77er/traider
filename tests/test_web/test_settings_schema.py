@@ -30,7 +30,6 @@ def test_strategy_config_groups_schema():
     groups = config_service.strategy_config_groups(S(_env_file=None))
     names = [g["name"] for g in groups]
     assert "Instrument" in names
-    assert "Model" in names
     assert "Features" in names and "Feature Parameters" in names and "Risk Management" in names
     by_key = {f["key"]: f for g in groups for f in g["fields"]}
     assert by_key["INSTRUMENT"]["type"] == "str"
@@ -40,35 +39,74 @@ def test_strategy_config_groups_schema():
     assert by_key["FEATURE_SMA_ENABLED"]["label"] == "Simple Moving Average (SMA)"
     assert by_key["FEATURE_EMA_ENABLED"]["label"] == "Exponential Moving Average (EMA)"
     assert by_key["FEATURES_RSI_PERIOD"]["type"] == "int"
-    assert by_key["MODEL_BUY_THRESHOLD"]["type"] == "float"
+    assert by_key["GATE_MIN_SHARPE"]["type"] == "float"
     assert by_key["POSITION_SIZING_MODE"]["options"] == ["fixed_risk", "volatility_target"]
     # overrides win over the global default
-    over = config_service.strategy_config_groups(S(_env_file=None), {"MODEL_BUY_THRESHOLD": "0.42"})
+    over = config_service.strategy_config_groups(S(_env_file=None), {"GATE_MIN_SHARPE": "0.42"})
     ob = {f["key"]: f for g in over for f in g["fields"]}
-    assert ob["MODEL_BUY_THRESHOLD"]["value"] == "0.42"
+    assert ob["GATE_MIN_SHARPE"]["value"] == "0.42"
+
+
+def test_the_model_section_is_gone():
+    """The only model that exists is the rule-based one — the backtester and the
+    signal service both refuse to run under any other — so MODEL_TYPE was a switch
+    between a working model and a non-existent one, and the thresholds beside it fed
+    the model that is not implemented."""
+    groups = config_service.strategy_config_groups(S(_env_file=None))
+    assert "Model" not in [g["name"] for g in groups]
+    offered = {f["key"] for g in groups for f in g["fields"]}
+    assert not [k for k in offered if k.startswith("MODEL_")], sorted(offered)
+    for gone in ("MODEL_TYPE", "MODEL_BUY_THRESHOLD", "MODEL_SELL_THRESHOLD",
+                 "MODEL_RETRAIN_INTERVAL_DAYS"):
+        assert gone not in config_service.STRATEGY_SCOPED_KEYS, "nor writable as a strategy key"
+        assert gone in config_service.RETIRED_STRATEGY_KEYS, "...and dropped, not rejected"
+    # The settings themselves stay: the code that reads them is still there, and
+    # `.env` is where they are set now.
+    s = S(_env_file=None)
+    assert s.model_type == "logistic_regression" and s.model_buy_threshold == 0.6
+    assert s.model_retrain_interval_days == 30
 
 
 def test_validate_strategy_config():
-    ok, errs = config_service.validate_strategy_config({"MODEL_BUY_THRESHOLD": "0.5"})
+    ok, errs = config_service.validate_strategy_config({"GATE_MIN_SHARPE": "0.5"})
     assert ok and not errs
-    ok, errs = config_service.validate_strategy_config({"MODEL_BUY_THRESHOLD": "1.5"})  # out of 0..1
+    ok, errs = config_service.validate_strategy_config({"RISK_LIMIT_PERCENT": "x"})  # not a number
     assert not ok and errs
-    ok, errs = config_service.validate_strategy_config({"MODEL_TYPE": "rule_based"})
+    # A round-tripped value is accepted whatever its spelling of a float.
+    ok, errs = config_service.validate_strategy_config({"FEATURE_RSI_ENABLED": "off"})  # bool spelling
     assert ok and not errs
     # A machine-level key is refused here: it is not a strategy's business.
     ok, errs = config_service.validate_strategy_config({"OPENBB_PROVIDER": "yfinance"})
     assert not ok and errs
-    ok, errs = config_service.validate_strategy_config({"FEATURE_RSI_ENABLED": "off"})  # bool spelling
-    assert ok and not errs
+    # ...and so is one whose section was removed.
+    ok, errs = config_service.validate_strategy_config({"MODEL_TYPE": "rule_based"})
+    assert not ok and errs
 
 
-def test_strategy_scope_carries_trading_model_gates_scheduler():
+def test_market_timezone_is_a_short_list_of_exchanges():
+    """The bot can be pointed at one of a handful of exchanges; the zone is what the
+    code uses (trading hours, chart timestamps, the "today" a lookback counts back
+    from) and it carries the exchange's own DST rules."""
+    groups = config_service.strategy_config_groups(S(_env_file=None))
+    field = [f for g in groups for f in g["fields"] if f["key"] == "MARKET_TIMEZONE"][0]
+    assert [o["value"] for o in field["options"]] == [
+        "America/New_York", "Europe/Berlin", "Europe/London",
+    ]
+    labels = " | ".join(o["label"] for o in field["options"])
+    for named in ("Nasdaq", "NYSE", "Eastern Standard Time", "Central European Standard Time",
+                  "Greenwich Mean Time", "Frankfurt Stock Exchange", "London Stock Exchange"):
+        assert named in labels, named
+    # The default is in the list, so the select shows a real choice on a fresh install.
+    assert field["value"] in [o["value"] for o in field["options"]]
+
+
+def test_strategy_scope_carries_trading_gates_scheduler():
     """Everything a strategy needs is editable per strategy."""
     by_key = {f["key"]: f for g in config_service.strategy_config_groups(S(_env_file=None))
               for f in g["fields"]}
     for key in ("DECISION_INTERVAL_HOURS", "MARKET_TIMEZONE", "TRADING_START_HOUR",
                 "TRADING_END_HOUR", "DECISION_TIME", "DATA_DELTA_PULL_TIME",
-                "MODEL_TYPE", "GATE_MIN_SHARPE", "GATE_MAX_DRAWDOWN_PERCENT",
+                "GATE_MIN_SHARPE", "GATE_MAX_DRAWDOWN_PERCENT",
                 "GATE_MIN_WIN_RATE_PERCENT", "GATE_MAX_WEEKLY_LOSS_PERCENT",
                 "SCHEDULER_ENABLED", "SCHEDULER_TIMEZONE"):
         assert key in by_key, key

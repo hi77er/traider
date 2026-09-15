@@ -211,7 +211,7 @@ configuration — each edited from its own place:
 |-------|--------|------|-------|
 | Global | your text editor | `.env` | data provider + API keys. **Not in the dashboard**: the settings form was removed, so these are edited in the file directly |
 | Account | **🏦 Account Settings** (header) | `settings/account/account.json` | the Alpaca paper + live key pairs, the data folder, backtest costs |
-| Strategy | **Strategy Configuration** / **Rules** / **Risk Management** panels | `settings/strategies/store.json` | instrument, bar size, features, model, gates, schedule, risk limits, rules, paper/live |
+| Strategy | **Strategy Configuration** / **Rules** / **Risk Management** panels | `settings/strategies/store.json` | instrument, bar size + history period, trading hours + exchange, features, gates, schedule, risk limits, rules, paper/live |
 | Runtime | **header switch** + dropdown | `data/trading.json` | trading ON/OFF. Deliberately NOT configuration: it lives beside the datasets, because the configuration files it freezes cannot hold the switch that freezes them. |
 
 Precedence: **strategy > account > .env**. Booleans render as on/off switches and

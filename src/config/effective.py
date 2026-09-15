@@ -14,7 +14,7 @@ flat ``KEY -> raw value`` maps, so one loop overlays them onto the model:
     base = Settings()                  # .env + schema defaults
     eff  = Settings(**account, **strategy)
 
-Because the gates, model thresholds and schedule now live in the strategy file,
+Because the gates and schedule now live in the strategy file,
 a backtest and the live loop automatically evaluate each strategy with ITS own
 these values — nothing else has to thread a strategy through.
 
