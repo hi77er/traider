@@ -11,12 +11,14 @@
     <!-- Left: identity, the account type, and the master switch. Which account the
          bot trades and whether it is trading at all are part of what it IS, not
          settings buried in a panel, so both sit beside the name and are always on
-         screen. -->
+         screen. They share one pill style and differ only in colour: the account
+         tints teal (paper) or red (live), the switch tints grey (idle) or green
+         (armed). -->
     <div class="header-left">
       <h1>📈 TRAIDER</h1>
-      <select id="exec-env" class="exec-select paper" onchange="onEnvChange()"
+      <select id="exec-env" class="exec-pill exec-select paper" onchange="onEnvChange()"
               title="Which Alpaca account this strategy's orders go to"></select>
-      <button id="trading-toggle" class="exec-toggle off" onclick="toggleTrading()"
+      <button id="trading-toggle" class="exec-pill exec-toggle off" onclick="toggleTrading()"
               title="Start or stop sending orders for the active strategy">▶ Turn trading on</button>
     </div>
     <!-- Right: everything that configures or navigates away. -->
@@ -149,31 +151,8 @@
         </section>
       </section>
 
-      <!-- ── Right: Execution, Configuration, Rules, data panels ── -->
+      <!-- ── Right: Configuration, Rules, data panels ── -->
       <aside class="right">
-        <!-- Execution: the master switch itself lives in the header, next to the
-             account type. This panel explains the consequence and reports the
-             resolved target — the account the orders would actually go to. -->
-        <section class="card" id="execution-card">
-          <div class="card-head">
-            <h2>Execution</h2>
-          </div>
-          <p id="exec-msg" class="muted"></p>
-          <div id="exec-state-line" class="exec-state">—</div>
-          <p id="exec-lock-note" class="muted note" hidden>
-            <b>Trading is ON, so configuration is locked.</b> Strategy Configuration, Rules, Risk
-            Management, the account pop-up and global settings, the environment dropdown and the
-            backtest buttons are all disabled until trading is turned off.
-          </p>
-          <p class="muted note">
-            <b>Trading</b> and <b>paper&nbsp;/&nbsp;live</b> are the two controls in the header. The
-            account type applies to the active strategy, and turning trading on is refused while
-            that account has no API keys — so &ldquo;trading on&rdquo; can never be a lie. Trading
-            always starts OFF.
-          </p>
-          <div id="exec-facts" class="rp-kv-grid"></div>
-        </section>
-
         <!-- Per-strategy Configuration -->
         <section class="card collapsible" id="config-card">
           <div class="card-head" onclick="toggleConfigPanel(event)" title="Collapse / expand configuration">

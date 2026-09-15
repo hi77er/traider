@@ -1043,7 +1043,7 @@ async function loadTrading() {
   state.executionStatus = d.execution || {};
   state.tradingLocked = !!d.locked;
   renderEnvSelect(d);
-  renderExecutionPanel(d);
+  renderTradingControls(d);
   renderTradingPanel(d);
   applyConfigLock();
 }
@@ -1066,7 +1066,7 @@ function renderEnvSelect(d, force) {
   // The tint is the ACCOUNT TYPE (teal paper / red live) and must not change when
   // orders would be refused — `blocked` only adds a ring, so the switch never
   // hides which account is selected while it warns about it.
-  sel.className = `exec-select ${exec.live ? "live" : "paper"}${exec.ok ? "" : " blocked"}`;
+  sel.className = `exec-pill exec-select ${exec.live ? "live" : "paper"}${exec.ok ? "" : " blocked"}`;
   sel.title = exec.ok
     ? `${exec.broker} · ${exec.env} — ${exec.base_url}`
     : `Orders would be REFUSED — ${exec.message}`;
@@ -1130,22 +1130,41 @@ async function onEnvChange() {
 async function toggleTrading() {
   const tr = state.tradingState || {};
   const exec = state.executionStatus || {};
-  if (!tr.on && exec.live) {
-    const ok = await confirmDialog({
-      title: "Start trading with REAL money?",
-      messageHtml:
-        `Orders will go to your live Alpaca account (<code>${escapeHtml(exec.base_url || "")}</code>). ` +
-        "You can stop at any time with <b>Turn trading off</b>.",
-      confirmText: "Start live trading",
-    });
+  // Starting ALWAYS asks, in both environments. The wording is what differs: on the
+  // live account the point is that real money is at stake, on paper it is simply
+  // "this strategy starts acting on the next signal". Starting the bot is a
+  // deliberate act whether or not the orders are simulated, and a confirmation that
+  // only appears sometimes is a confirmation you stop reading.
+  if (!tr.on) {
+    const target = escapeHtml(exec.base_url || "");
+    const ok = await confirmDialog(
+      exec.live
+        ? {
+            title: "Start trading with REAL money?",
+            messageHtml:
+              `Orders will go to your live Alpaca account (<code>${target}</code>). ` +
+              "You can stop at any time with <b>Turn trading off</b>.",
+            confirmText: "Start live trading",
+          }
+        : {
+            title: "Start trading on the paper account?",
+            messageHtml:
+              `Orders will be simulated — no real money. They go to <code>${target}</code>, ` +
+              "and every configuration panel locks until you turn trading off.",
+            confirmText: "Start paper trading",
+          }
+    );
     if (!ok) return;
   }
+  const stopping = !!tr.on;
   let r = null;
   try {
-    r = await api(tr.on ? "/api/v1/trading/off" : "/api/v1/trading/on", {
+    r = await api(stopping ? "/api/v1/trading/off" : "/api/v1/trading/on", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ confirm_live: !!exec.live }),
+      // The acknowledgement only means anything when STARTING on a live account;
+      // sending one alongside a stop would read as if stopping needed consent.
+      body: JSON.stringify(stopping ? {} : { confirm_live: !!exec.live }),
     });
   } catch (err) {
     flashToast(`Trading switch failed: ${err.message}`, "warn");
@@ -1162,46 +1181,22 @@ async function toggleTrading() {
   if (state.rulesPayload && typeof renderStrategyBar === "function") renderStrategyBar();
 }
 
-function renderExecutionPanel(d) {
+// The two header controls. They share one pill style and differ only in colour:
+// the account tints teal (paper) or red (live), the switch tints grey (idle) or
+// green (armed). The label always names the ACTION, the colour carries the STATE.
+function renderTradingControls(d) {
   const exec = d.execution || {};
   const tr = d.trading || {};
-  const line = $("exec-state-line");
-  if (line) {
-    line.textContent = tr.on
-      ? `ON since ${shortWhen(tr.since)} — orders route to ${String(tr.env || "").toUpperCase()}`
-      : "OFF — no orders are being sent";
-    line.className = tr.on ? "exec-state on" : "exec-state";
-  }
   const btn = $("trading-toggle");
   if (btn) {
     btn.textContent = tr.on ? "⏹ Turn trading off" : "▶ Turn trading on";
-    // Grey = nothing running, green = armed; the extra `live` ring means armed with
-    // real money. The label always names the ACTION, the colour carries the STATE.
-    btn.className = `exec-toggle ${tr.on ? "on" : "off"}${tr.on && exec.live ? " live" : ""}`;
+    btn.className = `exec-pill exec-toggle ${tr.on ? "on" : "off"}`;
     btn.title = tr.on
       ? `Trading is ON (${String(tr.env || "").toUpperCase()}) for ${d.strategy || "this strategy"} — click to stop`
       : exec.ok
         ? `Start sending orders for ${d.strategy || "the active strategy"}`
         : `Trading cannot start — ${exec.message}`;
     btn.disabled = false; // the off switch must always be reachable
-  }
-  const msg = $("exec-msg");
-  if (msg) {
-    msg.textContent = exec.ok ? "" : `⚠ ${exec.message}`;
-    msg.className = exec.ok ? "muted" : "muted exec-warn";
-  }
-  const facts = $("exec-facts");
-  if (facts) {
-    facts.innerHTML = [
-      execRow("Strategy", escapeHtml(d.strategy || "—")),
-      execRow("Instrument", escapeHtml(d.instrument || "—")),
-      execRow("Bar size", escapeHtml(d.bar_size || "—")),
-      execRow("Environment",
-        `<span class="rp-exec ${exec.live ? "live" : "paper"}">${escapeHtml(String(exec.env || "").toUpperCase())}</span>`),
-      execRow("Endpoint", `<code>${escapeHtml(exec.base_url || "—")}</code>`),
-      execRow("Paper keys", exec.paper_keys_set ? "set" : "—"),
-      execRow("Live keys", exec.live_keys_set ? "set" : "—"),
-    ].join("");
   }
 }
 
@@ -1254,8 +1249,6 @@ function applyConfigLock() {
   if (report) report.disabled = locked;
   const deltaHost = $("delta-actions"); // "⬇ Fetch bars" / "↻ Retry" write to the dataset
   if (deltaHost) deltaHost.querySelectorAll("button").forEach((b) => { b.disabled = locked; });
-  const note = $("exec-lock-note");
-  if (note) note.hidden = !locked;
   // The strategy bar's own buttons are owned by renderStrategyBar(); ask it to
   // recompute so unlocking re-enables exactly what is available again.
   if (state.rulesPayload && typeof renderStrategyBar === "function") renderStrategyBar();

@@ -344,20 +344,20 @@ def test_a_retired_key_is_dropped_not_rejected(tmp_path):
 # ---------------------------------------------------------------------------
 def test_the_trading_switch_and_its_lock_are_wired_into_the_dashboard():
     html = (ROOT / "src" / "web" / "templates" / "index.html").read_text(encoding="utf-8")
-    # The Execution panel reports the resolved target and explains the lock; the
-    # switch itself lives in the header (see the layout test below).
-    assert 'id="execution-card"' in html
     assert 'id="trading-toggle"' in html
-    assert 'id="exec-state-line"' in html
-    assert 'id="exec-msg"' in html
-    assert 'id="exec-facts"' in html
-    assert 'id="exec-lock-note"' in html
     # The armed panel sits under the chart, i.e. above the backtest card it freezes.
     panel = html.index('id="trading-panel"')
     assert html.index('id="backtest"') > panel
     assert 'id="trading-off-btn"' in html
-
+    # The Execution panel is gone: the header carries the state, and the armed
+    # panel under the chart carries the resolved target.
+    for gone in ("execution-card", "exec-state-line", "exec-msg", "exec-facts", "exec-lock-note"):
+        assert f'id="{gone}"' not in html, f"{gone} belongs to the removed Execution panel"
+    # ...and its renderer went with it, so nothing writes to ids that do not exist.
     js = (ROOT / "src" / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    assert "renderExecutionPanel" not in js
+    assert "exec-lock-note" not in js and "exec-facts" not in js
+
     assert "function applyConfigLock()" in js
     # The lock is applied from ONE place, over one shared list of buttons.
     assert "!!state.tradingLocked" in js
@@ -367,7 +367,7 @@ def test_the_trading_switch_and_its_lock_are_wired_into_the_dashboard():
     assert "btn.disabled = false; // the off switch must always be reachable" in js
 
     css = (ROOT / "src" / "web" / "static" / "style.css").read_text(encoding="utf-8")
-    assert ".exec-state.on" in css
+    assert ".exec-state" not in css, "the removed panel's styles should not linger"
     assert "body.trading-on" in css
 
 
@@ -389,27 +389,49 @@ def test_the_header_keeps_identity_and_the_switch_left_and_config_right():
     assert "📈 TRAIDER<" in html
 
 
-def test_the_two_header_controls_are_coloured_by_different_things():
-    """The account type tints the outlined pill; the run state fills the button.
-    They are deliberately different shapes AND different scales, because a live
-    account with trading off and a paper account with trading on must not look
-    alike at a glance."""
+def test_the_two_header_controls_are_one_pill_in_four_colours():
+    """Both controls are built from ONE rule set, so they cannot drift apart: same
+    border, radius, padding, height, weight and tinted background. Every state rule
+    is allowed to change COLOUR only — the moment one of them also sets a layout or
+    a shape, the pair stops reading as the same kind of control."""
     css = (ROOT / "src" / "web" / "static" / "style.css").read_text(encoding="utf-8")
+    html = (ROOT / "src" / "web" / "templates" / "index.html").read_text(encoding="utf-8")
+
+    # Both elements wear the shared class...
+    assert 'class="exec-pill exec-select paper"' in html
+    assert 'class="exec-pill exec-toggle off"' in html
+    # ...and the JS keeps it on when it re-styles them by state.
+    js = (ROOT / "src" / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    assert '`exec-pill exec-select ' in js
+    assert '`exec-pill exec-toggle ' in js
 
     def rule(selector):
         start = css.index(selector + " {")
-        return css[start:css.index("}", start)]
+        return css[start:css.index("}", start) + 1]
 
-    paper, live = rule(".exec-select.paper"), rule(".exec-select.live")
-    assert paper != live
+    def props(text):
+        """The property names a rule declares (values dropped)."""
+        body = text[text.index("{") + 1: text.rindex("}")]
+        return {part.split(":", 1)[0].strip() for part in body.split(";") if ":" in part}
+
+    base = props(rule(".exec-pill"))
+    assert {"border-radius", "padding", "border", "background-color", "font-size"} <= base
+
+    # Colour is the ONLY thing a state may change.
+    colour_only = {"color", "border-color", "background-color"}
+    for selector in (".exec-pill.paper", ".exec-pill.live", ".exec-pill.off", ".exec-pill.on"):
+        assert props(rule(selector)) <= colour_only, f"{selector} must only set colour"
+
+    # All four states are actually different colours, or the distinction is a lie.
+    seen = {rule(s) for s in (".exec-pill.paper", ".exec-pill.live", ".exec-pill.off", ".exec-pill.on")}
+    assert len(seen) == 4
+
     # "Would be refused" is a RING. If it also repainted the pill, the warning
     # would hide the account type it is warning about.
-    blocked = rule(".exec-select.blocked")
+    blocked = rule(".exec-pill.blocked")
     assert "box-shadow" in blocked
     assert not re.search(r"(?<![-a-z])color\s*:", blocked), "blocked must not recolour the pill"
     assert not re.search(r"(?<![-a-z])background-color\s*:", blocked)
-
-    off, on = rule(".exec-toggle.off"), rule(".exec-toggle.on")
-    assert off != on
-    # Green = armed, grey = not. The extra ring is for "armed with real money".
-    assert ".exec-toggle.on.live" in css
+    # The red ring on "armed with real money" is gone: it made one state of the
+    # switch a different shape from the other.
+    assert ".exec-pill.on.live" not in css

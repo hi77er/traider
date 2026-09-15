@@ -214,7 +214,7 @@ configuration — each edited from its own place in the dashboard:
 | Global | **⚙ Global Settings** (header) | `.env` | data provider + API keys |
 | Account | **🏦 Account Settings** (header) | `settings/account/account.json` | the Alpaca paper + live key pairs, the data folder, backtest defaults, cloud/state storage |
 | Strategy | **Strategy Configuration** / **Rules** / **Risk Management** panels | `settings/strategies/store.json` | instrument, bar size, features, model, gates, schedule, risk limits, rules, paper/live |
-| Runtime | **Execution** panel + the header dropdown | `data/trading.json` | trading ON/OFF. Deliberately NOT configuration: it lives beside the datasets, because the configuration files it freezes cannot hold the switch that freezes them. |
+| Runtime | **header switch** + dropdown | `data/trading.json` | trading ON/OFF. Deliberately NOT configuration: it lives beside the datasets, because the configuration files it freezes cannot hold the switch that freezes them. |
 
 Precedence: **strategy > account > .env**. Booleans render as on/off switches and
 secrets (`*_PASSWORD`, `*_API_KEY`, …) are masked — leave a secret field empty to
@@ -230,17 +230,20 @@ window/period parameters under **Feature Parameters** (`FEATURES_*`). The
 
 ### Trading switch and the configuration lock
 
-The two controls that decide what gets traded live in the header, beside the logo:
+Both pills share one style — same border, radius, height, weight and tinted
+background — and only the colour differs, which is the state:
 
 | Control | Colour says |
 |---------|-------------|
-| **Account pill** (outlined, with a caret) | **Teal `Paper`** / **red `LIVE`** — which account the orders go to. An amber ring means orders would be refused (no keys for that account); the pill keeps its tint, because the warning must not hide the account type it is warning about. |
-| **Master switch** (filled button) | **Neutral outline = nothing running**, **solid green = armed**, and a **red ring** around the green when it is armed on the **live** account. The label always names the action. |
+| **Account pill** (with a caret) | **Teal `Paper`** / **red `LIVE`** — which account the orders go to. An amber ring means orders would be refused (no keys for that account); the pill keeps its tint, because the warning must not hide the account type it is warning about. |
+| **Master switch** | **Grey = nothing running**, **green = armed**. The label always names the action. |
 
 Trading always starts OFF, and turning it on is refused while the selected Alpaca
-account has no API keys — so "trading on" can never be a lie. A strategy pointed at
-the **live** account asks for a confirmation every time, and the **Execution** panel
-on the right reports the resolved target and spells out the lock.
+account has no API keys — so "trading on" can never be a lie. Turning it on **always
+asks first**, on paper as well as live: the live prompt is about real money, the
+paper one is about the strategy acting on the next signal. Turning it off never
+asks. While trading is on, a **Trading** panel under the chart shows the resolved
+target and spells out the lock.
 
 While trading is ON, a **Trading** panel appears under the chart and the server
 refuses every configuration write with HTTP 409 — settings, account, rules,

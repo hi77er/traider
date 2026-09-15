@@ -99,10 +99,12 @@ The portal is the whole interface:
 - **Strategy bar** - switch, create, rename or delete a strategy (each one has
   its own instrument, bar size, rules and risk settings)
 - **Trading switch** (header, left, beside the account) - the master ON/OFF for the
-  active strategy, and the only place trading is started. It is a filled button so
-  the colour can carry the RUN state: a neutral outline when nothing is running, a
-  solid green fill when armed, and a red ring around the green when it is armed on
-  the **live** account. The label always names the action, never the state.
+  active strategy, and the only place trading is started. Starting it always asks
+  first, on paper as well as live: starting the bot is a deliberate act either way,
+  and a confirmation that only appears sometimes is one you stop reading. The
+  wording is what differs - on the live account it is about real money, on paper it
+  is about the strategy acting on the next signal. Stopping never asks, so it is
+  always one click.
 - **Environment dropdown** (header, left, beside the logo) - which Alpaca account the
   active strategy's orders go to. It both selects and displays the mode, tinted by
   it: teal `Paper`, red `LIVE`. When the selected account has no keys (so orders
@@ -113,9 +115,6 @@ The portal is the whole interface:
   value (bfcache, back/forward, crash recovery) fires `change` without anyone
   choosing anything, so it is ignored and the display snaps back to what the
   server said.
-- **Execution panel** (top of the right column) - reports the resolved target
-  (strategy, instrument, bar size, environment, endpoint, which key pairs are set)
-  and spells out what the lock does while trading is on.
 - **Trading panel** (appears under the chart while trading is ON) - a standing
   reminder that the strategy is armed, with a one-click stop. While it is
   visible every configuration surface is locked and the backtest buttons are
@@ -139,6 +138,12 @@ The portal is the whole interface:
   Yahoo Finance: a preset screener, the whole US market, top gainers, highest
   volume, top losers and the small-cap gainers/volume lists. The two long tables
   are collapsible and start collapsed so the page opens as an overview
+
+The two header controls are **one pill in four colours** - same border, radius,
+height, weight and tinted background, so neither reads as a different kind of
+thing. Only the colour carries the state: the account tints teal (paper) or red
+(live), the switch tints grey (idle) or green (armed). The label always names the
+action, the colour always carries the state.
 
 ## Tests
 

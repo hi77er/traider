@@ -244,5 +244,5 @@ def test_the_dashboard_shows_which_environment_orders_would_use():
     assert js.count("await loadTrading()") >= 1
 
     css = (root / "src" / "web" / "static" / "style.css").read_text(encoding="utf-8")
-    assert ".exec-select.paper" in css and ".exec-select.live" in css
-    assert ".exec-select.blocked" in css
+    assert ".exec-pill.paper" in css and ".exec-pill.live" in css
+    assert ".exec-pill.blocked" in css
