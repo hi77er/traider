@@ -182,7 +182,6 @@ def test_an_unreadable_state_file_is_not_mistaken_for_running(tmp_path, state_fi
 # the lock (server-side)
 # ---------------------------------------------------------------------------
 LOCKED_WRITES = [
-    ("post", "/api/v1/config", {"values": {"OPENBB_PROVIDER": "yfinance"}}),
     ("post", "/api/v1/account", {"values": {"DATA_DIR": "/tmp/x"}}),
     ("post", "/api/v1/rules", {"rules": []}),
     ("post", "/api/v1/rules/create", {"name": "new"}),
@@ -226,7 +225,6 @@ def test_every_configuration_write_is_refused_while_trading_is_on(wired, state_f
 @pytest.mark.parametrize(
     "path",
     [
-        "/api/v1/config",
         "/api/v1/account",
         "/api/v1/rules",
         "/api/v1/backtest",
@@ -590,7 +588,7 @@ def test_the_trading_switch_and_its_lock_are_wired_into_the_dashboard():
     assert "function applyConfigLock()" in js
     # The lock is applied from ONE place, over one shared list of buttons.
     assert "!!state.tradingLocked" in js
-    for key in ("save-config", "account-save", "save-pconfig", "save-rules", "save-risk", "exec-env"):
+    for key in ("account-save", "save-pconfig", "save-rules", "save-risk", "exec-env"):
         assert f'"{key}"' in js
     # The off switch is never disabled, or the lock could not be released.
     assert "btn.disabled = false; // the off switch must always be reachable" in js
@@ -611,8 +609,13 @@ def test_the_header_keeps_identity_and_the_switch_left_and_config_right():
     actions = html.index('class="header-actions"')
     assert left < switch < actions, "the paper/live switch must sit in the left group"
     assert left < toggle < actions, "the master switch must sit in the left group too"
-    for el in ("open-account-settings", "open-global-settings"):
+    for el in ("open-account-settings",):
         assert html.index(el) > actions, f"{el} must stay in the right group"
+    # The global (.env) settings form is gone: infrastructure settings are edited in
+    # `.env` directly, and a button that opens a form for removed code is worse than
+    # no button at all.
+    assert "open-global-settings" not in html
+    assert "global-settings-backdrop" not in html
     # The logo is the product name, not the page name.
     assert "TRAIDER Dashboard" not in html
     assert "📈 TRAIDER<" in html

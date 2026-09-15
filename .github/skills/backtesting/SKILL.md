@@ -16,7 +16,7 @@ The non-negotiable gate before live trading. A strategy may only go live after t
 - Deciding "is the edge real?"
 
 ## Project Facts
-- **Backtest window & thresholds come from `.env`**: window via `BACKTEST_START_DATE`/`BACKTEST_END_DATE` (defaults to `HISTORICAL_START_DATE`/`HISTORICAL_END_DATE`); gates via `GATE_MIN_SHARPE`, `GATE_MAX_DRAWDOWN_PERCENT`, `GATE_MIN_WIN_RATE_PERCENT`, `GATE_MAX_WEEKLY_LOSS_PERCENT`; costs via `BACKTEST_SLIPPAGE_PERCENT` and `BACKTEST_COMMISSION_PER_TRADE`
+- **Backtest window & thresholds come from `.env`** (edited in the file, not in the dashboard: the settings form was removed): window via `BACKTEST_START_DATE`/`BACKTEST_END_DATE` — both unset by default, which means **the whole period the strategy is configured for**, since a run is triggered by hand rather than on a schedule; gates via `GATE_MIN_SHARPE`, `GATE_MAX_DRAWDOWN_PERCENT`, `GATE_MIN_WIN_RATE_PERCENT`, `GATE_MAX_WEEKLY_LOSS_PERCENT`; costs via `BACKTEST_SLIPPAGE_PERCENT` and `BACKTEST_COMMISSION_PER_TRADE`
 - Gate 2 (Phase 3): defaults **Sharpe ≥ 1.0, max DD ≤ 25%, win rate ≥ 55%, no week > 5% loss**
 - Uses the same OpenBB data path and `feature-engineering` functions as live
 - Starts with `dummy_signals.py` (e.g. SMA crossover) to validate the engine before the real model

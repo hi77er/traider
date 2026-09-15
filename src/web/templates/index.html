@@ -24,7 +24,6 @@
     <div class="header-actions">
       <a class="btn-link" href="/market" title="Whole-market screens: screener, gainers, volume, losers, small caps">🌎 Market</a>
       <button id="open-account-settings" class="ghost small" onclick="openAccountSettings()" title="Account-wide settings: broker (Trading Account), data folders, backtest defaults">🏦 Account Settings</button>
-      <button id="open-global-settings" class="ghost small" onclick="openGlobalSettings()" title="Edit global (non-strategy) settings in .env">⚙ Global Settings</button>
     </div>
   </header>
 
@@ -266,26 +265,6 @@
         <button id="account-close" class="ghost" onclick="closeAccountSettings()">Close</button>
         <button id="account-reload" class="ghost" onclick="loadAccount()" title="Reload values from the file">↻ Reload</button>
         <button id="account-save" class="primary" onclick="saveAccount()">💾 Save</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Global (.env) settings dialog -->
-  <div id="global-settings-backdrop" class="modal-backdrop" hidden>
-    <div class="modal modal-wide modal-scroll" role="dialog" aria-modal="true" aria-labelledby="global-settings-title">
-      <h3 id="global-settings-title">Global Settings (.env)</h3>
-      <p id="config-msg" class="muted"></p>
-      <p class="muted note">Infrastructure / global defaults written to <code>.env</code> on disk. Settings that
-        belong to a strategy (instrument, bar size, features, model thresholds, risk) live in the per-strategy
-        <b>Strategy Configuration</b> panel and are stored in the JSON. Most global settings apply on the next bot
-        restart. Secrets (<code>*_PASSWORD</code>, <code>*_API_KEY</code>…) are masked — leave the field empty to
-        keep the existing value.</p>
-      <div id="settings-fields"></div>
-      <div id="save-errors" class="save-errors" hidden></div>
-      <div class="modal-actions">
-        <button id="global-close" class="ghost" onclick="closeGlobalSettings()">Close</button>
-        <button id="reload-config" class="ghost" onclick="loadConfig()" title="Reload values from .env">↻ Reload</button>
-        <button id="save-config" class="primary" onclick="saveConfig()">💾 Save</button>
       </div>
     </div>
   </div>

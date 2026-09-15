@@ -16,7 +16,6 @@ const state = {
   rows: [],
   total: 0,
   offset: 0,
-  config: null,
   account: null, // GET /api/v1/account -> {file, file_exists, groups, error}
   chart: null,
   datasetRows: null,
@@ -652,38 +651,11 @@ function nextPage() {
   if (state.offset + PAGE_SIZE < state.total) { state.offset += PAGE_SIZE; loadTable(); }
 }
 
-/* ---------- Settings (.env) form ---------- */
-async function loadConfig(silent) {
-  try {
-    const c = await api("/api/v1/config");
-    state.config = c;
-    renderConfig(c);
-    if (!silent) {
-      $("config-msg").textContent = c.file_exists
-        ? `Editing ${c.file}`
-        : `No ${c.file} yet — saving will create it.`;
-    }
-  } catch (err) {
-    $("config-msg").textContent = `Failed to load config: ${err.message}`;
-  }
-}
-
-function renderConfig(c) {
-  const container = $("settings-fields");
-  container.innerHTML = "";
-  for (const section of c.sections) {
-    const fieldset = document.createElement("fieldset");
-    fieldset.className = "cfg-section";
-    const legend = document.createElement("legend");
-    legend.textContent = section.name;
-    fieldset.appendChild(legend);
-    for (const f of section.fields) {
-      fieldset.appendChild(fieldInput(f));
-    }
-    container.appendChild(fieldset);
-  }
-}
-
+/* ---------- settings fields ----------
+   ONE renderer for every settings form in the app. The global (.env) form it was
+   written for is gone — global settings are edited in `.env` directly for now — so
+   this is kept for the Account Settings popup and the strategy panel, which is what
+   makes the two look and behave identically. */
 function fieldInput(f, prefix) {
   prefix = prefix || "cfg";
   const wrap = document.createElement("div");
@@ -902,122 +874,6 @@ function credentialMessage(env, res) {
   return `${label} credentials are valid${where}.${saved}`;
 }
 
-function showSaveErrors(text, kind) {
-  const el = $("save-errors");
-  if (!el) return;
-  el.classList.toggle("warn", kind === "warn");
-  el.textContent = text || "";
-  el.hidden = !text;
-}
-
-async function saveConfig() {
-  const btn = $("save-config");
-
-  // 1) Read every field from the rendered form.
-  const values = {};
-  for (const section of state.config.sections) {
-    for (const f of section.fields) {
-      const el = document.getElementById("cfg-" + f.key);
-      if (!el) continue;
-      // checkbox switches submit True/False; empty password => keep existing
-      values[f.key] = el.type === "checkbox" ? (el.checked ? "True" : "False") : el.value;
-    }
-  }
-
-  // 1b) Range-check numeric fields up front so an out-of-bounds value (e.g. a
-  // mis-typed Gate threshold) can't be submitted in the first place.
-  const rangeErrors = [];
-  const offenders = new Set();
-  for (const section of state.config.sections) {
-    for (const f of section.fields) {
-      if (f.type !== "int" && f.type !== "float") continue;
-      if (f.min == null && f.max == null) continue;
-      const el = document.getElementById("cfg-" + f.key);
-      if (!el) continue;
-      const n = Number(el.value);
-      if (!el.value.trim() || Number.isNaN(n)) {
-        rangeErrors.push(`${f.label}: enter a number`);
-        offenders.add(f.key);
-        continue;
-      }
-      if (f.min != null && n < f.min) { rangeErrors.push(`${f.label}: min is ${f.min}`); offenders.add(f.key); }
-      if (f.max != null && n > f.max) { rangeErrors.push(`${f.label}: max is ${f.max}`); offenders.add(f.key); }
-    }
-  }
-  showSaveErrors("");
-  if (rangeErrors.length) {
-    showSaveErrors("✗ Not saved — " + rangeErrors.join(" · "));
-    // Flag every offending field in red; clear the flag as soon as it's edited.
-    offenders.forEach((key) => {
-      const el = document.getElementById("cfg-" + key);
-      if (!el) return;
-      el.classList.add("invalid");
-      const clearInvalid = () => {
-        el.classList.remove("invalid");
-        el.removeEventListener("input", clearInvalid);
-      };
-      el.addEventListener("input", clearInvalid);
-    });
-    return;
-  }
-
-  // 2) Changing the instrument is significant — confirm before saving.
-  const oldInstrument = currentInstrument();
-  const newInstrument = (values["INSTRUMENT"] || "").trim().toUpperCase();
-  const instrumentChanged =
-    !!newInstrument && !!oldInstrument && newInstrument !== oldInstrument.toUpperCase();
-
-  if (instrumentChanged) {
-    const ok = await confirmDialog({
-      title: "Change trading instrument?",
-      messageHtml:
-        `<p>You're attempting to change the instrument that the bot is configured to work with — ` +
-        `from <b>${escapeHtml(oldInstrument.toUpperCase())}</b> to <b>${escapeHtml(newInstrument)}</b>.</p>` +
-        `<p>Are you sure you want that?</p>` +
-        `<p class="muted">The dashboard will switch to ${escapeHtml(newInstrument)}. If no historical data ` +
-        `file exists for it yet, a new one will be downloaded via the “Download Historical Data” button.</p>`,
-      confirmText: "Yes, switch",
-      cancelText: "No",
-    });
-    if (!ok) {
-      showSaveErrors("Save cancelled — instrument unchanged.", "warn");
-      return;
-    }
-  }
-
-  btn.disabled = true;
-  showSaveErrors(""); // clear any earlier validation notice while saving
-  try {
-    const r = await api("/api/v1/config", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ values }),
-    });
-    if (r.ok) {
-      await loadConfig(true); // re-read so secrets re-mask and values refresh
-      if (r.instrument_changed) switchDataset(newInstrument); // reloads dashboard
-      closeGlobalSettings(); // success -> dismiss the dialog
-    } else {
-      showSaveErrors((r.errors || []).join("; ") || r.message);
-    }
-  } catch (err) {
-    showSaveErrors(`Save failed: ${err.message}`);
-  } finally {
-    btn.disabled = false;
-  }
-}
-
-function currentInstrument() {
-  if (state.config) {
-    for (const section of state.config.sections) {
-      for (const f of section.fields) {
-        if (f.key === "INSTRUMENT") return (f.value || "").trim();
-      }
-    }
-  }
-  return state.status && state.status.symbol ? state.status.symbol : "";
-}
-
 function switchDataset(symbol) {
   // Tear down everything tied to the previous instrument's dataset/chart.
   if (state.chart) {
@@ -1085,31 +941,6 @@ function confirmDialog(opts) {
     confirmBtn.focus();
   });
 }
-
-/* ---------- Global (.env) settings dialog ---------- */
-function openGlobalSettings() {
-  const backdrop = $("global-settings-backdrop");
-  if (!backdrop) return;
-  if (!state.config) loadConfig(true); // render the fields before showing
-  showSaveErrors(""); // no stale validation notice from a previous open/save
-  backdrop.hidden = false;
-}
-
-function closeGlobalSettings() {
-  const backdrop = $("global-settings-backdrop");
-  if (backdrop) backdrop.hidden = true;
-}
-
-(function initGlobalSettingsModal() {
-  const backdrop = $("global-settings-backdrop");
-  if (!backdrop) return;
-  backdrop.addEventListener("click", (e) => {
-    if (e.target === backdrop) closeGlobalSettings();
-  });
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && !backdrop.hidden) closeGlobalSettings();
-  });
-})();
 
 /* ---------- Account settings dialog (settings/account/account.json) ---------- */
 async function loadAccount(silent) {
@@ -3385,7 +3216,6 @@ ensureMainChartWheel();
 watchEnvSelect(); // arm the environment dropdown so only a real gesture can change it
 showPendingToast();
 refresh();
-loadConfig();
 loadAccount(true);
 loadRules();
 loadTrading(); // last: it applies the configuration lock on top of the rendered panels

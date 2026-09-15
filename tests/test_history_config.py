@@ -64,6 +64,12 @@ def test_period_and_bar_size_are_strategy_scoped():
     assert "HISTORICAL_LOOKBACK_YEARS" in scoped
 
 
-def test_legacy_dates_hidden_from_global_form():
-    assert "HISTORICAL_START_DATE" in config_service._HIDDEN_FROM_GLOBAL_KEYS
-    assert "HISTORICAL_END_DATE" in config_service._HIDDEN_FROM_GLOBAL_KEYS
+def test_legacy_dates_are_not_an_account_setting():
+    """The fetch window is not offered any more: the strategy's period and bar size
+    answer it, and a second, quieter answer in Account Settings would drift from the
+    first. The Settings fields stay — the dataset code still reads them."""
+    assert "HISTORICAL_START_DATE" not in config_service.ACCOUNT_SCOPED_KEYS
+    assert "HISTORICAL_END_DATE" not in config_service.ACCOUNT_SCOPED_KEYS
+    by_key = {f["key"] for g in config_service.account_sections() for f in g["fields"]}
+    assert "HISTORICAL_START_DATE" not in by_key
+    assert "HISTORICAL_END_DATE" not in by_key

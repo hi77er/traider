@@ -13,7 +13,6 @@ from fastapi.staticfiles import StaticFiles
 
 from src.web.routes import account as account_routes
 from src.web.routes import chart as chart_routes
-from src.web.routes import config as config_routes
 from src.web.routes import backtest as backtest_routes
 from src.web.routes import dataset as dataset_routes
 from src.web.routes import delta as delta_routes
@@ -51,7 +50,6 @@ app.include_router(dataset_routes.router)
 app.include_router(delta_routes.router)
 app.include_router(market_routes.router)
 app.include_router(chart_routes.router)
-app.include_router(config_routes.router)
 app.include_router(account_routes.router)
 app.include_router(execution_routes.router)
 app.include_router(trading_routes.router)

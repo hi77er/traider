@@ -131,7 +131,12 @@ The portal is the whole interface:
 - **Strategy Configuration / Rules / Risk Management** - three collapsible
   panels; the risk panel leads with the two master switches
 - **Account Settings** (🏦 header popup) - the Alpaca key pairs, the single data
-  folder, backtest defaults and cloud/state storage; shared by all strategies. A
+  folder, backtest costs and cloud storage; shared by all strategies. Four sections
+  and nothing else: the history window, the backtest window and the train/test split
+  are gone (the strategy's period and bar size answer the first, a run is triggered by
+  hand and covers the strategy's whole period, and the only model in use is
+  rule-based), and what is left of state persistence is marked
+  `State Storage — postponed`, to be configured in `.env` when it is built. A
   stored secret is shown as `********` **in the box**, not as a grey hint behind an
   empty one, so "is a pair saved?" is answerable at a glance — an empty box with a
   faint placeholder read as "nothing was saved" even for a pair that had just been
@@ -149,7 +154,8 @@ The portal is the whole interface:
   as news. A pair that already passed is not re-checked on every save. A bad pair
   fails itself rather than the save: a pair the broker **rejects** is left out of the
   write (see Safety) while the rest of the form is saved as normal.
-- **Global Settings** (⚙ header popup) - the data provider + keys in `.env`
+- **Global settings** - not in the dashboard any more: the data provider, its keys
+  and the rest of the infrastructure settings are edited in `.env` directly
 - **Backtest panel** - run the engine, read the Gate and the metrics
 - **Historical Delta** - gap-check the dataset against the provider and refill
   missing bars
@@ -181,7 +187,7 @@ dot stays red and simply stops flashing.
 ## Tests
 
 ```bash
-.venv/bin/python -m pytest tests/ -q      # 418 passed
+.venv/bin/python -m pytest tests/ -q      # 508 passed
 ```
 
 The suite is offline: OpenBB, the broker and the clock are all stubbed, so it
@@ -231,12 +237,12 @@ costs, risk config) that makes a result reproducible and attributable.
 
 ## Configuration
 
-Three layers, each with its own editor in the dashboard:
+Three layers, two editors in the dashboard:
 
 | Layer | File | Edited from | Holds |
 |-------|------|-------------|-------|
-| **Global** | `.env` | ⚙ Global Settings | data provider + keys, the paths of the two JSON stores |
-| **Account** | `settings/account/account.json` | 🏦 Account Settings | the Alpaca key pairs (paper + live), the data folder, backtest defaults, cloud/state storage |
+| **Global** | `.env` | by hand | data provider + keys, the paths of the two JSON stores |
+| **Account** | `settings/account/account.json` | 🏦 Account Settings | the Alpaca key pairs (paper + live), the data folder, backtest costs, cloud storage |
 | **Strategy** | `settings/strategies/store.json` | Strategy Configuration / Rules / Risk panels, plus the header dropdown for `EXECUTION_ENV` | instrument, bar size, features, model, gates, schedule, risk limits, rules, paper/live |
 
 Precedence is **strategy > account > .env**, and the process environment still

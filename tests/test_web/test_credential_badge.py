@@ -23,7 +23,7 @@ import pytest
 APP_JS = Path(__file__).resolve().parents[2] / "src" / "web" / "static" / "app.js"
 
 START_MARKER = "function credWhen("
-END_MARKER = "\nfunction showSaveErrors("
+END_MARKER = "\nfunction switchDataset("
 
 pytestmark = pytest.mark.skipif(
     shutil.which("node") is None, reason="node is required to exercise the badge"

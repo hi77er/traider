@@ -78,24 +78,14 @@ def test_endpoint_status_error(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# config additions: schedule times in schema + validation
+# schedule fields: rendered by the strategy panel, validated by Settings
 # ---------------------------------------------------------------------------
-def test_new_schedule_fields_in_config_schema(monkeypatch):
-    import tempfile
+def test_new_schedule_fields_are_per_strategy():
+    from src.config.settings import Settings as S
     from src.web.services import config_service
 
-    with tempfile.TemporaryDirectory() as td:
-        path = config_service.env_file_path()
-        config_service.env_file_path = lambda: __import__("pathlib").Path(td) / ".env"
-        try:
-            cfg = config_service.get_config_schema()
-        finally:
-            config_service.env_file_path = lambda: path
-
-    # The schedules are per-strategy now, so they render in the strategy panel
-    # instead of the global .env form.
-    from src.config.settings import Settings as S
-
+    # The schedules are per-strategy, so they render in the strategy panel. There is
+    # no global .env form to keep them out of any more.
     groups = config_service.strategy_config_groups(S(_env_file=None))
     by_key = {f["key"]: f for g in groups for f in g["fields"]}
     assert by_key["DECISION_TIME"]["value"] == "09:45"
@@ -103,8 +93,6 @@ def test_new_schedule_fields_in_config_schema(monkeypatch):
     trading = next(g for g in groups if g["name"] == "Trading")
     keys = [f["key"] for f in trading["fields"]]
     assert "DECISION_TIME" in keys and "DATA_DELTA_PULL_TIME" in keys
-    global_keys = {f["key"] for s in cfg["sections"] for f in s["fields"]}
-    assert "DECISION_TIME" not in global_keys and "DATA_DELTA_PULL_TIME" not in global_keys
 
 
 def test_schedule_time_validation():

@@ -1,26 +1,25 @@
-"""Read + update the bot's central ``.env`` configuration for the Web Portal.
+"""Schema + persistence for the settings the Web Portal edits.
 
-The portal exposes the whole config as an editable form:
+Two JSON layers, one popup each:
 
-- ``GET  /api/v1/config`` -> schema of sections/fields (secrets masked)
-- ``POST /api/v1/config`` -> merge submitted values into ``.env`` atomically
+- ``settings/account/account.json`` — what is true of this trading ACCOUNT: the
+  broker it trades through, where its data and backtest results live, the backtest
+  defaults. Shared by every strategy (``GET/POST /api/v1/account``).
+- ``settings/strategies/store.json`` — anything a STRATEGY needs (see
+  ``rules_service``).
 
-Secrets (keys ending in ``_PASSWORD`` / ``_API_KEY`` / ``_SECRET`` / ``_TOKEN``)
-are never sent to the browser: a set secret is shown as a mask and an empty /
-masked value on save keeps the existing secret untouched.
+Global, infrastructure-level settings are no longer editable in the portal: they are
+edited in ``.env`` directly, and ``Settings`` loads them from there. Nothing here
+writes ``.env`` — it is the operator's file again.
 
-Changing ``INSTRUMENT`` is allowed: the UI confirms first, and on save the
-settings cache is invalidated so the whole portal immediately points at the
-new instrument (its own Parquet dataset file, or the download state if that
-file does not exist yet).
+Secrets (keys ending in ``_PASSWORD`` / ``_API_KEY`` / ``_SECRET`` / ``_TOKEN``) are
+never sent to the browser: a set secret is shown as a mask, and an empty or masked
+field on save keeps the stored value untouched.
 """
 
 from __future__ import annotations
 
 import logging
-import os
-import tempfile
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from pydantic import ValidationError
@@ -35,24 +34,7 @@ logger = logging.getLogger(__name__)
 # Sentinel for a set-but-hidden secret in the UI.
 MASK = "********"
 
-# Keys the Web Portal refuses to write. Kept as a set for clarity; the
-# instrument is intentionally NOT here — switching it is allowed (the UI
-# confirms first) and the settings cache is invalidated on save so the whole
-# dashboard switches to the new instrument immediately.
-_PROTECTED: set = set()
-
 _SENSITIVE_SUFFIXES = ("_PASSWORD", "_API_KEY", "_SECRET", "_TOKEN")
-
-# (prefixes / exact keys, section name). Order here groups the fields that are
-# defined on ``Settings``; fields themselves render in model-definition order.
-#
-# Only MACHINE-level settings stay global. Everything else moved to one of the
-# two JSON layers: trading/storage/broker defaults live in Account Settings
-# (``settings/account/account.json``) and anything a strategy needs lives in the
-# strategy store (``settings/strategies/store.json``).
-_SECTION_RULES: List[Tuple[Tuple[str, ...], str]] = [
-    (("OPENBB_",), "Market Data"),
-]
 
 # Keys rendered as a dropdown instead of a free-text field. Options may be a
 # plain string (value == label) or a dict {label, value} for human labels with
@@ -120,15 +102,10 @@ _LABELS: Dict[str, str] = {
     "ALPACA_LIVE_API_KEY": "Alpaca live API key",
     "ALPACA_LIVE_API_SECRET": "Alpaca live API secret",
     "EXECUTION_ENV": "Order environment (paper / live)",
-    "BACKTEST_START_DATE": "Backtest window start",
-    "BACKTEST_END_DATE": "Backtest window end",
-    "TRAIN_TEST_SPLIT": "Train/test split",
     "BACKTEST_SLIPPAGE_PERCENT": "Slippage per fill (%)",
     "BACKTEST_COMMISSION_PER_TRADE": "Commission per trade (USD)",
     "DATA_CACHE_ENABLED": "Cache fetched candles",
     "CACHE_DIR": "Cache folder",
-    "HISTORICAL_START_DATE": "History fetch start",
-    "HISTORICAL_END_DATE": "History fetch end",
     "LIVE_LOOKBACK_DAYS": "Live poll lookback (days)",
     "S3_ENABLED": "Sync dataset to S3",
     "S3_BUCKET": "S3 bucket",
@@ -372,19 +349,25 @@ _ACCOUNT_SECTIONS: List[Tuple[str, Tuple[str, ...]]] = [
             # below are DERIVED from it (read-only in the popup).
             "DATA_DIR", "HISTORICAL_DATA_DIR", "BACKTEST_DIR",
             "DATA_CACHE_ENABLED", "CACHE_DIR",
-            "HISTORICAL_START_DATE", "HISTORICAL_END_DATE", "LIVE_LOOKBACK_DAYS",
+            "LIVE_LOOKBACK_DAYS",
         ),
     ),
     (
         "Backtest",
         (
-            "BACKTEST_START_DATE", "BACKTEST_END_DATE", "TRAIN_TEST_SPLIT",
+            # No window and no split: a backtest is triggered by hand and covers the
+            # whole period the STRATEGY is configured for, and the only model in use
+            # is rule-based, so there is nothing to train on. A window here would be a
+            # second, quieter answer to a question the strategy panel already answers.
             "BACKTEST_SLIPPAGE_PERCENT", "BACKTEST_COMMISSION_PER_TRADE",
         ),
     ),
     ("Cloud Storage", ("S3_ENABLED", "S3_BUCKET", "S3_PREFIX", "S3_ENDPOINT_URL")),
     (
-        "State Storage",
+        # Deliberately named as what it is: persisting state across runs is not built,
+        # and when it is it belongs in `.env` with the other infrastructure settings
+        # rather than in a per-account file.
+        "State Storage — postponed",
         ("AWS_REGION", "DYNAMODB_TABLE", "DYNAMODB_TTL_DAYS", "DYNAMODB_ENDPOINT_URL"),
     ),
 ]
@@ -392,29 +375,6 @@ ACCOUNT_SCOPED_KEYS = frozenset(k for _, keys in _ACCOUNT_SECTIONS for k in keys
 
 # Derived from DATA_DIR — shown so the layout is visible, never stored.
 _DERIVED_ACCOUNT_KEYS = frozenset({"HISTORICAL_DATA_DIR", "BACKTEST_DIR"})
-
-# Keys that are NOT shown in the global .env form:
-# - ``WEB_PORTAL_*`` — the portal is being reworked; its switches are parked.
-# - internal file paths — implied by the folder layout, not user-editable.
-# - ``S3_*`` / ``AWS_*`` / ``DYNAMODB_*`` — now edited in Account Settings.
-_HIDDEN_FROM_GLOBAL_PREFIXES = ("WEB_PORTAL_",)
-_HIDDEN_FROM_GLOBAL_KEYS = frozenset({
-    # Paths to the two JSON stores (see ACCOUNT_SETTINGS_FILE / STRATEGY_RULES_FILE).
-    "STRATEGY_RULES_FILE",
-    "ACCOUNT_SETTINGS_FILE",
-    # The dashboard is essential while it is the only UI, so its on/off switch
-    # must not be reachable from the form.
-    "WEB_PORTAL_ENABLED",
-    # Historical window is a years/bar-size choice in the strategy panel, and a
-    # fetch-window default in Account Settings — not free-text in the global form.
-    "HISTORICAL_START_DATE",
-    "HISTORICAL_END_DATE",
-})
-
-
-def _hidden_from_global(key: str) -> bool:
-    """True when a key must never appear in (or be written by) the global form."""
-    return key in _HIDDEN_FROM_GLOBAL_KEYS or key.startswith(_HIDDEN_FROM_GLOBAL_PREFIXES)
 
 
 def _field_by_env_key() -> Dict[str, str]:
@@ -501,207 +461,6 @@ def validate_strategy_config(values: Dict[str, str]) -> Tuple[bool, List[str]]:
     return (not errors), errors
 
 
-def env_file_path() -> Path:
-    """Absolute path of the ``.env`` file (project root, same as Settings)."""
-    return Path(__file__).resolve().parents[3] / ".env"
-
-
-# ---------------------------------------------------------------------------
-# schema (GET)
-# ---------------------------------------------------------------------------
-def get_config_schema() -> dict:
-    """Return the editable config schema grouped into sections (secrets masked)."""
-    path = env_file_path()
-    env = _read_env(path)
-    settings = Settings()  # fresh instance so file edits are reflected
-
-    sections: Dict[str, List[dict]] = {}
-    order: List[str] = []
-    for field_name, info in Settings.model_fields.items():
-        key = _env_key(field_name)
-        if key in STRATEGY_SCOPED_KEYS or key in ACCOUNT_SCOPED_KEYS or _hidden_from_global(key):
-            continue  # per-strategy / per-account / parked settings are not in the global form
-        sensitive = _is_sensitive(key)
-        section = _section_for(key)
-        if section not in sections:
-            sections[section] = []
-            order.append(section)
-
-        set_in_file = key in env
-        if sensitive:
-            value = MASK if set_in_file and env[key].strip() else ""
-        elif set_in_file:
-            value = env[key].strip()
-        else:
-            value = _format_value(getattr(settings, field_name))
-
-        field = {
-            "key": key,
-            "label": _LABELS.get(key, _human_label(key)),
-            "type": _field_type(info.annotation),
-            "value": value,
-            "set": set_in_file,
-            "sensitive": sensitive,
-            "readonly": key in _PROTECTED,
-            "description": info.description or "",
-            "options": _OPTIONS.get(key),
-            "hints": _field_hints(key, info),
-        }
-        field.update(_field_bounds(info))
-        sections[section].append(field)
-
-    return {
-        "file": str(path),
-        "file_exists": path.exists(),
-        "sections": [{"name": name, "fields": sections[name]} for name in order],
-    }
-
-
-# ---------------------------------------------------------------------------
-# update (POST)
-# ---------------------------------------------------------------------------
-def update_config(values: Dict[str, str]) -> dict:
-    """Merge submitted values into ``.env`` (atomic), revalidating first.
-
-    Sensitive keys submitted empty / masked are left unchanged so existing
-    secrets are never clobbered by an unedited form field.
-    """
-    path = env_file_path()
-    env = _read_env(path) if path.exists() else {}
-    field_by_key = {_env_key(f): f for f in Settings.model_fields}
-
-    # 1) Validate the merged config against the Pydantic model.
-    overrides: Dict[str, str] = {}
-    for key, submitted in values.items():
-        if key not in field_by_key:
-            continue  # unknown keys are ignored
-        if key in _PROTECTED:
-            continue  # protected keys are never changed via the API
-        if key in STRATEGY_SCOPED_KEYS:
-            continue  # per-strategy keys are managed in the strategy panel only
-        if key in ACCOUNT_SCOPED_KEYS:
-            continue  # account keys are managed in the Account Settings popup only
-        if _hidden_from_global(key):
-            continue  # not editable through the global form (yet)
-        if _is_sensitive(key) and submitted in ("", MASK):
-            continue  # keep existing secret
-        overrides[key] = submitted.strip()
-    for key, raw in env.items():  # unchanged file values also validated
-        if key in field_by_key and key not in overrides:
-            overrides[key] = raw.strip()
-
-    try:
-        Settings(**{field_by_key[k]: v for k, v in overrides.items()})
-    except ValidationError as exc:
-        errors = [f"{err['loc'][0].upper()}: {err['msg']}" for err in exc.errors()]
-        logger.warning("Config update rejected: %s", errors)
-        return {"ok": False, "message": "Invalid configuration", "errors": errors, "file": str(path)}
-
-    # 2) Merge into the file, preserving comments / ordering / inline comments.
-    if path.exists():
-        lines, key_to_line = _parse_env_file(path.read_text(encoding="utf-8"))
-    else:
-        lines = ["# TRAIDER configuration — generated from the Web Portal", ""]
-        key_to_line = {}
-
-    changed: List[str] = []
-    for key, submitted in values.items():
-        if key not in field_by_key:
-            continue
-        if key in _PROTECTED:
-            continue
-        if key in STRATEGY_SCOPED_KEYS:
-            continue  # never written to .env — per strategy only
-        if key in ACCOUNT_SCOPED_KEYS:
-            continue  # never written to .env — per account only
-        if _hidden_from_global(key):
-            continue  # not editable through the global form (yet)
-        if _is_sensitive(key) and submitted in ("", MASK):
-            continue
-        value = submitted.strip()
-        if key in key_to_line:
-            lines[key_to_line[key]] = _replace_value(lines[key_to_line[key]], key, value)
-        else:
-            if lines and lines[-1] != "":
-                lines.append("")
-            lines.append(f"{key}={value}")
-        changed.append(key)
-
-    _atomic_write(path, "\n".join(lines) + "\n")
-    logger.info("Web Portal updated .env keys: %s", ", ".join(changed) or "(none)")
-
-    return {
-        "ok": True,
-        "message": f"Saved {len(changed)} setting(s) to {path.name}",
-        "errors": [],
-        "file": str(path),
-        "updated": changed,
-    }
-
-
-# ---------------------------------------------------------------------------
-# helpers
-# ---------------------------------------------------------------------------
-def _read_env(path: Path) -> Dict[str, str]:
-    """Parse a dotenv file into an ordered ``KEY -> raw value`` mapping."""
-    values: Dict[str, str] = {}
-    if not path.exists():
-        return values
-    for line in path.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        key, _, val = stripped.partition("=")
-        key = key.strip()
-        if key:
-            values[key] = val.strip()
-    return values
-
-
-def _parse_env_file(text: str) -> Tuple[List[str], Dict[str, int]]:
-    """Split file into lines plus a ``KEY -> line index`` map (comments kept)."""
-    lines: List[str] = []
-    key_to_line: Dict[str, int] = {}
-    for i, line in enumerate(text.splitlines()):
-        lines.append(line)
-        stripped = line.strip()
-        if stripped and not stripped.startswith("#") and "=" in stripped:
-            key = stripped.partition("=")[0].strip()
-            if key:
-                key_to_line[key] = i
-    return lines, key_to_line
-
-
-def _replace_value(line: str, key: str, value: str) -> str:
-    """Rewrite ``KEY=value`` in place, preserving a trailing inline comment."""
-    _, _, rest = line.partition("=")
-    comment = ""
-    val_part = rest
-    if "#" in val_part:
-        val_part, _, comment = val_part.partition("#")
-        comment = comment.rstrip()
-    new = f"{key}={value}"
-    if comment:
-        new += "  # " + comment
-    return new
-
-
-def _atomic_write(path: Path, content: str) -> None:
-    """Write via temp file + rename so a crash never leaves a half-written .env."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=".env.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(content)
-        os.replace(tmp, str(path))
-    except BaseException:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
-
-
 def _env_key(field_name: str) -> str:
     return field_name.upper()
 
@@ -744,13 +503,6 @@ def _verify_spec(key: str) -> Optional[dict]:
         if key == secret_key:
             return {"env": env, "key_key": key_key, "secret_key": secret_key}
     return None
-
-
-def _section_for(key: str) -> str:
-    for prefixes, name in _SECTION_RULES:
-        if any(key == p or key.startswith(p) for p in prefixes):
-            return name
-    return "Other"
 
 
 # ---------------------------------------------------------------------------

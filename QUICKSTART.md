@@ -181,8 +181,6 @@ Endpoints:
 - `GET  /api/v1/chart/indicators` — overlay-ready indicator series (price SMA/EMA/Bollinger overlays + MACD/RSI/ATR/momentum/volatility oscillator panes); memoized server-side
 - `GET  /api/v1/delta/status` — dataset sync state (missing completed days + last 5 bars)
 - `POST /api/v1/delta/sync` — fetch the missing days into the dataset (Daily Delta panel)
-- `GET  /api/v1/config` — editable config schema (sections/fields, secrets masked)
-- `POST /api/v1/config` — save form values to `.env` (atomic, revalidated)
 - `GET  /market` — market landing page (see below)
 - `GET  /api/v1/market/overview?size=&force=` — every market panel in one payload (90 s in-process cache)
 - `GET  /api/v1/market/panel/{key}?size=&offset=` — a single panel, paged (browse the whole market)
@@ -207,12 +205,12 @@ penny stocks are excluded (`price > $1`) and OTC/pink sheets are dropped.
 ### Where settings live
 
 Three configuration layers — plus one runtime switch that is deliberately NOT
-configuration — each edited from its own place in the dashboard:
+configuration — each edited from its own place:
 
 | Layer | Editor | File | Holds |
 |-------|--------|------|-------|
-| Global | **⚙ Global Settings** (header) | `.env` | data provider + API keys |
-| Account | **🏦 Account Settings** (header) | `settings/account/account.json` | the Alpaca paper + live key pairs, the data folder, backtest defaults, cloud/state storage |
+| Global | your text editor | `.env` | data provider + API keys. **Not in the dashboard**: the settings form was removed, so these are edited in the file directly |
+| Account | **🏦 Account Settings** (header) | `settings/account/account.json` | the Alpaca paper + live key pairs, the data folder, backtest costs, cloud storage |
 | Strategy | **Strategy Configuration** / **Rules** / **Risk Management** panels | `settings/strategies/store.json` | instrument, bar size, features, model, gates, schedule, risk limits, rules, paper/live |
 | Runtime | **header switch** + dropdown | `data/trading.json` | trading ON/OFF. Deliberately NOT configuration: it lives beside the datasets, because the configuration files it freezes cannot hold the switch that freezes them. |
 
