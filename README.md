@@ -137,7 +137,9 @@ The portal is the whole interface:
   (`✓ verified · <account> · <time>`, or `⚠ not valid` with the reason on hover) or
   by the check a save runs on a newly added pair. A stored verdict is not painted on
   open, because a masked box with "⚠ not valid" beside it reads as a bug rather than
-  as news. A pair that already passed is not re-checked on every save.
+  as news. A pair that already passed is not re-checked on every save. A bad pair
+  fails itself rather than the save: a pair the broker **rejects** is left out of the
+  write (see Safety) while the rest of the form is saved as normal.
 - **Global Settings** (⚙ header popup) - the data provider + keys in `.env`
 - **Backtest panel** - run the engine, read the Gate and the metrics
 - **Historical Delta** - gap-check the dataset against the provider and refill
@@ -282,6 +284,15 @@ configuration, not the code - a strategy is judged against the bar you set.
   environment and belongs to the KEY that earned it, so swapping keys expires it
   automatically. A pass is cached - editing an unrelated setting does not re-ask
   Alpaca - while a failure is not, since it may just be the network.
+- **A key pair the broker rejects is never written down.** Saving the account form
+  checks the pairs it is about to add or change, and a pair Alpaca answers 401/403
+  for is left out of the account file: a stored credential that cannot work would
+  make the file claim something untrue and push the failure to some later, less
+  obvious moment (the first order, say). Everything else in that save lands — one bad
+  pair is not a reason to discard the data folder, the S3 settings and the backtest
+  defaults that arrived with it — and the popup names the pair it left behind. A pair
+  that could not be *reached* is saved unproven instead, because a network problem is
+  not evidence about a credential.
 - **Paper is always the default.** Credentials for a live account do not move the
   switch, and neither does re-using an existing strategy: routing orders to a real
   account is an explicit choice, made in the header dropdown, per strategy.

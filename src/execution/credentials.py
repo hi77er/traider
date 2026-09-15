@@ -105,9 +105,20 @@ def keys_for(settings, env: str) -> Dict[str, str]:
 def probe(key_id: str, secret: str, base_url: str, *, timeout: float = VERIFY_TIMEOUT_SECONDS) -> Dict[str, Any]:
     """Ask Alpaca whether this key pair works. Never raises.
 
-    Returns ``{ok, message, account_number?, status?}``. The reply deliberately
+    Returns ``{ok, message, reason, account_number?, status?}``. The reply deliberately
     carries no credential: the account number and status are enough to show the
     operator that the RIGHT account answered.
+
+    ``reason`` is what lets a caller tell the two kinds of failure apart, because they
+    mean different things:
+
+    * ``rejected`` — Alpaca answered 401/403. This pair cannot work, now or later.
+    * ``unreachable`` — nothing answered. Unknown, not wrong; a flaky network must not
+      be recorded as a verdict about the credential.
+    * ``unexpected`` — something answered, but not an answer we understand.
+
+    Saving a pair follows that distinction (see ``config_service.update_account``): a
+    rejected pair is not written, an unverifiable one is written unproven.
     """
     import requests  # imported here so the module stays importable without it
 
@@ -123,7 +134,7 @@ def probe(key_id: str, secret: str, base_url: str, *, timeout: float = VERIFY_TI
         # The message can name the host but never the credential, and requests'
         # own error text is passed through only after scrubbing the secret.
         detail = str(exc).replace(secret, "***") if secret else str(exc)
-        return {"ok": False, "message": f"Could not reach {base_url} — {detail}"}
+        return {"ok": False, "reason": "unreachable", "message": f"Could not reach {base_url} — {detail}"}
 
     if resp.status_code == 200:
         try:
@@ -134,6 +145,7 @@ def probe(key_id: str, secret: str, base_url: str, *, timeout: float = VERIFY_TI
         status = str(body.get("status") or "")
         return {
             "ok": True,
+            "reason": "accepted",
             "message": "Credentials accepted" + (f" — account {account} ({status})" if account else ""),
             "account_number": account,
             "status": status,
@@ -141,12 +153,13 @@ def probe(key_id: str, secret: str, base_url: str, *, timeout: float = VERIFY_TI
     if resp.status_code in (401, 403):
         return {
             "ok": False,
+            "reason": "rejected",
             "message": (
                 f"Alpaca rejected these credentials ({resp.status_code}). Check that the key "
                 "belongs to this account type — paper and live keys are different."
             ),
         }
-    return {"ok": False, "message": f"Alpaca answered {resp.status_code} for {url}"}
+    return {"ok": False, "reason": "unexpected", "message": f"Alpaca answered {resp.status_code} for {url}"}
 
 
 def check_for(settings, env: str) -> Dict[str, Any]:
@@ -174,6 +187,7 @@ def check_for(settings, env: str) -> Dict[str, Any]:
         "checked_at": record.get("checked_at") if matches else None,
         "message": record.get("message") if matches else "",
         "account_number": record.get("account_number") if matches else "",
+        "reason": record.get("reason") if matches else "",
         "stale": bool(record) and not matches,
     }
 
@@ -259,6 +273,7 @@ def verify(
     record = {
         "fingerprint": fingerprint(env, keys["key_id"]),
         "ok": bool(result["ok"]),
+        "reason": result.get("reason", ""),
         "checked_at": _now_iso(),
         "message": result["message"],
         "account_number": result.get("account_number", ""),
@@ -279,6 +294,10 @@ def verify(
         # Just checked, so there IS a verdict about this pair — the UI's cue to show
         # the badge. Without it a fresh result would be reported and then hidden.
         "has_verdict": True,
+        # ``rejected`` means the broker said no (so this pair cannot be stored),
+        # ``unreachable``/``unexpected`` only mean we do not know yet.
+        "reason": result.get("reason", ""),
+        "rejected": result.get("reason") == "rejected",
         # False when the checked pair is NOT the stored one: it is valid, but it is
         # not what the bot would trade with until the form is saved.
         "saved": stored_match,
@@ -288,14 +307,18 @@ def verify(
     }
 
 
-def verify_new(settings) -> Dict[str, Dict[str, Any]]:
+def verify_new(settings, skip_envs=()) -> Dict[str, Dict[str, Any]]:
     """Verify every environment that has keys but no passing verdict yet.
 
     Called after an account save, so a freshly added pair is checked at the moment
-    it is added, and an unchanged pair costs nothing.
+    it is added, and an unchanged pair costs nothing. ``skip_envs`` names the
+    environments the caller has already checked itself, so the save does not ask
+    Alpaca the same question twice.
     """
     out: Dict[str, Dict[str, Any]] = {}
     for env in ENVIRONMENTS:
+        if env in skip_envs:
+            continue
         keys = keys_for(settings, env)
         if not keys["key_id"] and not keys["secret"]:
             continue

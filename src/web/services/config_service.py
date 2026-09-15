@@ -874,14 +874,14 @@ def _form_value(raw: Optional[str]) -> str:
     return str(raw).strip()
 
 
-def verify_new_credentials() -> Dict[str, dict]:
+def verify_new_credentials(skip_envs=()) -> Dict[str, dict]:
     """Verify any credential pair that has no passing verdict yet.
 
     Called straight after an account save: a pair added (or changed) just now is
     checked at the moment it is added, while an unchanged pair that already passed
-    costs no call at all.
+    costs no call at all. ``skip_envs`` names what the save has already checked.
     """
-    return credentials_mod.verify_new(get_effective_settings())
+    return credentials_mod.verify_new(get_effective_settings(), skip_envs=skip_envs)
 
 
 def update_account(values: Dict[str, str]) -> dict:
@@ -889,6 +889,15 @@ def update_account(values: Dict[str, str]) -> dict:
 
     Secret fields submitted empty / masked keep their stored value, exactly like
     the global form, so an unedited password field can never wipe a credential.
+
+    A credential pair can fail without failing the save. Only a pair the broker
+    *rejects* is held back - storing a key that Alpaca has just refused would make
+    the account file claim something untrue, and the operator would meet that
+    failure later, somewhere less obvious. Everything else in the form is saved: a
+    bad key pair is a reason to keep that pair, not a reason to discard the data
+    folder, the S3 settings and the backtest defaults that came with it. A pair that
+    merely could not be reached (no network, an unexpected answer) IS saved, because
+    "we could not ask" is not evidence of anything.
     """
     settings = Settings()
     stored = {k: v for k, v in account_mod.account_values(settings).items() if k in ACCOUNT_SCOPED_KEYS}
@@ -918,31 +927,101 @@ def update_account(values: Dict[str, str]) -> dict:
         logger.warning("Account settings rejected: %s", errors)
         return {"ok": False, "message": "Invalid account settings", "errors": errors}
 
+    # Pairs this save actually changes are checked BEFORE anything is written, so a
+    # rejection can hold that pair back instead of having to undo it afterwards.
+    changed = _changed_pairs(merged, stored)
+    verifications = _check_changed_pairs(settings, changed)
+    unsaved: Dict[str, str] = {}
+    for env, result in verifications.items():
+        if not result.get("rejected"):
+            continue
+        unsaved[env] = result["message"]
+        logger.warning("Account save: %s credentials rejected, NOT saved", env.upper())
+        for key in _VERIFY_PAIRS[env]:
+            # Keep whatever was there. A pair that never worked must not replace one
+            # that might, and an empty box stays empty rather than holding a secret
+            # the broker has already refused.
+            if _text(stored.get(key, "")):
+                merged[key] = stored[key]
+            else:
+                merged.pop(key, None)
+
     path = account_mod.save_account(settings, merged)
     invalidate()  # the account layer feeds resolve_effective()
     logger.info("Account settings saved to %s", path)
 
-    # A key pair that has never been verified is checked now, at the moment it
-    # arrives. A network failure must not lose the save: the settings are already
-    # on disk, and the verdict is reported alongside them.
+    # Anything still unproven - a pair from .env, say - is checked now that it is in
+    # force. The environments already checked above are skipped: asking twice costs a
+    # round trip and can only repeat an answer.
     try:
-        verifications = verify_new_credentials()
+        for env, result in verify_new_credentials(skip_envs=set(changed)).items():
+            verifications.setdefault(env, result)
     except Exception:  # noqa: BLE001 - verification must never fail a save
         logger.exception("Credential verification after save failed")
-        verifications = {}
+
+    skipped = ", ".join(sorted(env.upper() for env in unsaved))
+    message = f"Saved {len(merged)} setting(s) to {path.name}"
+    if unsaved:
+        message += f" — {skipped} credentials were rejected and NOT saved"
+    elif any(r.get("checked") and r.get("ok") for r in verifications.values()):
+        checked_ok = ", ".join(sorted(env.upper() for env, r in verifications.items() if r.get("checked") and r.get("ok")))
+        message += f" — {checked_ok} credentials verified"
 
     return {
         "ok": True,
-        "message": f"Saved {len(merged)} setting(s) to {path.name}",
+        "message": message,
         "errors": [],
         "file": str(path),
         "groups": account_sections(Settings()),
         "verifications": verifications,
+        # The pairs the broker refused, by environment, so the popup can say what was
+        # left behind instead of implying the whole form failed.
+        "unsaved_pairs": unsaved,
     }
+
+
+def _changed_pairs(merged: Dict[str, str], stored: Dict[str, str]) -> Dict[str, tuple]:
+    """The credential pairs this submission changes, as complete pairs.
+
+    A pair is checkable only when both halves are non-empty, so a half-typed pair is
+    skipped rather than reported as broken, and an unchanged pair is skipped so a
+    save never re-asks Alpaca about a credential it already has an answer for.
+    """
+    changed: Dict[str, tuple] = {}
+    for env, (key_key, secret_key) in _VERIFY_PAIRS.items():
+        candidate = (_text(merged.get(key_key, "")), _text(merged.get(secret_key, "")))
+        if not candidate[0] or not candidate[1]:
+            continue
+        if candidate == (_text(stored.get(key_key, "")), _text(stored.get(secret_key, ""))):
+            continue
+        changed[env] = candidate
+    return changed
+
+
+def _check_changed_pairs(settings, changed: Dict[str, tuple]) -> Dict[str, dict]:
+    """Check the pairs a save is about to write. Never raises.
+
+    The check is what decides whether a pair is worth storing, so it runs before the
+    file is touched — which also means it must not be able to take the save down with
+    it. A pair whose check blew up is simply unproven, and unproven pairs are saved:
+    the operator's own values are not the thing to sacrifice to a broken check.
+    """
+    out: Dict[str, dict] = {}
+    for env, pair in changed.items():
+        try:
+            out[env] = credentials_mod.verify(settings, env, force=True, key_id=pair[0], secret=pair[1])
+        except Exception:  # noqa: BLE001 - a save must survive a failing check
+            logger.exception("Pre-save check of %s credentials failed", env.upper())
+    return out
 
 
 def _human_label(key: str) -> str:
     return key.replace("_", " ").title()
+
+
+def _text(value: Any) -> str:
+    """A submitted or stored value as a trimmed string (``None`` -> ``""``)."""
+    return str(value).strip() if value is not None else ""
 
 
 def _mask_secret(text: str, sensitive: bool) -> str:

@@ -73,8 +73,13 @@ popup's **Validate** button (`POST /api/v1/account/verify`), which checks the va
 submitted from the form — unsaved pairs included, and ONLY those: an empty box is
 answered as "nothing to validate" rather than falling back to the stored pair, so a
 verdict is never reported about a credential that is not on screen. (A blank field
-still means "unchanged" on SAVE.) A newly saved pair is checked as the form is
-saved.
+still means "unchanged" on SAVE.) A pair that is being added or changed is checked
+as the form is saved — and if the broker REJECTS it (401/403) the pair is left out
+of the write, because the account file must not claim a credential Alpaca has
+refused; every other field in that same save is written normally and the response
+carries `unsaved_pairs` naming what was held back. A pair that could not be reached
+is saved unproven — "we could not ask" is not evidence. See
+`config_service.update_account` / `_changed_pairs` / `_check_changed_pairs`.
 `check_for()` reports `has_verdict` separately from `verified`, which is what the UI
 uses to decide whether to show anything at all. If you change how credentials are
 read, keep `credentials.keys_for()` the single place that maps an environment to its

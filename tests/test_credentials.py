@@ -538,6 +538,148 @@ def test_a_broken_verification_cannot_fail_a_save(tmp_path, monkeypatch):
     assert credentials.check_for(_s(tmp_path, **PAPER), "paper")["verified"] is False
 
 
+# ---------------------------------------------------------------------------
+# a rejected pair must not fail the save, and must not be stored either
+# ---------------------------------------------------------------------------
+def _save_ready(tmp_path, monkeypatch):
+    """Point the account file at tmp and hand back the service."""
+    from src.config import account as account_mod
+    from src.web.services import config_service
+
+    monkeypatch.setattr(account_mod, "account_file_path", lambda s: tmp_path / "account.json")
+    monkeypatch.setattr(credentials, "state_path", lambda s: tmp_path / "credential_checks.json")
+    return config_service
+
+
+def _probe_per_env(verdicts):
+    """A probe that answers per key id, so one pair can pass while another is refused."""
+
+    def probe(key_id, secret, base_url, timeout=0):
+        outcome = verdicts.get(key_id, {"ok": True, "reason": "accepted", "message": "Credentials accepted"})
+        return dict(outcome)
+
+    return probe
+
+
+def test_a_rejected_pair_does_not_fail_the_save(tmp_path, monkeypatch):
+    """The reported bug: a bad live key pair reported the whole save as failed. The
+    rest of the form is not the credential's problem."""
+    config_service = _save_ready(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        credentials, "probe",
+        _probe_per_env({
+            "PK-paper": {"ok": True, "reason": "accepted", "message": "Credentials accepted", "account_number": "PA1"},
+            "LK-bogus": {"ok": False, "reason": "rejected", "message": "Alpaca rejected these credentials (401)"},
+        }),
+    )
+    saved = config_service.update_account({
+        "ALPACA_PAPER_API_KEY": "PK-paper", "ALPACA_PAPER_API_SECRET": "PS-paper",
+        "ALPACA_LIVE_API_KEY": "LK-bogus", "ALPACA_LIVE_API_SECRET": "LS-bogus",
+        "LIVE_LOOKBACK_DAYS": "25",
+    })
+
+    assert saved["ok"] is True, "only the pair fails, not the save"
+    assert saved["errors"] == []
+    assert "NOT saved" in saved["message"] and "LIVE" in saved["message"]
+    assert set(saved["unsaved_pairs"]) == {"live"}
+    assert "401" in saved["unsaved_pairs"]["live"]
+
+    stored = json.loads((tmp_path / "account.json").read_text())["settings"]
+    # The pair that works is kept; the one that does not is left behind entirely...
+    assert stored["ALPACA_PAPER_API_KEY"] == "PK-paper"
+    assert "ALPACA_LIVE_API_KEY" not in stored and "ALPACA_LIVE_API_SECRET" not in stored
+    # ...and everything else in the form lands as normal.
+    assert stored["LIVE_LOOKBACK_DAYS"] == "25"
+
+
+def test_the_valid_pair_is_saved_even_when_the_other_one_is_rejected(tmp_path, monkeypatch):
+    """The mirror image: paper is the bad one, live is good. The good pair must not be
+    collateral damage of the bad one."""
+    config_service = _save_ready(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        credentials, "probe",
+        _probe_per_env({
+            "LK-live": {"ok": True, "reason": "accepted", "message": "Credentials accepted", "account_number": "LV1"},
+            "PK-bogus": {"ok": False, "reason": "rejected", "message": "Alpaca rejected these credentials (401)"},
+        }),
+    )
+    saved = config_service.update_account({
+        "ALPACA_PAPER_API_KEY": "PK-bogus", "ALPACA_PAPER_API_SECRET": "PS-bogus",
+        "ALPACA_LIVE_API_KEY": "LK-live", "ALPACA_LIVE_API_SECRET": "LS-live",
+    })
+
+    assert saved["ok"] is True
+    assert set(saved["unsaved_pairs"]) == {"paper"}
+    assert saved["verifications"]["live"]["ok"] is True
+    stored = json.loads((tmp_path / "account.json").read_text())["settings"]
+    assert stored["ALPACA_LIVE_API_KEY"] == "LK-live"
+    assert "PK-bogus" not in stored.values()
+
+
+def test_a_rejected_pair_does_not_overwrite_a_working_one(tmp_path, monkeypatch):
+    """A pair that never worked must not replace one that might."""
+    config_service = _save_ready(tmp_path, monkeypatch)
+    monkeypatch.setattr(credentials, "probe", _probe_per_env({}))  # everything passes
+    config_service.update_account({
+        "ALPACA_LIVE_API_KEY": "LK-good", "ALPACA_LIVE_API_SECRET": "LS-good",
+    })
+
+    monkeypatch.setattr(
+        credentials, "probe",
+        _probe_per_env({"LK-bad": {"ok": False, "reason": "rejected", "message": "Alpaca rejected these credentials (401)"}}),
+    )
+    saved = config_service.update_account({
+        "ALPACA_LIVE_API_KEY": "LK-bad", "ALPACA_LIVE_API_SECRET": "LS-bad",
+    })
+    assert set(saved["unsaved_pairs"]) == {"live"}
+    stored = json.loads((tmp_path / "account.json").read_text())["settings"]
+    assert stored["ALPACA_LIVE_API_KEY"] == "LK-good", "the rejected pair was left out"
+    assert stored["ALPACA_LIVE_API_SECRET"] == "LS-good"
+
+
+def test_a_pair_that_could_not_be_reached_is_still_saved(tmp_path, monkeypatch):
+    """"We could not ask" is not evidence. Discarding the operator's values because
+    the network was down would look exactly like the save silently failing."""
+    config_service = _save_ready(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        credentials, "probe",
+        _probe_per_env({"LK-live": {"ok": False, "reason": "unreachable", "message": "Could not reach https://api.alpaca.markets — timeout"}}),
+    )
+    saved = config_service.update_account({
+        "ALPACA_LIVE_API_KEY": "LK-live", "ALPACA_LIVE_API_SECRET": "LS-live",
+    })
+
+    assert saved["ok"] is True and saved["unsaved_pairs"] == {}
+    stored = json.loads((tmp_path / "account.json").read_text())["settings"]
+    assert stored["ALPACA_LIVE_API_KEY"] == "LK-live", "unproven is not the same as wrong"
+    assert saved["verifications"]["live"]["rejected"] is False
+    assert saved["verifications"]["live"]["reason"] == "unreachable"
+
+
+def test_an_unchanged_pair_is_not_checked_again_by_a_save(tmp_path, monkeypatch):
+    """Every save would otherwise spend a round trip per pair re-asking a question
+    that already has an answer."""
+    config_service = _save_ready(tmp_path, monkeypatch)
+    calls = []
+
+    def probe(key_id, secret, base_url, timeout=0):
+        calls.append(key_id)
+        return {"ok": True, "reason": "accepted", "message": "Credentials accepted", "account_number": "A1"}
+
+    monkeypatch.setattr(credentials, "probe", probe)
+    pairs = {
+        "ALPACA_PAPER_API_KEY": "PK-paper", "ALPACA_PAPER_API_SECRET": "PS-paper",
+        "ALPACA_LIVE_API_KEY": "LK-live", "ALPACA_LIVE_API_SECRET": "LS-live",
+    }
+    config_service.update_account(pairs)
+    assert calls == ["PK-paper", "LK-live"]
+
+    # Same pairs, one unrelated field: no credential question is asked at all.
+    again = config_service.update_account({**pairs, "LIVE_LOOKBACK_DAYS": "30"})
+    assert calls == ["PK-paper", "LK-live"]
+    assert again["verifications"]["paper"]["checked"] is False
+
+
 def test_the_account_payload_exposes_the_verdicts():
     schema = client.get("/api/v1/account").json()
     assert set(schema) >= {"file", "file_exists", "groups", "credentials"}

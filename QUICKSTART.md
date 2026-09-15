@@ -274,6 +274,11 @@ remembers the answer:
   answered; a pass shows the account that answered.- A pair is also checked **automatically when it is new** (as the form is saved). A
   pair that already passed is not re-asked on every save; a pair that *failed* is
   retried, because a failure may just be the network.
+- **A bad pair fails itself, not the save.** A pair the broker *rejects* (401/403) is
+  not written to `account.json` at all — everything else in the form still saves, and
+  the popup names the pair that was left behind and why. A pair that could not be
+  *reached* is saved anyway and reported as unverified: a network problem is not
+  evidence about a credential.
 - A verdict belongs to the key that earned it: change the key and it expires, so a
   swapped key cannot inherit an old pass.
 - Trading **cannot be turned on** unless the pair for the environment in play passes:

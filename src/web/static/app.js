@@ -1515,21 +1515,28 @@ async function saveAccount() {
       return;
     }
     $("account-msg").textContent = r.message || "Saved";
-    // The save itself checks any pair that had never been verified, so the first
-    // report of a bad credential arrives right here.
+    // A save can be partial: a credential pair the broker rejects is held back, and
+    // the rest of the form still lands. So the feedback names what was left behind
+    // instead of dressing the whole save as a failure — and a pair that merely could
+    // not be reached was saved anyway, which the message says too.
     const checks = Object.entries(r.verifications || {});
-    const bad = checks.filter(([, c]) => c.checked && !c.ok);
+    const unsaved = Object.entries(r.unsaved_pairs || {});
     const good = checks.filter(([, c]) => c.checked && c.ok);
     await loadAccount(true); // re-read so secrets re-mask and values refresh
     await loadTrading(); // the keys may have just changed, so re-resolve the target
     // The re-render wiped the rows, so repaint the verdicts THIS save produced —
-    // they are answers to the save, which is a check someone asked for.
-    for (const [env, c] of checks) {
+    // they are answers to the save, which is a check someone asked for. Only the
+    // pairs that were KEPT get one: a held-back pair is not what the row now holds.
+    for (const [env, c] of good) {
       applyCredentialBadge(document.getElementById("cred-badge-" + env), c);
     }
-    if (bad.length) {
+    if (unsaved.length) {
       showAccountErrors(
-        bad.map(([env, c]) => `${env.toUpperCase()} credentials are NOT valid: ${c.message}`).join("\n"),
+        unsaved
+          .map(([env, reason]) =>
+            `${env.toUpperCase()} credentials are NOT valid (${reason}) — they were NOT saved. ` +
+            "The rest of the form was saved; correct them and press Save again.")
+          .join("\n"),
         "warn"
       );
     } else if (good.length) {
