@@ -30,16 +30,26 @@ app = FastAPI(title="TRAIDER Web Portal", version="0.1.0")
 
 
 @app.middleware("http")
-async def no_store_static(request, call_next):
-    """Never cache static assets (dev).
+async def no_store_dashboard(request, call_next):
+    """Never cache the dashboard's documents or their assets (dev).
 
-    Without this, browsers cache ``app.js``/``style.css`` and keep running the
-    OLD code after a server restart (the file mtime is unchanged, so the
-    server answers ``304 Not Modified``). no-store forces every load to fetch
-    the current file from disk.
+    Two failures came from this, and both looked like bugs in the code:
+
+    * ``app.js``/``style.css`` answered ``304 Not Modified`` after a restart (the mtime
+      was unchanged), so the browser kept running the previous build;
+    * the HTML carried an ``ETag`` but no ``Cache-Control``, so a browser was free to
+      reuse the document heuristically while re-fetching the no-store assets beside it
+      — a page whose MARKUP was older than its SCRIPT. That is how a button that had
+      been deleted stayed on screen and did nothing when clicked: the server no longer
+      served it, and the script that used to handle it was gone.
+
+    ``no-store`` on both keeps them in step: what the page shows is what the server
+    has. The cost is a local file read, which is the right trade for a dashboard whose
+    only user is the person editing it.
     """
     response = await call_next(request)
-    if request.url.path.startswith("/static/"):
+    content_type = response.headers.get("content-type", "")
+    if request.url.path.startswith("/static/") or content_type.startswith("text/html"):
         response.headers["Cache-Control"] = "no-store"
     return response
 
