@@ -253,12 +253,13 @@
       <h3 id="account-settings-title">Account Settings</h3>
       <p id="account-msg" class="muted"></p>
       <p class="muted note">Settings for your <b>trading account</b> — the broker it trades through
-        (<b>Trading Account</b>), where its data and backtest results are stored, and the backtest defaults.
+        (<b>Trading Account</b>), where its data and backtest results are stored, and the backtest costs.
         They apply to every strategy and live in <code id="account-file">settings/account/account.json</code>;
         a strategy's own values override them. <b>Data folder</b> is the single folder on this computer that
-        holds the <code>historical/</code> and <code>backtest_results/</code> subfolders. Secrets
-        (<code>*_PASSWORD</code>, <code>*_API_KEY</code>…) are masked — leave the field empty to keep the
-        existing value.</p>
+        holds the <code>historical/</code> and <code>backtest_results/</code> subfolders. Cloud storage and
+        state persistence are not here: they are infrastructure, not account settings, and will be configured
+        in <code>.env</code> when they are built. Secrets (<code>*_PASSWORD</code>, <code>*_API_KEY</code>…)
+        are masked — leave the field empty to keep the existing value.</p>
       <div id="account-fields"></div>
       <div id="account-errors" class="save-errors" hidden></div>
       <div class="modal-actions">

@@ -107,14 +107,6 @@ _LABELS: Dict[str, str] = {
     "DATA_CACHE_ENABLED": "Cache fetched candles",
     "CACHE_DIR": "Cache folder",
     "LIVE_LOOKBACK_DAYS": "Live poll lookback (days)",
-    "S3_ENABLED": "Sync dataset to S3",
-    "S3_BUCKET": "S3 bucket",
-    "S3_PREFIX": "S3 key prefix",
-    "S3_ENDPOINT_URL": "S3 endpoint (MinIO)",
-    "AWS_REGION": "AWS region",
-    "DYNAMODB_TABLE": "State table",
-    "DYNAMODB_TTL_DAYS": "State TTL (days)",
-    "DYNAMODB_ENDPOINT_URL": "DynamoDB endpoint (local)",
     # ── Strategy settings that moved out of the global form ───────
     "DECISION_INTERVAL_HOURS": "Decision interval (hours)",
     "TRADING_START_HOUR": "Trading window start",
@@ -362,15 +354,12 @@ _ACCOUNT_SECTIONS: List[Tuple[str, Tuple[str, ...]]] = [
             "BACKTEST_SLIPPAGE_PERCENT", "BACKTEST_COMMISSION_PER_TRADE",
         ),
     ),
-    ("Cloud Storage", ("S3_ENABLED", "S3_BUCKET", "S3_PREFIX", "S3_ENDPOINT_URL")),
-    (
-        # Deliberately named as what it is: persisting state across runs is not built,
-        # and when it is it belongs in `.env` with the other infrastructure settings
-        # rather than in a per-account file.
-        "State Storage — postponed",
-        ("AWS_REGION", "DYNAMODB_TABLE", "DYNAMODB_TTL_DAYS", "DYNAMODB_ENDPOINT_URL"),
-    ),
 ]
+# NOT here, and deliberately: cloud storage (S3_*) and state persistence
+# (AWS_REGION / DYNAMODB_*). Both are infrastructure — one dataset copy per bucket,
+# one state table per deployment — rather than properties of a trading account, and
+# neither is being developed yet. They stay on ``Settings`` and are configured in
+# `.env` when they are, which is also where their values already live.
 ACCOUNT_SCOPED_KEYS = frozenset(k for _, keys in _ACCOUNT_SECTIONS for k in keys)
 
 # Derived from DATA_DIR — shown so the layout is visible, never stored.

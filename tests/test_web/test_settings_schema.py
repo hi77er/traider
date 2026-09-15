@@ -81,8 +81,7 @@ def test_strategy_scope_carries_trading_model_gates_scheduler():
 def test_account_schema_groups_and_derived_folders():
     groups = config_service.account_sections(S(_env_file=None))
     names = [g["name"] for g in groups]
-    assert names == ["Trading Account", "Data & Folders", "Backtest",
-                     "Cloud Storage", "State Storage — postponed"]
+    assert names == ["Trading Account", "Data & Folders", "Backtest"]
     by_key = {f["key"]: f for g in groups for f in g["fields"]}
     # All four Alpaca credential fields are secrets, and a secret is never echoed
     # back through the schema — this machine may or may not have keys configured
@@ -128,12 +127,25 @@ def test_the_removed_account_settings_are_gone_from_the_form():
     assert defaults.train_test_split == 0.8
 
 
-def test_state_storage_is_named_as_postponed():
-    """It is not built, and when it is it belongs in `.env` with the other
-    infrastructure settings — so the section says so rather than looking ready."""
+def test_cloud_and_state_storage_are_not_account_settings():
+    """Both are INFRASTRUCTURE, not properties of a trading account: one dataset copy
+    per bucket, one state table per deployment. Neither is being developed yet, so
+    they are not offered here at all — their settings stay on the model and come from
+    `.env`, where the values already live."""
+    by_key = {f["key"] for g in config_service.account_sections(S(_env_file=None))
+              for f in g["fields"]}
+    for gone in ("S3_ENABLED", "S3_BUCKET", "S3_PREFIX", "S3_ENDPOINT_URL",
+                 "AWS_REGION", "DYNAMODB_TABLE", "DYNAMODB_TTL_DAYS",
+                 "DYNAMODB_ENDPOINT_URL"):
+        assert gone not in by_key, f"{gone} must not be offered in Account Settings"
+        assert gone not in config_service.ACCOUNT_SCOPED_KEYS, "nor writable through the API"
+    # The sections are gone with them.
     names = [g["name"] for g in config_service.account_sections(S(_env_file=None))]
-    assert "State Storage" not in names
-    assert "State Storage — postponed" in names
+    assert not [n for n in names if "Storage" in n], names
+    # ...but the S3 sync still works off the settings, so the fields must remain.
+    s = S(_env_file=None)
+    assert s.s3_enabled is False and s.s3_prefix == "traider/historical"
+    assert s.aws_region == "us-east-1" and s.dynamodb_table == "traider-state"
 
 
 def test_update_account_persists_json_and_drives_folders(tmp_path, monkeypatch):
@@ -141,14 +153,14 @@ def test_update_account_persists_json_and_drives_folders(tmp_path, monkeypatch):
                         lambda settings: tmp_path / "account.json")
 
     res = config_service.update_account({
-        "DATA_DIR": "srv/data", "S3_BUCKET": "my-bucket",
+        "DATA_DIR": "srv/data", "CACHE_DIR": "srv/cache",
         "ALPACA_PAPER_API_SECRET": "s3cret",
     })
     assert res["ok"] is True, res
     # Only what the user configures is stored — the two subfolders are derived.
     assert json.loads((tmp_path / "account.json").read_text())["settings"] == {
         "DATA_DIR": "srv/data",
-        "S3_BUCKET": "my-bucket",
+        "CACHE_DIR": "srv/cache",
         "ALPACA_PAPER_API_SECRET": "s3cret",
     }
     by_key = {f["key"]: f for g in res["groups"] for f in g["fields"]}
@@ -165,8 +177,10 @@ def test_update_account_persists_json_and_drives_folders(tmp_path, monkeypatch):
     # it — otherwise there would be two competing places to set it.
     res4 = config_service.update_account({"EXECUTION_ENV": "live"})
     assert res4["ok"] is False and res4["errors"]
-    # ...and so must a dropped IBKR key, or a date the form no longer offers.
-    for gone in ("IBKR_ACCOUNT_ID", "BACKTEST_START_DATE", "TRAIN_TEST_SPLIT"):
+    # ...and so must a dropped IBKR key, a date the form no longer offers, or a
+    # cloud/state key that moved out of this layer.
+    for gone in ("IBKR_ACCOUNT_ID", "BACKTEST_START_DATE", "TRAIN_TEST_SPLIT",
+                 "S3_BUCKET", "DYNAMODB_TABLE"):
         refused = config_service.update_account({gone: "x"})
         assert refused["ok"] is False and refused["errors"], gone
 
@@ -177,7 +191,7 @@ def test_account_api_roundtrip(tmp_path, monkeypatch):
     got = client.get("/api/v1/account")
     assert got.status_code == 200
     assert [g["name"] for g in got.json()["groups"]][0] == "Trading Account"
-    posted = client.post("/api/v1/account", json={"values": {"S3_BUCKET": "my-bucket",
+    posted = client.post("/api/v1/account", json={"values": {"CACHE_DIR": "srv/cache",
                                                           "ALPACA_PAPER_API_KEY": "PK"}})
     assert posted.status_code == 200
     assert posted.json()["ok"] is True

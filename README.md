@@ -131,12 +131,14 @@ The portal is the whole interface:
 - **Strategy Configuration / Rules / Risk Management** - three collapsible
   panels; the risk panel leads with the two master switches
 - **Account Settings** (🏦 header popup) - the Alpaca key pairs, the single data
-  folder, backtest costs and cloud storage; shared by all strategies. Four sections
-  and nothing else: the history window, the backtest window and the train/test split
-  are gone (the strategy's period and bar size answer the first, a run is triggered by
-  hand and covers the strategy's whole period, and the only model in use is
-  rule-based), and what is left of state persistence is marked
-  `State Storage — postponed`, to be configured in `.env` when it is built. A
+  folder and the backtest costs; shared by all strategies. Three sections and nothing
+  else — what belongs to a *trading account*. The history window, the backtest window
+  and the train/test split are gone (the strategy's period and bar size answer the
+  first, a run is triggered by hand and covers the strategy's whole period, and the
+  only model in use is rule-based), and so are cloud storage and state persistence:
+  those are infrastructure — one dataset copy per bucket, one state table per
+  deployment — and neither is being developed, so they are configured in `.env` when
+  they are. A
   stored secret is shown as `********` **in the box**, not as a grey hint behind an
   empty one, so "is a pair saved?" is answerable at a glance — an empty box with a
   faint placeholder read as "nothing was saved" even for a pair that had just been
@@ -241,8 +243,8 @@ Three layers, two editors in the dashboard:
 
 | Layer | File | Edited from | Holds |
 |-------|------|-------------|-------|
-| **Global** | `.env` | by hand | data provider + keys, the paths of the two JSON stores |
-| **Account** | `settings/account/account.json` | 🏦 Account Settings | the Alpaca key pairs (paper + live), the data folder, backtest costs, cloud storage |
+| **Global** | `.env` | by hand | data provider + keys, the paths of the two JSON stores, cloud storage (read by the dataset sync, off by default) and state persistence (unbuilt) |
+| **Account** | `settings/account/account.json` | 🏦 Account Settings | the Alpaca key pairs (paper + live), the data folder, backtest costs |
 | **Strategy** | `settings/strategies/store.json` | Strategy Configuration / Rules / Risk panels, plus the header dropdown for `EXECUTION_ENV` | instrument, bar size, features, model, gates, schedule, risk limits, rules, paper/live |
 
 Precedence is **strategy > account > .env**, and the process environment still
