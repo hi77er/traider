@@ -114,8 +114,9 @@ function makeSelect(id, values, labels) {
   return el;
 }
 
-const note = { textContent: "" };
-const wrap = { querySelector: function (sel) { return sel === ".dep-note" ? note : null; } };
+/* The dropdown itself is the whole message: what is allowed is exactly what it
+   lists, so nothing is written beside it. The fake therefore has no place to put
+   a note — if the block tried to write one it would have to go looking for it. */
 const document = { getElementById: function (id) { return ELEMENTS[id] || null; } };
 const window = {};
 
@@ -158,12 +159,9 @@ function wire(barValue, periodValue) {
   }));
   if (!period._options.some((o) => o.selected)) period._options[0].selected = true;
   if (periodValue !== undefined) period.value = periodValue;
-  period._wrap = wrap;
-  period.closest = function () { return wrap; };
   ELEMENTS["scfg-HISTORICAL_BAR_SIZE"] = bar;
   ELEMENTS["scfg-HISTORICAL_LOOKBACK"] = period;
-  note.textContent = "";
-  wireDependentOptions({}, [GROUP], "scfg");
+  wireDependentOptions([GROUP], "scfg");
   return { bar: bar, period: period };
 }
 
@@ -177,32 +175,30 @@ function plainLabels(period) {
 const ELEMENTS = {};
 const out = {};
 
-// 1. INITIAL RENDER: the list offered is the current bar size's own, and the note
-//    names it — so the constraint is visible without having to discover it by
-//    trying a value that is not there.
+// 1. INITIAL RENDER: the list offered is the current bar size's own.
 let w = wire("1d", "3y");
 out.daily = { values: plainValues(w.period), labels: plainLabels(w.period),
-              selected: w.period.value, note: note.textContent };
+              selected: w.period.value };
 
 // 2. CHANGING THE BAR SIZE repopulates the list locally.
 w.bar.value = "1m";
 w.bar.change();
 out.afterMinute = { values: plainValues(w.period), selected: w.period.value,
-                    note: note.textContent };
+                    labels: plainLabels(w.period) };
 
-// 3. A VALUE THE NEW BAR SIZE CANNOT USE moves the selection onto the list and
-//    SAYS SO: silently keeping it, or silently rewriting it, would both be wrong.
+// 3. A VALUE THE NEW BAR SIZE CANNOT USE moves the selection onto the list: the
+//    control is what shows it, so there is nothing to explain beside it.
 w = wire("1d", "5y");
 w.bar.value = "1h";
 w.bar.change();
 out.narrowed = { selected: w.period.value, values: plainValues(w.period),
-                 note: note.textContent };
+                 labels: plainLabels(w.period) };
 
 // 4. A VALUE THE NEW BAR SIZE STILL ALLOWS is left alone (4h -> 8h keeps 3 years).
 w = wire("4h", "3y");
 w.bar.value = "8h";
 w.bar.change();
-out.preserved = { selected: w.period.value, note: note.textContent };
+out.preserved = { selected: w.period.value };
 
 // 5. EVERY BAR SIZE the dropdown offers can actually be chosen, with its own list.
 out.eachBarSize = {};
@@ -271,33 +267,27 @@ def test_the_periods_offered_are_the_bar_sizes_own(period_results):
     assert got["values"] == PERIODS_BY_BAR_SIZE["1d"]
     assert got["labels"] == ["2 years", "3 years", "4 years", "5 years"]
     assert got["selected"] == "3y", "a usable stored value stays selected"
-    assert "2 years, 3 years, 4 years, 5 years" in got["note"]
 
 
 def test_changing_the_bar_size_swaps_the_periods(period_results):
     """No round trip: the whole table travels with the field."""
     got = period_results["afterMinute"]
     assert got["values"] == ["15d", "30d"]
+    assert got["labels"] == ["15 days", "30 days"]
     assert got["selected"] == "15d"
-    assert "15 days, 30 days" in got["note"]
 
 
-def test_a_period_the_new_bar_size_cannot_use_is_moved_and_disclosed(period_results):
-    """5 years of 1-hour bars is not something the provider will serve. The
-    selection moves onto the list AND the note says which value it replaced —
-    keeping it would submit a pair the rule forbids, rewriting it in silence would
-    change the operator's window behind their back."""
+def test_a_period_the_new_bar_size_cannot_use_moves_onto_the_list(period_results):
+    """5 years of 1-hour bars is not a pair the rule allows, and the provider would
+    not serve it either. The selection moves to the first allowed period, which is
+    visible in the control — the list IS the statement of what is allowed."""
     got = period_results["narrowed"]
     assert got["values"] == ["1y", "2y"]
     assert got["selected"] == "1y"
-    assert "5 years" in got["note"], got["note"]
-    assert "1 year" in got["note"], got["note"]
 
 
 def test_a_period_that_is_still_allowed_is_left_alone(period_results):
-    got = period_results["preserved"]
-    assert got["selected"] == "3y"
-    assert "not one of them" not in got["note"], "no change to disclose"
+    assert period_results["preserved"]["selected"] == "3y"
 
 
 def test_a_bar_size_the_table_does_not_describe_keeps_every_period(period_results):

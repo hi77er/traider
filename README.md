@@ -135,10 +135,9 @@ The portal is the whole interface:
   provider stops serving intraday bars, so 1-minute bars offer 15–30 days,
   hourly bars 1–2 years and daily bars 2–5 years (the table lives in
   `src/config/history.py`). Choosing a bar size the stored period cannot be paired
-  with moves the selection onto the allowed list and says which value it replaced —
-  the panel cannot submit a pair the rule forbids, and nothing is rewritten in
-  silence. Both settings are one value each: the period carries its unit
-  (`2y`, `30d`), so a window can never be half-specified in two places.
+  with moves the selection onto that bar size's own list — the panel cannot submit
+  a pair the rule forbids. Both settings are one value each: the period carries its
+  unit (`2y`, `30d`), so a window can never be half-specified in two places.
 - **Account Settings** (🏦 header popup) - the Alpaca key pairs, the single data
   folder and the backtest costs; shared by all strategies. Three sections and nothing
   else — what belongs to a *trading account*. The history window, the backtest window

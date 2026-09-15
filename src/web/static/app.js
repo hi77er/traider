@@ -742,15 +742,6 @@ function fieldInput(f, prefix) {
     hint.textContent = f.readonly_note || "Read-only — change it directly in .env";
     wrap.appendChild(hint);
   }
-  // A field whose options depend on another field gets a line saying WHICH
-  // combinations are allowed. It is filled in by wireDependentOptions (and
-  // rewritten when the controlling field changes), so it always describes the
-  // list that is actually on offer.
-  if (f.options_by && f.depends_on) {
-    const dep = document.createElement("span");
-    dep.className = "hint dep-note";
-    wrap.appendChild(dep);
-  }
   // A credential pair gets a Validate button, placed by the schema (f.verify)
   // rather than by a hard-coded key list. The row renders CLEAN: a verdict is the
   // answer to a question someone asked, and nobody has asked one in this form yet.
@@ -2345,7 +2336,7 @@ function renderConfigGroups(host, groups, prefix) {
     });
     host.appendChild(fieldset);
   });
-  wireDependentOptions(host, groups, prefix);
+  wireDependentOptions(groups, prefix);
 }
 
 /* ---------- one field's value space depending on another ----------
@@ -2356,18 +2347,16 @@ function renderConfigGroups(host, groups, prefix) {
    moment the bar size changes — no round trip, and the panel can never show a
    pair the rule forbids.
 
-   A stored value that the new bar size cannot use is NOT silently kept: the
-   select falls back to the first allowed period and the note says so, so the
-   operator sees the change before the Save that makes it stick. */
-function wireDependentOptions(host, groups, prefix) {
+   The list alone says what is allowed, so nothing else is written beside it: a
+   stored value the new bar size cannot use moves the selection onto the first
+   allowed period, which is visible in the control itself. */
+function wireDependentOptions(groups, prefix) {
   groups.forEach((group) => {
     (group.fields || []).forEach((f) => {
       if (!f.options_by || !f.depends_on) return;
       const controller = document.getElementById(prefix + "-" + f.depends_on);
       const select = document.getElementById(prefix + "-" + f.key);
       if (!controller || !select) return;
-      const wrap = select.closest(".field");
-      const note = wrap ? wrap.querySelector(".dep-note") : null;
 
       const apply = () => {
         const options = f.options_by[controller.value] || f.options || [];
@@ -2376,18 +2365,8 @@ function wireDependentOptions(host, groups, prefix) {
         select.innerHTML = options
           .map((o) => _optHtml(o.value, o.label, wanted))
           .join("");
-        const usable = options.some((o) => String(o.value) === wanted);
-        if (!usable) select.value = options[0].value;
-        if (note) {
-          const barText = controller.options[controller.selectedIndex]
-            ? controller.options[controller.selectedIndex].textContent
-            : controller.value;
-          let text = `Bar size ${barText} allows: ${options.map((o) => o.label).join(", ")}.`;
-          if (!usable) {
-            text += ` “${periodLabel(wanted)}” is not one of them, so it now reads ` +
-              `“${select.options[select.selectedIndex].textContent}” — Save to apply that.`;
-          }
-          note.textContent = text;
+        if (!options.some((o) => String(o.value) === wanted)) {
+          select.value = options[0].value;
         }
       };
       controller.addEventListener("change", apply);

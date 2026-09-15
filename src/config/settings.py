@@ -64,9 +64,7 @@ class Settings(BaseSettings):
     historical_end_date: Optional[str] = Field(default=None, description="Fetch history until (YYYY-MM-DD); empty = now")
     historical_lookback: Optional[str] = Field(
         default="2y",
-        description="How much history to fetch, as <N>y years or <N>d days (e.g. 2y, 30d) up to now; "
-        "overrides HISTORICAL_START_DATE. Which periods are usable depends on HISTORICAL_BAR_SIZE — "
-        "see src/config/history.py",
+        description="How much history to fetch, as <N>y years or <N>d days (e.g. 2y, 30d) up to now",
     )
     backtest_start_date: Optional[str] = Field(default=None, description="Backtest window start; empty = historical start")
     backtest_end_date: Optional[str] = Field(default=None, description="Backtest window end; empty = historical end")

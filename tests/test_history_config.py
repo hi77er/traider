@@ -138,6 +138,19 @@ def test_the_bar_size_comes_before_the_period_in_the_panel():
     assert keys.index("HISTORICAL_BAR_SIZE") < keys.index("HISTORICAL_LOOKBACK")
 
 
+def test_the_period_field_carries_one_short_line():
+    """The dropdown shows which periods are on offer by LISTING them, so the only
+    line under the setting is what the setting means — no second explanation of a
+    constraint the control already states."""
+    groups = config_service.strategy_config_groups(Settings(_env_file=None))
+    field = [
+        f for g in groups for f in g["fields"] if f["key"] == "HISTORICAL_LOOKBACK"
+    ][0]
+    assert field["hints"] == [
+        "How much history to fetch, as <N>y years or <N>d days (e.g. 2y, 30d) up to now"
+    ]
+
+
 def test_the_panel_offers_only_the_periods_the_bar_size_allows():
     for bar, periods in EXPECTED_PERIODS.items():
         groups = config_service.strategy_config_groups(
