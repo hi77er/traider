@@ -105,10 +105,12 @@ traider/
 │   ├── data/           (module)
 │   ├── features/       (module)
 │   ├── model/          (module)
-│   ├── risk/           (module)
-│   ├── execution/      (module)
-│   ├── state/          (module)
-│   ├── scheduler/      (module)
+│   ├── strategy/       THE trading logic: engine, config, state, broker, live
+│   ├── risk/           position sizing (+ an unwired breaker/validator)
+│   ├── execution/      order placement: client, retry, executor, AlpacaBroker
+│   ├── backtest/       engine, risk_sim (adapter), metrics, report, store
+│   ├── state/          (module)  — not built
+│   ├── scheduler/      (module)  — NOT BUILT: nothing starts a tick
 │   ├── logging/        (module)
 │   └── __init__.py
 ├── tests/

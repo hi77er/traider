@@ -6,6 +6,17 @@
 - ✓ = Task status indicator
 - → = Depends on
 - | = Parallel execution possible
+- ✅ DONE / ⏸️ OPEN / 🔶 PARTIAL = actual implementation state (kept in step with
+  `CHECKLIST.md`, which is the authoritative one)
+
+> **Module reality check (2026-09):** task 24b/24c landed a change to the shape of
+> this graph — the trading logic now lives in ONE place (`src/strategy`), driven by
+> the backtest (`src/backtest/risk_sim.py` is an adapter) and by a live run
+> (`src/strategy/live.py`), with the broker behind a three-method seam. So
+> `risk-circuit-breaker` no longer sits *inside* the run: its two limits are
+> collected but not applied (deferred to the execution loop), and `risk-validation`
+> is built but unwired. The execution tasks below are complete; what is missing is
+> the thing that would CALL them (task 27, Phase 6).
 
 ---
 
@@ -75,20 +86,20 @@ PHASE 4: RISK & EXECUTION
 ══════════════════════════
 
 state-persistence (13)
-    ├→ risk-position-sizing (22)
+    ├→ risk-position-sizing (22) ✅ DONE
     │     ↓
-    │   risk-validation (24)
+    │   risk-validation (24) 🔶 BUILT, NOT WIRED IN
     │
-    └→ risk-circuit-breaker (23)
-          ↓
-      risk-validation (24)
+    └→ loss-limits (23) 🔶 BUILT, NOT WIRED IN
+          (MAX_CONSECUTIVE_LOSSES / MAX_LOSS_PERCENT are collected and shown,
+           not applied — the execution loop will own halting)
 
-execution-alpaca (25)
+execution-alpaca (25) ✅ DONE
     ├→ config-validation (6)
     ├→ state-persistence (13)
-    └→ execution-retry (26)
+    └→ execution-retry (26) ✅ DONE
           ├→ logging-setup (14)
-          └→ [ready for scheduler]
+          └→ [ready for scheduler — which is the ONLY thing still missing]
 
 PHASE 5: DEFERRED — CORE & BACKTEST COMPLETION
 ══════════════════════════════════════════════
@@ -185,7 +196,8 @@ live-go-live (39)
 3. config-create → config-validation
 4. data-historical → feature-create → feature-validation
 5. backtest-framework → model-simple
-6. risk-position-sizing → risk-circuit-breaker → risk-validation → execution-alpaca → execution-retry   (Phase 4)
+6. risk-position-sizing → loss-limits (23) → risk-validation → execution-alpaca → execution-retry   (Phase 4)
+   (23 and 24 are built but NOT wired into a run — see the note at the top)
 7. state-persistence → logging-setup → backtest-strategy → backtest-report   (Phase 5; report ✅ done)
 8. scheduler-create → scheduler-error-handling → main-entry                  (Phase 6)
 9. test-unit → test-integration → test-paper-trading → test-load             (Phase 7)
@@ -212,7 +224,7 @@ TOTAL PROJECT: ~35 days + 14 days paper trading (concurrent)
 
 **Group B (While backtesting):**
 - risk-position-sizing (22)
-- risk-circuit-breaker (23)
+- loss-limits (23)      🔶 built, not wired in
 → Don't depend on backtest results
 
 **Group C (While coding):**
@@ -326,7 +338,7 @@ If you have multiple developers:
 | feature-create | data-historical | feature-validation, backtest-framework |
 | feature-validation | feature-create | model-simple, backtest-framework, test-unit |
 | state-db-schema | config-validation | state-persistence |
-| state-persistence | state-db-schema | backtest-framework, risk-position-sizing, risk-circuit-breaker, execution-alpaca, scheduler-create, test-unit |
+| state-persistence | state-db-schema | backtest-framework, risk-position-sizing, loss-limits (23), execution-alpaca, scheduler-create, test-unit |
 | logging-setup | config-validation | alerting-setup, backtest-framework, execution-retry, test-unit |
 | alerting-setup | logging-setup | main-entry |
 | backtest-framework | feature-validation, state-persistence, logging-setup | backtest-dummy-signals, backtest-strategy, test-unit |
@@ -336,8 +348,8 @@ If you have multiple developers:
 | backtest-strategy | backtest-framework, model-training | backtest-report, test-unit |
 | backtest-report | backtest-strategy | test-unit |
 | risk-position-sizing | state-persistence | risk-validation |
-| risk-circuit-breaker | state-persistence | risk-validation |
-| risk-validation | risk-position-sizing, risk-circuit-breaker | scheduler-create, test-unit |
+| loss-limits (23) | state-persistence | risk-validation, the execution loop |
+| risk-validation (24, unwired) | risk-position-sizing, loss-limits (23) | scheduler-create, test-unit |
 | execution-alpaca | config-validation, state-persistence | execution-retry |
 | execution-retry | execution-alpaca, logging-setup | scheduler-create, test-unit |
 | scheduler-create | data-live, model-simple, risk-validation, execution-retry, state-persistence | scheduler-error-handling, test-unit |

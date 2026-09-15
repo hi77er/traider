@@ -4,13 +4,47 @@
 **traider** is a modular, production-grade Python AI trading bot for automated **AAPL (Apple) stock** trading. Market data comes from the **OpenBB Platform SDK**; order execution uses the **Alpaca Trading API**. Deployed on AWS Lightsail.
 
 **Key Characteristics:**
-- Non-day-trading bot (4-hour decision intervals, polling-based, no websockets)
+- Rule-based strategy on any instrument (AAPL, NVDA, SXR8.DE …), decided once per
+  closed bar of the configured size (1m … 1d)
 - Paper and live trading modes
 - Fully modular architecture (10 independent modules)
 - Backtested strategy validation before live execution
 - Full observability: logging, alerts, dashboards
 - Durable state persistence (DynamoDB)
 - Docker containerized: OpenBB Platform (Python) for data + the Alpaca API for execution (no sidecar gateway, no Java)
+
+---
+
+## Current state (2026-09) — read this first
+
+The parts below are the shape the plan settled into after the implementation. Where
+they differ from the module sections further down, **this is the truth**.
+
+**One trading logic, two drivers.** Everything that decides a trade lives in
+`src/strategy` and nowhere else:
+
+| File | Role |
+|---|---|
+| `engine.py` | `StrategyEngine.step(state, bar, act)` — the whole rule set, pure. No I/O, no clock, no fetches |
+| `config.py` | `StrategyConfig` — every knob, from one settings object, read by the backtest and a live run alike |
+| `state.py` | the position + the last decided bar, serialised so a restart cannot re-fire |
+| `broker.py` | the ONLY decide→act seam (`Broker` protocol) |
+| `live.py` | `LiveDriver` — a closed bar in, intents out |
+
+The backtest drives the SAME machine (`src/backtest/risk_sim.py` is an adapter onto
+it, and `simulate_frame`/`position_intervals` delegate there too), and
+`tests/test_strategy_parity.py` fails if the two paths ever disagree about an entry,
+an exit, a price, a skipped trade or a broker mismatch. The risks of *this* design
+are the ones worth knowing: a fill price is the one legitimate backtest↔live
+asymmetry, and a driver must never be allowed to grow a rule of its own.
+
+**Risk settings are optional, and empty means NOT APPLIED.** No master switches.
+See Phase 4 and module 5d below.
+
+**Execution is implemented; nothing starts it.** `src/execution` can place a
+bracketed order in either environment, and `AlpacaBroker` satisfies the strategy's
+broker seam — but `src/scheduler/` is an empty package, so **no order can leave the
+process today**. That (plus the deferred loss limits) is the remaining work.
 
 ---
 
@@ -71,35 +105,53 @@ traider/
 ├── src/
 │   ├── config/
 │   │   ├── __init__.py
-│   │   └── settings.py              # Configuration & env validation
+│   │   ├── settings.py              # Configuration & env validation
+│   │   ├── effective.py             # strategy > account > .env resolution
+│   │   ├── session.py               # trading window (the decision bound)
+│   │   └── history.py               # bar size ⇄ history period table
 │   ├── data/
 │   │   ├── __init__.py
 │   │   ├── openbb_client.py         # OpenBB Platform SDK wrapper (provider config, caching)
 │   │   ├── historical.py            # Fetch candles for backtesting (via OpenBB)
-│   │   └── live.py                  # Poll current price (via OpenBB)
+│   │   ├── dataset.py               # Canonical parquet dataset (read/write/window)
+│   │   ├── delta.py                 # What the dataset is missing (tail + interior)
+│   │   └── live.py                  # Live candles + the DERIVED required window
 │   ├── features/
 │   │   ├── __init__.py
-│   │   └── engineering.py           # Feature computation (SMA, RSI, ATR, etc)
+│   │   ├── engineering.py           # Feature computation (SMA, RSI, ATR, etc)
+│   │   ├── indicators.py            # The pure indicator maths
+│   │   └── schema.py                # Feature column names (+ longest window)
 │   ├── model/
 │   │   ├── __init__.py
-│   │   ├── simple_model.py          # Rule-based or logistic regression signal
-│   │   └── trainer.py               # Model training pipeline
+│   │   ├── simple_model.py          # Rule-based signal (the only model built)
+│   │   └── rules.py                 # Rule/RuleSet models + the strategy store
+│   ├── strategy/                    # THE trading logic — one implementation, two drivers
+│   │   ├── __init__.py
+│   │   ├── engine.py                # strategies the state machine (step/run) + ledger
+│   │   ├── config.py                # StrategyConfig: every knob, optional = not applied
+│   │   ├── state.py                 # position + last decided bar, serialised
+│   │   ├── broker.py                # the ONLY decide→act seam (Broker protocol)
+│   │   └── live.py                  # LiveDriver: closed bar in, intents out
 │   ├── risk/
 │   │   ├── __init__.py
-│   │   ├── position_sizing.py       # Calculate safe position size
-│   │   ├── circuit_breaker.py       # Stop trading after N losses/drawdown
-│   │   └── validator.py             # Unified signal validator
-│   ├── execution/
+│   │   ├── position_sizing.py       # Size from equity, risk limit, stop distance
+│   │   ├── circuit_breaker.py       # Loss limits — NOT wired into a run (deferred)
+│   │   └── validator.py             # Unified signal validator — NOT wired into a run
+│   ├── execution/                   # The only package that can move money
 │   │   ├── __init__.py
-│   │   ├── alpaca_executor.py       # Alpaca order placement (execution only — data comes from OpenBB)
-│   │   └── retry.py                 # Retry logic for failed orders
+│   │   ├── config.py                # paper | live resolution (raises, never downgrades)
+│   │   ├── credentials.py           # Are the keys WORKING, not merely present
+│   │   ├── alpaca_client.py         # The API as URLs and status codes
+│   │   ├── retry.py                 # May this call be tried again?
+│   │   ├── alpaca_executor.py       # Place ONE order (bracket, poll, flatten)
+│   │   └── alpaca_broker.py         # AlpacaBroker implements the strategy's Broker
 │   ├── state/
 │   │   ├── __init__.py
 │   │   ├── schema.py                # DynamoDB table schema / mapper (boto3/pynamodb)
 │   │   └── tracker.py               # Portfolio persistence layer (DynamoDB wrapper)
 │   ├── scheduler/
 │   │   ├── __init__.py
-│   │   └── orchestrator.py          # APScheduler main loop
+│   │   └── orchestrator.py          # APScheduler main loop — NOT BUILT (nothing ticks)
 │   ├── logging/
 │   │   ├── __init__.py
 │   │   ├── logger.py                # Structured logging
@@ -107,7 +159,7 @@ traider/
 │   ├── web/
 │   │   ├── __init__.py
 │   │   ├── app.py                   # FastAPI app (dashboard)
-│   │   ├── routes.py                # Progress, charts, config, settings, alerts
+│   │   ├── routes/                  # Progress, charts, config, settings, alerts
 │   │   └── auth.py                  # Portal login
 │
 ├── src/backtest/                    # Backtest library (pure: no web imports)
@@ -291,18 +343,19 @@ def validate_signal(signal, current_state):
 
 ---
 
-### 6. **Execution Module** (`src/execution/`)
+### 6. **Execution Module** (`src/execution/`) — ✅ IMPLEMENTED
 **Responsibility:** Only module that places real orders. No execution = no trading.
+Nothing outside this package may know `/v2/orders` (asserted by a test).
 
-#### 6a. Alpaca Executor (`alpaca_executor.py`)
+#### 6a. Alpaca Executor (`alpaca_executor.py`) — ✅ IMPLEMENTED
 ```python
 class AlpacaExecutor:
     def place_order(self, instrument, side, quantity, stop_loss_price, take_profit_price):
         # 1. Resolve paper vs live via src/execution/config.py
-        # 2. Build the order (a bracket/OCO carries the stop + take profit)
-        # 3. Submit to the Alpaca Trading API
-        # 4. Poll for confirmation
-        # 5. Return order_id or raise exception
+        # 2. Refuse first: the trading switch, the numbers, the risk layer
+        # 3. Build the order (a bracket/OCO carries the stop + take profit)
+        # 4. Submit to the Alpaca Trading API (retrying only what may be retried)
+        # 5. Poll for confirmation, then report the fill
 ```
 - **Execution only.** All price data comes from the OpenBB Platform (Module 2); Alpaca is used solely to place and manage orders
 - Auth is an API key pair — no gateway, no Java, no session token to refresh
@@ -312,20 +365,32 @@ class AlpacaExecutor:
 - Validates order before sending
 - Polls order status until filled or timeout
 
-#### 6b. Retry Logic (`retry.py`)
+The layer, outermost last — each answers one question and nothing else:
+
+| File | Answers |
+|---|---|
+| `config.py` | Where would an order go? Raises rather than downgrading |
+| `credentials.py` | Are the keys WORKING, or merely present? Asked of Alpaca |
+| `alpaca_client.py` | The API in URLs and status codes (auth, timeouts, 404 = flat) |
+| `retry.py` | May this call be tried again? Only a failure that never reached a verdict |
+| `alpaca_executor.py` | Place ONE order: refuse before sending, bracket the exits, poll |
+| `alpaca_broker.py` | `AlpacaBroker` — the `src/strategy/broker.py` protocol, so `LiveDriver` can drive it |
+
+#### 6b. Retry Logic (`retry.py`) — ✅ IMPLEMENTED
 ```python
-def execute_with_retry(order_spec, max_retries=3):
-    for attempt in range(max_retries):
-        try:
-            return executor.place_order(**order_spec)
-        except TemporaryError as e:
-            sleep(exponential_backoff(attempt))
-    # Final failure: log & alert
+def execute_with_retry(fn, max_retries=3, base_delay=1.0, sleep=time.sleep, label="order"):
+    # Retries ONLY a failure that never reached a verdict.
 ```
-- Exponential backoff: 1s, 2s, 4s
-- Log each attempt
-- Send alert on final failure
-- Update state tracker on success/failure
+- Exponential backoff: 1s, 2s, 4s (and `max_retries` counts RETRIES, so 3 means up to
+  4 calls — the reading `EXECUTION_MAX_RETRIES` has always had)
+- Retried: transport failures, 429, 5xx — the broker saying "not now"
+- **Not** retried: 401/403 (a revoked key gets the same answer every time), 4xx
+  validation errors (the same wrong order would be resent), and a submit whose
+  outcome is unknown — that one is REPORTED, because by then it may be live
+- **A retry reuses its `client_order_id`**, which Alpaca deduplicates, so a submit
+  that timed out and actually landed cannot double-fill
+- Every attempt is logged with the PAPER/LIVE label, because the two accounts look
+  identical in Alpaca's portal
 
 ---
 
@@ -564,12 +629,19 @@ Backtest window comes from `BACKTEST_START_DATE` / `BACKTEST_END_DATE` (or the h
 ### Phase 4: Risk & Execution (Days 13-15)
 ```
 ✅ risk-position-sizing     → Calculate safe position size
-✅ risk-circuit-breaker     → Implement loss limits
-✅ risk-validation          → Unified risk checks
-✅ risk-backtest-parity     → Gate measures the SAME system that will trade
-                              (sizing + stop/take + circuit breaker inside the backtest)
-⏸️ execution-alpaca         → Alpaca order placement  [not started — needs Alpaca API keys]
-⏸️ execution-retry          → Retry with backoff     [not started]
+✅ risk-settings-optional   → every risk field optional; EMPTY = NOT APPLIED, no
+                              master switch (APPLY_RISK_LAYER and
+                              CIRCUIT_BREAKER_ENABLED removed)
+✅ risk-backtest-parity     → Gate measures the SAME system that will trade: one
+                              shared state machine (src/strategy) drives the backtest
+                              and a live run, proven by tests/test_strategy_parity.py
+✅ risk-validation          → Unified risk checks (validator.py — built, NOT wired in)
+⏸️ risk-loss-limits         → MAX_CONSECUTIVE_LOSSES / MAX_LOSS_PERCENT applied in
+                              the execution loop [collected, not applied]
+✅ execution-alpaca         → Alpaca order placement (bracket exits, poll, flatten)
+✅ execution-retry          → Retry with backoff (only failures that never reached
+                              a verdict; a retry reuses its client_order_id)
+✅ execution-broker         → AlpacaBroker implements src/strategy/broker.py
 ```
 
 ### Phase 5: Deferred — Core & Backtest Completion
@@ -591,9 +663,12 @@ Moved from Phases 2 & 3 so Risk & Execution can start first. Prerequisite for Ph
 
 ### Phase 6: Integration (Days 16-17)
 ```
-✅ scheduler-create         → APScheduler main loop
-✅ scheduler-error-handling → Robust error handling
-✅ main-entry               → Entry point (main.py)
+⏸️ scheduler-create         → APScheduler main loop
+                              [NOT BUILT — src/scheduler/ is an empty package and
+                               SCHEDULER_ENABLED is read by nothing, so nothing starts
+                               a tick and no order can leave the process]
+⏸️ scheduler-error-handling → Robust error handling [with the scheduler]
+⏸️ main-entry               → Entry point wiring the live loop (main.py is a stub)
 ```
 
 ### Phase 7: Testing (Days 18-21)

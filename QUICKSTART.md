@@ -86,10 +86,14 @@ Build a modular Python trading bot for AAPL (Apple) stock that:
 4. MODEL → The "AI" - takes features, outputs BUY/SELL/HOLD
    └─ Trained offline, saved to file, loaded at startup
 
-5. RISK MANAGER → Vetoes risky signals
-   ├─ Position sizing (how much to buy?)
-   ├─ Exposure cap + stop / take (limits on losses are deferred)
-   └─ Risk validator (says YES/NO to each trade)
+5. RISK MANAGER → Optional settings, applied identically by the backtest and live
+   ├─ Exposure cap (default 100% = the whole account)
+   ├─ Position sizing (risk per trade x stop distance, capped by exposure)
+   ├─ Stop / take levels, as resting bracket orders at the broker
+   ├─ Loss limits (max daily loss, max consecutive losses) — COLLECTED, NOT APPLIED
+   │  (deferred to the execution loop)
+   └─ EMPTY MEANS NOT APPLIED: there is no master switch, so what is set is what
+      runs. Clearing a box takes that behaviour out of the run.
 
 6. EXECUTION → Only module that places real orders
    └─ Talks to the Alpaca API (execution only; data comes from OpenBB), retries if an order fails
