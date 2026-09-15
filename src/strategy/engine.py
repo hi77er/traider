@@ -1,8 +1,8 @@
 """The strategy: one bar in, one decision out.
 
 ``StrategyEngine.step`` is the whole trading logic, and it is the ONLY implementation
-of it. Fill timing, stop/take levels, sizing, the breaker, one-position-at-a-time, the
-re-entry rule — all here, all pure. A driver supplies bars and resolves fills:
+of it. Fill timing, stop/take levels, sizing, one-position-at-a-time, the re-entry rule
+— all here, all pure. A driver supplies bars and resolves fills:
 
 * the backtest loops a dataset and fills at the next bar's open (or at a level), so
   results stay conservative;
@@ -19,15 +19,19 @@ every backtest number depends on them:
   bar it was opened on, and the fill is booked at the LEVEL (the intrabar order is
   unknowable, so the pessimistic assumption is used);
 * after a stop-out the strategy is flat and may re-enter on the next signal;
-* a tripped breaker does not delay an entry, it cancels it;
 * a position still open at the end of the data is force-closed at the final close.
 
-One thing did change, deliberately: the volatility-target sizing mode now reads the
-closes of bars that have CLOSED before the entry bar, where the replay read
-``closes[:k+1]`` — including the entry bar's own close, which is not knowable at that
-bar's open and which a live run could never reproduce. The change is a no-op for the
-fixed-risk sizing every stored strategy uses, and it removes a divergence instead of
-adding one.
+Every risk behaviour is driven by whether its setting is CONFIGURED (see
+``StrategyConfig``): a stop is applied when a stop percentage is set and not otherwise,
+and the size comes from risk-per-trade when there is both a risk limit and a stop, and
+from the exposure cap alone when there is not. There is no master switch, so "the risk
+layer is off" is expressed by leaving the fields empty.
+
+The loss limits (``MAX_CONSECUTIVE_LOSSES``, ``MAX_LOSS_PERCENT``) are collected but
+NOT applied here: halting on losses belongs to the execution loop, which is where the
+frequent decisions that make a streak meaningful actually happen. ``Intent(action=SKIP)``
+remains the vocabulary for an entry that was refused, so nothing about a veto is
+invented twice when it lands.
 
 ``Ledger`` is the other half: given the fills those steps produce, it writes the per-bar
 returns and the trade rows. It is accounting, not strategy — the return arithmetic
@@ -40,21 +44,21 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Sequence
 
-from src.risk.position_sizing import realized_volatility_percent, stop_distance, target_weight
+from src.risk.position_sizing import realized_volatility_percent, stop_distance
 from src.strategy.config import StrategyConfig
 from src.strategy.state import Position, StrategyState
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
-    "Bar", "Intent", "Ledger", "StrategyEngine", "bar_from_row", "day_key", "day_lookup",
+    "Bar", "Intent", "Ledger", "StrategyEngine", "bar_from_row",
     "OPEN", "CLOSE", "NONE", "SKIP",
 ]
 
 OPEN, CLOSE, NONE, SKIP = "open", "close", "none", "skip"
 # Why a position ended — the vocabulary the trade log and the stats already use, so
 # existing reports read the same.
-STOP, TAKE, SIGNAL, FORCED, BREAKER = "stop", "take", "signal", "forced", "circuit_breaker"
+STOP, TAKE, SIGNAL, FORCED = "stop", "take", "signal", "forced"
 
 
 @dataclass(frozen=True)
@@ -121,11 +125,8 @@ class Intent:
 class StrategyEngine:
     """The shared machine: one instance per run, ``step`` once per bar."""
 
-    def __init__(self, config: StrategyConfig, *, days_available: bool = True):
+    def __init__(self, config: StrategyConfig):
         self.config = config
-        # A breaker needs a notion of "today". Without per-bar day keys it is skipped,
-        # which is what callers that pass no days have always got.
-        self.days_available = bool(days_available)
         # Closes of bars that have already CLOSED, newest last — the only price history
         # the strategy may size against.
         self._closed_closes: List[float] = []
@@ -178,23 +179,21 @@ class StrategyEngine:
             return None
 
         short = bool(want_short)
-        day = day_key(bar.time)
-        if cfg.uses_breaker and self.days_available and day:
-            breaker = state.ensure_breaker(cfg.max_consecutive_losses, cfg.max_loss_percent)
-            if breaker.tripped(day):
-                state.breaker_skips += 1
-                return Intent(action=SKIP, reason=BREAKER, short=short, skipped=True)
 
-        stop_pct = float(cfg.stop_loss_percent)
-        if cfg.enabled and cfg.sizing_mode == "volatility_target":
+        # The stop actually in force: the configured percentage, or — when the
+        # volatility-target mode is selected — the realised volatility of the bars
+        # that have already closed. Only when a stop is configured at all: an empty
+        # stop box means no stop, and a volatility-derived one would be a stop the
+        # operator did not ask for.
+        stop_pct: Optional[float] = cfg.stop_loss_percent
+        if cfg.uses_stop and cfg.sizing_mode == "volatility_target":
             vol = realized_volatility_percent(list(self._closed_closes), cfg.volatility_period)
             if vol:
                 stop_pct = vol
-        weight = (
-            target_weight(cfg.risk_limit_percent, stop_pct, cfg.max_exposure_percent)
-            if cfg.enabled
-            else 1.0
-        )
+
+        # The ONE sizing decision, shared with live: derived from what is configured,
+        # never from a master switch.
+        weight = cfg.deploy_weight_for(stop_pct)
         if not state.weight_seen:
             state.first_weight = weight
             state.weight_seen = True
@@ -255,14 +254,17 @@ class StrategyEngine:
 
     # -- levels ------------------------------------------------------------
     def levels(self, entry_px: float, short: bool):
-        """``(stop, take)`` price levels for an entry at ``entry_px``."""
+        """``(stop, take)`` price levels for an entry at ``entry_px``.
+
+        Either may be ``None``: a level is a level only if it was configured.
+        """
         cfg = self.config
         stop_level = take_level = None
-        if cfg.enabled and cfg.stop_loss_percent > 0:
-            d = stop_distance(entry_px, cfg.stop_loss_percent)
+        if cfg.uses_stop:
+            d = stop_distance(entry_px, float(cfg.stop_loss_percent))
             stop_level = entry_px + d if short else entry_px - d
-        if cfg.enabled and cfg.take_profit_percent > 0:
-            d = stop_distance(entry_px, cfg.take_profit_percent)
+        if cfg.uses_take:
+            d = stop_distance(entry_px, float(cfg.take_profit_percent))
             take_level = entry_px - d if short else entry_px + d
         return stop_level, take_level
 
@@ -271,8 +273,6 @@ class StrategyEngine:
         self,
         signals: Sequence[str],
         bars: Sequence[Bar],
-        *,
-        days: Optional[Sequence[str]] = None,
     ) -> "Ledger":
         """Replay ``signals`` over ``bars`` — the driver the backtest uses.
 
@@ -283,15 +283,11 @@ class StrategyEngine:
         n = len(bars)
         if n == 0:
             return Ledger(n=0, opens=[], closes=[])
-        self.days_available = bool(days)
         self._closed_closes = []
         opens = [b.open for b in bars]
         closes = [b.close for b in bars]
         ledger = Ledger(n=n, opens=opens, closes=closes)
-        day_at = day_lookup(days)
         state = StrategyState()
-        if self.config.uses_breaker and self.days_available:
-            state.ensure_breaker(self.config.max_consecutive_losses, self.config.max_loss_percent)
 
         for k in range(1, n):
             # The bar that is STARTING: everything before it has closed, so that is
@@ -301,7 +297,7 @@ class StrategyEngine:
             state.bar_index = k
             act = str(signals[k - 1]) if k - 1 < len(signals) else "HOLD"
             for intent in self.step(state, bar, act):
-                self.settle(ledger, state, bar, intent, day_at=day_at)
+                self.settle(ledger, state, bar, intent)
 
         # Still open at the end of the data -> force-close at the final close.
         if state.position is not None:
@@ -313,7 +309,6 @@ class StrategyEngine:
                 entry_bar=pos.entry_index, last_bar=n - 2, exit_idx=n - 1,
                 short=pos.short, entry_px=pos.entry_price, exit_px=exit_px,
                 weight=pos.weight, reason=FORCED, stop_pct=pos.stop_pct,
-                day_at=day_at, state=state,
             )
             state.position = None
 
@@ -328,7 +323,6 @@ class StrategyEngine:
         bar: Bar,
         intent: Intent,
         *,
-        day_at=None,
         exit_price: Optional[float] = None,
     ) -> None:
         """Book an intent as a fill.
@@ -354,7 +348,7 @@ class StrategyEngine:
             entry_bar=pos.entry_index, last_bar=last_bar, exit_idx=bar.index,
             short=pos.short, entry_px=pos.entry_price, exit_px=price,
             weight=pos.weight, reason=intent.reason, stop_pct=pos.stop_pct,
-            day_at=day_at, state=state, raw_entry_px=pos.raw_entry_price,
+            raw_entry_px=pos.raw_entry_price,
         )
         state.position = None
 
@@ -384,9 +378,7 @@ class Ledger:
         exit_px: float,
         weight: float,
         reason: str,
-        stop_pct: float,
-        day_at=None,
-        state: Optional[StrategyState] = None,
+        stop_pct: Optional[float] = None,
         raw_entry_px: Optional[float] = None,
     ) -> None:
         """Write the leg's bar returns and append its trade row.
@@ -431,11 +423,15 @@ class Ledger:
         )
         if weight != 1.0 and self.weight == 1.0:
             self.weight = weight
-        if state is not None and state.breaker is not None and day_at is not None:
-            state.breaker.record_trade(equity_ret * 100.0, day=day_at(exit_idx))
 
     def record_skip(self, *, index: int, short: bool, reason: str) -> None:
-        """An entry the risk layer refused. Kept in the log: a veto is a decision."""
+        """An entry that was refused before it reached a broker. A veto is a decision.
+
+        Nothing in the machine emits one today: the loss limits that will refuse an
+        entry are deferred to the execution loop (MAX_CONSECUTIVE_LOSSES and
+        MAX_LOSS_PERCENT are collected but not yet applied). The vocabulary stays so
+        that a refusal is a leg in the ledger rather than a silence when it returns.
+        """
         self.legs.append(
             {
                 "entry_idx": index, "exit_idx": index,
@@ -458,7 +454,7 @@ class Ledger:
     def in_position_bars(self) -> int:
         return sum(1 for a in self.active if a)
 
-    def stats(self, *, applied: bool = True) -> Dict[str, object]:
+    def stats(self) -> Dict[str, object]:
         """The counters the report has always carried."""
         counts = {STOP: 0, TAKE: 0, SIGNAL: 0, FORCED: 0}
         skips = 0
@@ -469,17 +465,13 @@ class Ledger:
             reason = leg.get("reason")
             if reason in counts:
                 counts[reason] += 1
-        breaker = self._state.breaker if self._state is not None else None
         return {
-            "applied": bool(applied),
             "weight": self.weight,
             "stop_exits": counts[STOP],
             "take_exits": counts[TAKE],
             "signal_exits": counts[SIGNAL],
             "forced_exits": counts[FORCED],
-            "breaker_skips": skips,
-            "breaker_trips": int(getattr(getattr(breaker, "state", None), "trips", 0) or 0),
-            "breaker": breaker.snapshot() if breaker is not None else None,
+            "skipped_entries": skips,
             "in_position_bars": self.in_position_bars,
         }
 
@@ -487,20 +479,3 @@ class Ledger:
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
-def day_key(time_value: Any) -> Optional[str]:
-    """``YYYY-MM-DD`` of a bar, or None when it cannot be told."""
-    if time_value is None:
-        return None
-    text = str(time_value)
-    return text[:10] if len(text) >= 10 else None
-
-
-def day_lookup(days: Optional[Sequence[str]]):
-    """``day_at(idx)`` from the per-bar day keys, or None when there are none."""
-    if not days:
-        return None
-
-    def day_at(idx: int) -> Optional[str]:
-        return str(days[min(max(idx, 0), len(days) - 1)])[:10]
-
-    return day_at

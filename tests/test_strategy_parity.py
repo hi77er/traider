@@ -65,13 +65,6 @@ def _settings(tmp_path, **kw) -> Settings:
         take_profit_percent=5.0,
         risk_limit_percent=2.0,
         max_exposure_percent=100.0,
-        apply_risk_layer=True,
-        # The breaker is left armed but effectively unreachable here: it counts losses
-        # PER DAY, and this fixture is one day, so the batch would trip it partway through
-        # while a live run starting later begins with no loss history to trip on. Its own
-        # parity is pinned separately (``test_the_breaker_halts_...``).
-        max_consecutive_losses=99,
-        max_loss_percent=99.0,
         backtest_slippage_percent=0.05,
         backtest_commission_per_trade=0.001,
         allow_short=False,
@@ -147,15 +140,12 @@ def _bars(df: pd.DataFrame):
 def _engine(settings, *, costs=True) -> StrategyEngine:
     cfg = StrategyConfig.from_settings(
         settings,
-        enabled=bool(getattr(settings, "apply_risk_layer", True)),
         slippage=(float(settings.backtest_slippage_percent) / 100.0 if costs else 0.0),
         commission=(float(settings.backtest_commission_per_trade) if costs else 0.0),
     )
     return StrategyEngine(cfg)
 
 
-def _day_keys(df: pd.DataFrame):
-    return [str(ts)[:10] for ts in df.index]
 
 
 # ---------------------------------------------------------------------------
@@ -194,7 +184,6 @@ def _replay_both(df, settings, gen, tmp_path, start: int):
     """
     bars = _bars(df)
     signals = [str(s) for s in gen.evaluate_frame(df)["signal"].tolist()]
-    days = [str(ts)[:10] for ts in df.index]
     offset = start - 1
     # Renumber the slice from zero: the ledger's return series is indexed by the bar's
     # POSITION in the series it was given, so a slice must be numbered as its own series
@@ -203,7 +192,7 @@ def _replay_both(df, settings, gen, tmp_path, start: int):
         Bar(index=i, time=b.time, open=b.open, close=b.close, high=b.high, low=b.low)
         for i, b in enumerate(bars[offset:])
     ]
-    batch = _engine(settings).run(signals[offset:], sliced, days=days[offset:])
+    batch = _engine(settings).run(signals[offset:], sliced)
 
     shifted = []
     for leg in batch.legs:
@@ -243,27 +232,24 @@ def test_a_live_run_makes_the_same_trades_as_the_backtest(tmp_path, ruleset_name
         )
 
 
-def test_the_breaker_halts_the_same_way_in_both_paths(tmp_path):
-    """The circuit breaker is risk logic, so it must bite identically.
+def test_the_configured_stop_and_target_apply_identically_in_both_paths(tmp_path):
+    """The risk settings are the only switch, so both drivers must read them the same.
 
-    Both paths replay from the same bar (see ``_replay_both``), because a breaker's memory
-    is its loss history: a live run starting later cannot be expected to have lost what the
-    backtest lost before it existed. Without the day key a live run booked its trades
-    undated and never tripped — which is how this test came to exist.
+    A stop that fired in the replay and not live (or the other way round) would make every
+    backtest verdict a statement about a different system than the one that trades. The
+    loss limits are no longer part of this: halting on losses is deferred to the execution
+    loop, so there is nothing for the two paths to disagree about there yet.
     """
     df = _zigzag()
-    settings = _settings(tmp_path, max_consecutive_losses=3, max_loss_percent=5.0)
+    settings = _settings(tmp_path, stop_loss_percent=2.0, take_profit_percent=3.0)
     gen = _generator(settings, _always_buy())
     audit, live_legs, _ = _replay_both(df, settings, gen, tmp_path, 10)
 
     def shape(legs):
         return [(leg["reason"], leg["bars"], leg.get("skipped", False)) for leg in legs]
 
-    assert any(leg["reason"] == "circuit_breaker" for leg in audit), (
-        "the fixture must trip the breaker for this to prove anything"
-    )
-    assert any(leg["reason"] == "circuit_breaker" for leg in live_legs), (
-        "the live run never halted, so it ignored the breaker"
+    assert any(leg["reason"] in ("stop", "take") for leg in audit), (
+        "the fixture must hit a level for this to prove anything"
     )
     if audit and audit[-1]["reason"] == "forced":
         audit = audit[:-1]
@@ -305,7 +291,7 @@ def test_exactly_one_implementation_decides(tmp_path, monkeypatch):
 
     batch = _engine(settings)
     signals = [str(s) for s in gen.evaluate_frame(df)["signal"].tolist()]
-    batch.run(signals, _bars(df), days=_day_keys(df))
+    batch.run(signals, _bars(df))
     after_batch = calls["n"]
     assert after_batch > 0, "the backtest did not use the shared machine"
 

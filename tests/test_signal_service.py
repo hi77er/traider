@@ -14,17 +14,32 @@ from src.model import rules as R
 from src.web.services import signal_service
 
 
+# With EVERY risk field named, because the repo's .env carries risk values and an
+# init value beats the environment. `risk=False` is "no risk settings", which is how a
+# raw run is expressed now that the master switch is gone.
+_NO_RISK = dict(
+    stop_loss_percent=None,
+    take_profit_percent=None,
+    risk_limit_percent=None,
+    max_loss_percent=None,
+    max_consecutive_losses=None,
+    max_exposure_percent=100.0,
+)
+
+
 def _settings(tmp_path, model_type="rule_based", feature_sma_enabled=True,
-              apply_risk_layer=True) -> Settings:
-    return Settings(
-        _env_file=None,
+              risk=True, **kw) -> Settings:
+    values = dict(
         strategy_rules_file=str(tmp_path / "rules" / "active.json"),
         instrument="AAPL",
         historical_bar_size="1d",
         model_type=model_type,
         feature_sma_enabled=feature_sma_enabled,
-        apply_risk_layer=apply_risk_layer,
     )
+    if not risk:
+        values.update(_NO_RISK)
+    values.update(kw)
+    return Settings(_env_file=None, **values)
 
 
 def _candles(n=40, step=0.5):
@@ -131,7 +146,9 @@ def test_disabled_feature_rule_is_skipped_in_service(monkeypatch, tmp_path):
 
 
 def test_fills_are_replayed_through_the_risk_layer(monkeypatch, tmp_path):
-    settings = _settings(tmp_path)
+    # The stop is named explicitly: empty means NOT APPLIED, so relying on the ambient
+    # .env would make this a test of the developer's configuration.
+    settings = _settings(tmp_path, stop_loss_percent=2.0)
     _save_store(settings, _ALWAYS_BUY)
     monkeypatch.setattr(signal_service, "get_effective_settings", lambda: settings)
     monkeypatch.setattr(signal_service, "load_dataset", lambda *a, **k: _spike_candles())
@@ -152,7 +169,8 @@ def test_fills_are_replayed_through_the_risk_layer(monkeypatch, tmp_path):
 
 def test_fills_carry_the_round_trips_outcome(monkeypatch, tmp_path):
     """The chart colours each held-period band by this flag (green/red)."""
-    settings = _settings(tmp_path)
+    # A take profit has to be configured for a rising market to reach one.
+    settings = _settings(tmp_path, take_profit_percent=4.0)
     _save_store(settings, _ALWAYS_BUY)
     monkeypatch.setattr(signal_service, "get_effective_settings", lambda: settings)
     monkeypatch.setattr(signal_service, "load_dataset", lambda *a, **k: _candles())
@@ -169,14 +187,15 @@ def test_fills_carry_the_round_trips_outcome(monkeypatch, tmp_path):
     assert all(abs(f["equity_ret_pct"]) <= abs(f["ret_pct"]) + 1e-9 for f in rounds)
 
 
-def test_risk_layer_off_shows_the_raw_strategy(monkeypatch, tmp_path):
-    settings = _settings(tmp_path, apply_risk_layer=False)
+def test_an_empty_risk_config_shows_the_raw_strategy(monkeypatch, tmp_path):
+    """No stops, no target, the whole account — the raw replay, by configuration."""
+    settings = _settings(tmp_path, risk=False)
     _save_store(settings, _ALWAYS_BUY)
     monkeypatch.setattr(signal_service, "get_effective_settings", lambda: settings)
     monkeypatch.setattr(signal_service, "load_dataset", lambda *a, **k: _spike_candles())
 
     payload = signal_service.signal_payload()
-    assert payload["risk"] == {"applied": False}
+    assert payload["risk"]["applied"] is False
     assert payload["vetoed"] == []
     # The raw state machine holds ONE position from the first fill to the end.
     rounds = [f for f in payload["fills"] if f["kind"] == "close"]
@@ -187,8 +206,13 @@ def test_risk_layer_off_shows_the_raw_strategy(monkeypatch, tmp_path):
     assert rounds[0]["ret_pct"] < 0
 
 
-def test_breaker_vetoed_entries_are_not_reported_as_fills(monkeypatch, tmp_path):
-    """A breaker-skipped entry must never appear as a fill or a shade band."""
+def test_a_refused_entry_is_not_reported_as_a_fill(monkeypatch, tmp_path):
+    """An entry that never reached a broker must never appear as a fill or a shade band.
+
+    Nothing refuses one today — the loss limits that will are deferred to the execution
+    loop — so the stub stands in for that future veto. What is pinned here is the SHAPE:
+    a refusal is reported separately and is never coloured as a position that was held.
+    """
     settings = _settings(tmp_path)
     _save_store(settings, _ALWAYS_BUY)
     monkeypatch.setattr(signal_service, "get_effective_settings", lambda: settings)
@@ -204,13 +228,12 @@ def test_breaker_vetoed_entries_are_not_reported_as_fills(monkeypatch, tmp_path)
             return real.RiskResult(
                 legs=[
                     {"entry_idx": 1, "exit_idx": 1, "direction": "long",
-                     "skipped": True, "reason": "circuit_breaker", "weight": 0.0, "bars": 0},
+                     "skipped": True, "reason": "refused", "weight": 0.0, "bars": 0},
                     {"entry_idx": 2, "exit_idx": 3, "direction": "long",
                      "entry_price": 100.0, "exit_price": 101.0, "raw_entry_price": 100.0,
                      "reason": "signal", "weight": 1.0, "bars": 1, "skipped": False},
                 ],
-                stats={"weight": 1.0, "signal_exits": 1, "breaker_skips": 1,
-                       "breaker_trips": 1},
+                stats={"weight": 1.0, "signal_exits": 1, "skipped_entries": 1},
             )
 
     monkeypatch.setattr(signal_service, "risk_sim", _Stub)
@@ -227,8 +250,7 @@ def test_breaker_vetoed_entries_are_not_reported_as_fills(monkeypatch, tmp_path)
                 rows.index[1], settings.historical_bar_size, settings.market_timezone
             ),
             "side": "long",
-            "reason": "circuit_breaker",
+            "reason": "refused",
         }
     ]
-    assert payload["risk"]["breaker_skips"] == 1
-    assert payload["risk"]["breaker_trips"] == 1
+    assert payload["risk"]["skipped_entries"] == 1

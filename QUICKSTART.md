@@ -88,7 +88,7 @@ Build a modular Python trading bot for AAPL (Apple) stock that:
 
 5. RISK MANAGER → Vetoes risky signals
    ├─ Position sizing (how much to buy?)
-   ├─ Circuit breaker (stop if losing too much)
+   ├─ Exposure cap + stop / take (limits on losses are deferred)
    └─ Risk validator (says YES/NO to each trade)
 
 6. EXECUTION → Only module that places real orders

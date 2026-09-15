@@ -459,7 +459,7 @@ function fillsNote(d) {
     if (risk.forced_exits) why.push(`${risk.forced_exits} still open at the end`);
     if (why.length) bits.push(why.join(" · "));
     if (vetoes) {
-      bits.push(`${vetoes} entr${vetoes === 1 ? "y" : "ies"} vetoed by the circuit breaker`);
+      bits.push(`${vetoes} entr${vetoes === 1 ? "y" : "ies"} vetoed by the risk layer`);
     }
   }
   const shaded = " — the shaded background marks the periods a position was actually " +
@@ -512,7 +512,7 @@ function computeSignalMarkers() {
       shape: "circle",
     });
   });
-  // Entries the circuit breaker refused: no position was ever opened, so these
+  // Entries the risk layer refused: no position was ever opened, so these
   // are NOT fills — a muted "veto" says the strategy went quiet on purpose.
   (d.vetoed || []).forEach((v) => {
     out.push({

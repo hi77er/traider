@@ -424,10 +424,10 @@ def build_report(run: dict) -> dict:
     metrics = run.get("metrics") or {}
 
     # Everything the risk layer did, in one block: the settings + outcome counts
-    # the engine recorded under ``inputs.risk``, plus WHICH entries the circuit
-    # breaker refused. A run stored before the breaker detail existed still
-    # reports its counts — ``vetoed`` is then simply empty while
-    # ``breaker_skips`` says how many there were.
+    # the engine recorded under ``inputs.risk``, plus WHICH entries were refused
+    # before reaching a broker. Nothing refuses one today — the loss limits that
+    # will are deferred to the execution loop — so ``vetoed`` is normally empty
+    # and ``skipped_entries`` is 0.
     risk = dict(inputs.get("risk") or {})
     risk["vetoed"] = list((run.get("risk_events") or {}).get("vetoed") or [])
 

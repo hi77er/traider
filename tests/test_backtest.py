@@ -18,16 +18,30 @@ from src.config.settings import Settings
 from src.model import rules as rules_mod
 
 
+# A run with NO risk settings: the raw strategy replay, which is what these tests
+# pin. Written out because "empty" is a real instruction now, and because the
+# repo's .env carries risk values that would otherwise be picked up.
+_NO_RISK = dict(
+    stop_loss_percent=None,
+    take_profit_percent=None,
+    risk_limit_percent=None,
+    max_loss_percent=None,
+    max_consecutive_losses=None,
+    max_exposure_percent=100.0,
+)
+
+
 def _settings(tmp_path, **kw) -> Settings:
     defaults = dict(
         strategy_rules_file=str(tmp_path / "active.json"),
         instrument="TEST",
         historical_bar_size="1d",
         model_type="rule_based",
-        # These tests pin the RAW strategy simulation (no sizing, no stops, no
-        # breaker), which is what simulate_frame() does. The risk layer that
-        # run_backtest now applies by default is covered by tests/test_risk.py.
-        apply_risk_layer=False,
+        # These tests pin the RAW strategy simulation (no sizing, no stops),
+        # which is what simulate_frame() does. A raw run is now expressed by
+        # leaving the risk settings EMPTY rather than by a master switch, so they
+        # are stated explicitly — an init value beats the repo's .env.
+        **_NO_RISK,
     )
     defaults.update(kw)
     return Settings(**defaults)
@@ -217,40 +231,6 @@ def _same_day_candles(n=8, freq="1h") -> pd.DataFrame:
          "volume": [1e6] * n},
         index=idx,
     )
-
-
-def test_run_backtest_records_the_entries_the_breaker_refused(tmp_path):
-    """The run keeps WHERE the breaker vetoed an entry, not just how many."""
-    settings = _settings(
-        tmp_path,
-        apply_risk_layer=True,
-        stop_loss_percent=2.0,
-        take_profit_percent=0.0,
-        max_consecutive_losses=3,
-        circuit_breaker_enabled=True,
-    )
-    _store_buy_all(tmp_path, settings)
-    res = run_backtest(settings, dataset=_same_day_candles())
-
-    risk = res["inputs"]["risk"]
-    assert risk["applied"] is True
-    # Three stopped-out trades inside one day trip the breaker (limit 3); every
-    # later entry that day is refused.
-    assert risk["stop_exits"] == 3
-    assert risk["breaker_trips"] == 1
-    assert risk["breaker_skips"] == 4
-    assert [t["exit_reason"] for t in res["trades"]] == ["stop"] * 3
-
-    events = res["risk_events"]
-    assert events["applied"] is True
-    assert [v["index"] for v in events["vetoed"]] == [4, 5, 6, 7]
-    assert all(v["side"] == "long" for v in events["vetoed"])
-    assert all(v["reason"] == "circuit_breaker" for v in events["vetoed"])
-    assert all(isinstance(v["time"], str) and v["time"] for v in events["vetoed"])
-    assert all(v["label"] == "2024-01-02" for v in events["vetoed"])
-    # The veto detail is NOT part of inputs — adding a field there would re-key
-    # every stored run.
-    assert "vetoed" not in risk
 
 
 def test_run_backtest_requires_rule_based(tmp_path):

@@ -201,6 +201,50 @@ Track your progress through all 41 tasks across 9 phases.
   - [x] Verified on real data: NVDA 1h — 28 trades, signals 3386/88/41, Sharpe 0.709,
         profit factor 1.761 — unchanged from before the extraction
   - [x] `AlpacaBroker` — built in `src/execution/alpaca_broker.py` (task 25)
+- [x] **risk-settings-are-optional** (24d) — empty means not applied  ✅ COMPLETE
+  - [x] **Both master switches removed**: `APPLY_RISK_LAYER` ("apply the risk layer
+        in backtests") and `CIRCUIT_BREAKER_ENABLED`. Each asked a question the
+        settings below it already answer, and a switch can disagree with what it
+        governs — armed, with every field empty. Retired in
+        `RETIRED_STRATEGY_KEYS`, so a stored strategy that carried either key drops
+        it on the next save instead of failing to save
+  - [x] Every risk field is `Optional` and **empty means NOT APPLIED**, in the
+        backtest and in live/paper alike (one `StrategyConfig`, three readers): risk
+        per trade, stop loss, take profit, max daily loss and max consecutive losses
+        default to EMPTY; **max exposure defaults to 100**
+  - [x] Zero and empty are different instructions, so the blank string the panel
+        posts becomes `None` (`_empty_risk_setting_to_none`) instead of being coerced
+        to a number that would then be applied
+  - [x] **Sizing is one decision** — `StrategyConfig.deploy_weight_for(stop_pct)` →
+        `risk.position_sizing.target_weight`: a risk limit AND a stop give
+        risk-per-trade trimmed by the exposure cap; with either half missing the cap
+        alone decides (a risk % with no stop has no distance to divide by, and
+        "risk nothing" would stop the bot trading)
+  - [x] Exposure moved to the TOP of the Risk Management panel, and the six optional
+        fields each carry an example line ("e.g. 2", "leave empty for no stop")
+  - [x] **Circuit breaker removed from the run**: no `ensure_breaker`, no skip-on-trip,
+        no day-key plumbing, no breaker counters. `MAX_LOSS_PERCENT` /
+        `MAX_CONSECUTIVE_LOSSES` are still COLLECTED (panel + provenance) but not
+        applied — halting belongs to the execution loop. `Intent(action=SKIP)` and
+        `Ledger.record_skip` stay as the vocabulary so a refusal is a leg, not a
+        silence
+  - [x] `risk_sim.RiskConfig` is now an ALIAS for `StrategyConfig` (it was a parallel
+        dataclass with the same fields — exactly the drift the shared engine exists to
+        prevent); `cash`-style `as_dict`/`to_strategy_config` live on the one config
+  - [x] Report + chart UI updated: no "circuit breaker" tile or wording, the risk note
+        is built from the settings that ARE set (so a lone stop does not print
+        "null% risk per trade"), and the refused-entries table is gated on
+        `skipped_entries`
+  - [x] `.env.example` rewritten with the optional semantics, and the runtime `.env`
+        cleaned of the dead switch and the old non-empty defaults (they would
+        otherwise be the "default" every new strategy inherits)
+  - [x] Tests: the raw-replay equivalence is now "an EMPTY risk config reproduces
+        `simulate_frame`", the per-setting behaviour is pinned (stop only, risk only,
+        both + cap), and fixtures name their risk values — an empty box is a real
+        instruction, so a test must not inherit the developer's `.env` (nor a stray
+        shell export, which `_env_file=None` does not defeat)
+  - [ ] Apply `MAX_LOSS_PERCENT` / `MAX_CONSECUTIVE_LOSSES` in the execution loop
+
 - [x] **execution-alpaca** (25) — Implement the Alpaca executor (execution only)  ✅ COMPLETE
   - [x] `src/execution/alpaca_client.py` — the API as URLs and status codes: auth
         headers on every call, timeout, `X-Request-ID` captured, 404 on a position read

@@ -15,10 +15,11 @@ and reports Gate metrics. Design constraints:
   original long/flat behaviour — SELL is only ever an exit.
 - **Costs**: slippage (price %) + commission (fraction of notional) are charged
   on each fill.
-- **Same risk layer as live**: entries are sized, stopped, and halted by the
-  same rules the live bot applies — one shared engine, ``src/strategy/engine.py``,
-  driven from here through the ``risk_sim`` adapter (setting ``APPLY_RISK_LAYER``).
-  Set it to False to get the raw strategy numbers.
+- **Same risk layer as live**: entries are sized, stopped and capped by the same
+  rules the live bot applies — one shared engine, ``src/strategy/engine.py``,
+  driven from here through the ``risk_sim`` adapter. Which of those rules apply is
+  decided by which risk settings are SET: an empty box means the behaviour is left
+  out of the run.
 - Mid-day bars are marked open-to-open between fills; an open position at the
   end of the dataset is force-closed at the final close.
 - **Full fidelity**: the equity curve, the buy & hold benchmark and the trade
@@ -92,15 +93,32 @@ def simulate_frame(
     return run.returns, trades, sum(run.active), run.active
 
 
-def _raw_run(opens, closes, signals, n: int, *, allow_short=False, slippage=0.0, commission=0.0):
-    """Drive the shared strategy machine with the risk layer OFF.
+def _describe_risk(config) -> str:
+    """A one-line note naming the risk settings that were actually in effect."""
+    parts = []
+    if config.sizes_by_risk:
+        parts.append(
+            f"{float(config.risk_limit_percent):g}% risk/trade behind a "
+            f"{float(config.stop_loss_percent):g}% stop"
+        )
+    elif config.uses_stop:
+        parts.append(f"{float(config.stop_loss_percent):g}% stop")
+    if config.uses_take:
+        parts.append(f"{float(config.take_profit_percent):g}% take profit")
+    parts.append(f"max exposure {float(config.exposure_percent):g}%")
+    return "risk layer: " + ", ".join(parts) + "."
 
-    ``APPLY_RISK_LAYER=False`` is exactly this path, so the raw replay that
-    :func:`simulate_frame` and :func:`position_intervals` describe is produced by
-    ``src/strategy`` rather than by a second copy of the rules living here. Callers
-    that only need the fill bars pass dummy prices (see ``position_intervals``).
+
+def _raw_run(opens, closes, signals, n: int, *, allow_short=False, slippage=0.0, commission=0.0):
+    """Drive the shared strategy machine with NO risk settings.
+
+    A config with every risk field empty IS the raw replay — no stop, no target, no
+    risk-based sizing, the whole account deployed — so the raw path that
+    :func:`simulate_frame` and :func:`position_intervals` describe is produced by the
+    same code as the configured one. Callers that only need the fill bars pass dummy
+    prices (see ``position_intervals``).
     """
-    config = risk_sim.RiskConfig(enabled=False, allow_short=allow_short)
+    config = risk_sim.RiskConfig(allow_short=allow_short)
     return risk_sim.apply_risk_layer(
         [str(s) for s in signals],
         list(opens),
@@ -112,7 +130,6 @@ def _raw_run(opens, closes, signals, n: int, *, allow_short=False, slippage=0.0,
         allow_short=allow_short,
         slippage=slippage,
         commission=commission,
-        days=None,
     )
 
 
@@ -257,12 +274,11 @@ def run_backtest(settings: Settings, dataset: Optional[pd.DataFrame] = None) -> 
     n = len(df)
 
     # The strategy's signals, replayed through the SAME risk layer the live bot
-    # applies (position sizing, stop/take, circuit breaker) — see risk_sim. With
-    # APPLY_RISK_LAYER=False this reproduces the raw simulate_frame() numbers,
+    # applies (position sizing, stop/take) — see risk_sim. Which of them apply is
+    # decided by which settings are SET: leave the risk fields empty to reproduce
+    # the raw simulate_frame() numbers.
     # so the Gate can be read either way.
-    risk_config = risk_sim.RiskConfig.from_settings(
-        settings, enabled=bool(getattr(settings, "apply_risk_layer", True))
-    )
+    risk_config = risk_sim.RiskConfig.from_settings(settings)
     risk_result = risk_sim.apply_risk_layer(
         sig,
         df["open"].to_numpy(dtype=float),
@@ -274,7 +290,6 @@ def run_backtest(settings: Settings, dataset: Optional[pd.DataFrame] = None) -> 
         allow_short=allow_short,
         slippage=slippage,
         commission=commission,
-        days=[str(ts)[:10] for ts in df.index],
     )
     returns = risk_result.returns
     in_pos_legs = risk_result.in_position_bars
@@ -297,7 +312,7 @@ def run_backtest(settings: Settings, dataset: Optional[pd.DataFrame] = None) -> 
         settings, generator, df, ppy, allow_short, slippage, commission
     )
     # What the risk layer actually did — part of the provenance, and part of the
-    # run id, so a risk-on run can never be confused with a raw one.
+    # run id, so a run with risk settings can never be confused with one without.
     inputs["risk"] = {
         **risk_config.as_dict(),
         "weight": round(float(risk_result.stats.get("weight") or 0.0), 6),
@@ -305,17 +320,17 @@ def run_backtest(settings: Settings, dataset: Optional[pd.DataFrame] = None) -> 
         "take_exits": int(risk_result.stats.get("take_exits") or 0),
         "signal_exits": int(risk_result.stats.get("signal_exits") or 0),
         "forced_exits": int(risk_result.stats.get("forced_exits") or 0),
-        "breaker_skips": int(risk_result.stats.get("breaker_skips") or 0),
-        "breaker_trips": int(risk_result.stats.get("breaker_trips") or 0),
+        "skipped_entries": int(risk_result.stats.get("skipped_entries") or 0),
     }
 
-    # The bars the risk layer REFUSED to trade (circuit breaker). Deliberately a
-    # top-level key rather than part of ``inputs``: the inputs snapshot feeds
-    # ``store.new_run_id``, so adding a field there would re-key every existing
-    # run. Stops/takes need nothing extra — each trade row already carries the
-    # ``exit_reason`` and the price it left at.
+    # Entries that were refused before reaching a broker. Nothing emits one today —
+    # the loss limits that will are deferred to the execution loop — so this is the
+    # place that will carry them, rather than a silence that has to be explained
+    # later. Deliberately a top-level key rather than part of ``inputs``: the inputs
+    # snapshot feeds ``store.new_run_id``, so adding a field there would re-key every
+    # existing run.
     risk_events = {
-        "applied": bool(risk_config.enabled),
+        "applied": bool(risk_config.applied),
         "vetoed": [
             {
                 "time": chart_time(
@@ -328,7 +343,7 @@ def run_backtest(settings: Settings, dataset: Optional[pd.DataFrame] = None) -> 
                 "label": bar_label(df.index[int(leg["entry_idx"])], settings.historical_bar_size),
                 "index": int(leg["entry_idx"]),
                 "side": str(leg.get("direction") or "long"),
-                "reason": str(leg.get("reason") or "circuit_breaker"),
+                "reason": str(leg.get("reason") or "refused"),
             }
             for leg in risk_result.legs
             if leg.get("skipped")
@@ -389,16 +404,7 @@ def run_backtest(settings: Settings, dataset: Optional[pd.DataFrame] = None) -> 
         )
 
     notes.append(f"{ppy} bars/year used for annualization.")
-    notes.append(
-        (
-            f"risk layer: {risk_config.risk_limit_percent:g}% risk/trade behind a "
-            f"{risk_config.stop_loss_percent:g}% stop, {risk_config.take_profit_percent:g}% take, "
-            f"max exposure {risk_config.max_exposure_percent:g}%"
-            + (" + circuit breaker" if risk_config.circuit_breaker_enabled else "")
-        )
-        if risk_config.enabled
-        else "risk layer NOT applied — raw strategy results."
-    )
+    notes.append(_describe_risk(risk_config))
 
     return {
         **base,

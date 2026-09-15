@@ -90,6 +90,12 @@ def _settings(**overrides):
         execution_max_retries=2,
         execution_retry_base_delay_seconds=0.0,
         execution_order_timeout_seconds=5,
+        # Risk settings named rather than inherited: empty means NOT APPLIED, and an
+        # entry with no stop and no target has nothing to bracket.
+        stop_loss_percent=2.0,
+        take_profit_percent=4.0,
+        risk_limit_percent=2.0,
+        max_exposure_percent=90.0,
     )
     values.update(overrides)
     return Settings(_env_file=None, **values)
@@ -683,7 +689,7 @@ def test_a_live_tick_places_a_bracketed_order_through_the_shared_engine(tmp_path
             return df.assign(signal="BUY")
 
     config = StrategyConfig.from_settings(
-        settings, enabled=True, slippage=0.0, commission=0.0
+        settings, slippage=0.0, commission=0.0
     )
     driver = LiveDriver(
         settings=settings,

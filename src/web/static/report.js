@@ -358,15 +358,27 @@
     const went = rows
       .map((r) => `${int(r.count)} ${exitLabel(r.reason).toLowerCase()}`)
       .join(", ");
+    // Built from what is actually SET: a run may configure a stop and nothing else,
+    // and printing "null% risk per trade" would suggest a setting that is not there.
+    const sizing = [];
+    if (risk.risk_limit_percent !== null && risk.risk_limit_percent !== undefined) {
+      sizing.push(`${num(risk.risk_limit_percent, 2)}% risk per trade`);
+    }
+    if (risk.stop_loss_percent !== null && risk.stop_loss_percent !== undefined) {
+      sizing.push(`${num(risk.stop_loss_percent, 2)}% stop`);
+    }
+    if (risk.take_profit_percent !== null && risk.take_profit_percent !== undefined) {
+      sizing.push(`${num(risk.take_profit_percent, 2)}% take profit`);
+    }
+    const exposure = risk.max_exposure_percent === null || risk.max_exposure_percent === undefined
+      ? "the whole account"
+      : `max exposure ${num(risk.max_exposure_percent, 0)}%`;
     $("rp-risk-note").innerHTML = on
-      ? `Positions sized at <b>${num(Number(risk.weight) * 100, 0)}% of the account</b> ` +
-        `(${num(risk.risk_limit_percent, 2)}% risk per trade behind a ` +
-        `${num(risk.stop_loss_percent, 2)}% stop and a ${num(risk.take_profit_percent, 2)}% take profit, ` +
-        `max exposure ${num(risk.max_exposure_percent, 0)}%` +
-        `${risk.circuit_breaker_enabled ? " + circuit breaker" : ""}). ` +
+      ? `Positions sized at <b>${num(Number(risk.weight) * 100, 0)}% of the account</b>` +
+        (sizing.length ? ` (${sizing.join(", ")}; ${exposure}). ` : ` (${exposure}). `) +
         (exits.total ? `The ${int(exits.total)} round trips ended: ${went}.` : "No round trips were taken.")
-      : `<b>Risk layer off</b> — these are the raw strategy's numbers: no sizing, no stop ` +
-        `loss, no take profit and no halt.` +
+      : `<b>No risk settings configured</b> — these are the raw strategy's numbers: no sizing, ` +
+        `no stop loss, no take profit and no exposure cap.` +
         (exits.total ? ` The ${int(exits.total)} round trips ended: ${went}.` : "");
 
     // ── tiles: the settings actually used (the outcome counts live in the
@@ -378,12 +390,9 @@
       tiles.push(tile("Stop loss", `${num(risk.stop_loss_percent, 2)}%`));
       tiles.push(tile("Take profit", `${num(risk.take_profit_percent, 2)}%`));
       tiles.push(tile("Sizing mode", esc(String(risk.sizing_mode || "—").replace(/_/g, " "))));
-      tiles.push(tile("Circuit breaker", risk.circuit_breaker_enabled
-        ? `on · ${int(risk.max_consecutive_losses)} losses / ${num(risk.max_loss_percent, 0)}% day` +
-          (risk.breaker_trips ? ` · tripped ${int(risk.breaker_trips)}×` : "")
-        : "off"));
+      tiles.push(tile("Max exposure", `${num(risk.max_exposure_percent, 0)}% of account`));
     } else {
-      tiles.push(tile("Risk layer", "off"));
+      tiles.push(tile("Risk settings", "none configured"));
     }
     $("rp-risk-tiles").innerHTML = tiles.join("");
 
@@ -423,7 +432,7 @@
       : "";
     $("rp-exits").innerHTML = head + `<tbody>${body}${forced}</tbody>`;
 
-    // ── the entries the circuit breaker refused (always listed, 0 included) ──
+    // ── the entries the risk layer refused (always listed, 0 included) ──
     const head2 = `<thead><tr><th>Bar</th><th>Side</th><th>Why</th></tr></thead>`;
     $("rp-vetoed").innerHTML = head2 + (vetoed.length
       ? `<tbody>` + vetoed.map((v) => `<tr>` +
@@ -432,7 +441,7 @@
           `<td class="muted">${esc(String(v.reason || "").replace(/_/g, " "))}</td></tr>`).join("") +
         `</tbody>`
       : `<tbody><tr><td colspan="3" class="muted">` +
-        `0 — ${on ? "every entry was taken" : "the risk layer was off"}.</td></tr></tbody>`);
+        `0 — ${on ? "every entry was taken" : "no risk settings are configured"}.</td></tr></tbody>`);
   }
 
   /* ---------- crosshair sync (both report charts) ----------

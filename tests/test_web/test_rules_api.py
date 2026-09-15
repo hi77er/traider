@@ -343,9 +343,26 @@ def test_payload_includes_strategy_config_schema(tmp_path):
     assert {
         "ALLOW_SHORT", "RISK_LIMIT_PERCENT", "POSITION_SIZING_MODE", "STOP_LOSS_PERCENT",
         "TAKE_PROFIT_PERCENT", "MAX_EXPOSURE_PERCENT", "MAX_LOSS_PERCENT",
-        "MAX_CONSECUTIVE_LOSSES", "CIRCUIT_BREAKER_ENABLED", "APPLY_RISK_LAYER",
+        "MAX_CONSECUTIVE_LOSSES",
     } <= risk_keys
+    # The two master switches are GONE, not merely hidden: what is configured is what
+    # is applied, so "apply the risk layer" and "circuit breaker enabled" asked a
+    # question the settings above already answer.
+    assert not ({"APPLY_RISK_LAYER", "CIRCUIT_BREAKER_ENABLED"} & risk_keys)
     assert not (keys & risk_keys)  # every key renders in exactly one panel
+    # Exposure leads the panel: it is the only risk setting with a default, so it is
+    # what describes a run before anything else is filled in.
+    assert risk_groups[0]["fields"][0]["key"] == "MAX_EXPOSURE_PERCENT"
+    # And the optional ones say so, with an example of the number they want.
+    lines = {f["key"]: " ".join(f.get("hints") or []) for f in risk_groups[0]["fields"]}
+    for key in ("RISK_LIMIT_PERCENT", "STOP_LOSS_PERCENT", "TAKE_PROFIT_PERCENT",
+                "MAX_EXPOSURE_PERCENT", "MAX_LOSS_PERCENT", "MAX_CONSECUTIVE_LOSSES"):
+        assert lines.get(key), f"{key} should carry an example/explanation line"
+    # Empty is an instruction, so every optional field has to say what leaving it
+    # empty does — otherwise "blank" reads as "not filled in yet".
+    for key in ("RISK_LIMIT_PERCENT", "STOP_LOSS_PERCENT", "TAKE_PROFIT_PERCENT",
+                "MAX_LOSS_PERCENT", "MAX_CONSECUTIVE_LOSSES"):
+        assert "e.g." in lines[key] and "empty" in lines[key], lines[key]
     # The Model section is gone: the only model is the rule-based one, so MODEL_TYPE
     # and the thresholds that fed the unimplemented one are not offered at all.
     assert not [k for k in keys if k.startswith("MODEL_")], sorted(keys)

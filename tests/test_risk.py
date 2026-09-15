@@ -186,6 +186,18 @@ def test_breaker_trips_on_daily_loss_and_a_win_clears_the_streak():
     assert cb2.tripped("d") is False
 
 
+# The repo's .env (and this shell) carry risk values, so a test about having none
+# has to say so explicitly — an init value beats the environment.
+_NO_RISK = dict(
+    stop_loss_percent=None,
+    take_profit_percent=None,
+    risk_limit_percent=None,
+    max_loss_percent=None,
+    max_consecutive_losses=None,
+    max_exposure_percent=100.0,
+)
+
+
 def test_the_trip_count_survives_the_day_roll():
     """A halt is per-day; the number of halts is a fact about the RUN.
 
@@ -305,14 +317,21 @@ def test_validator_vetoes_a_bad_stop_and_a_tripped_breaker(tmp_path):
 # ---------------------------------------------------------------------------
 # the backtest applies the risk layer (task 24b)
 # ---------------------------------------------------------------------------
-def test_risk_layer_disabled_reproduces_the_raw_engine(tmp_path):
-    """The invariant that stops the two code paths drifting apart."""
-    settings = _settings(tmp_path, apply_risk_layer=False)
+def test_an_empty_risk_config_reproduces_the_raw_engine(tmp_path):
+    """The invariant that stops the two code paths drifting apart.
+
+    "No risk settings" used to be a master switch turned off. It is now simply the
+    configuration with every risk box empty — no stop, no target, no risk per trade,
+    the whole account — and it must still reproduce the raw replay exactly, because
+    that is what the old switch meant.
+    """
+    settings = _settings(tmp_path, **_NO_RISK)
     _store_rule(tmp_path, settings, "BUY")
     df = _ohlc(_zigzag())
 
     res = run_backtest(settings, dataset=df)
     assert res["inputs"]["risk"]["applied"] is False
+    assert res["inputs"]["risk"]["stop_loss_percent"] is None
 
     sig = ["BUY"] * len(df)
     returns, trades, in_pos, _ = simulate_frame(
@@ -341,7 +360,8 @@ def raw_equity(returns) -> float:
 
 
 def test_stop_loss_caps_the_loss_and_truncates_the_leg(tmp_path):
-    settings = _settings(tmp_path, apply_risk_layer=True, stop_loss_percent=2.0)
+    settings = _settings(tmp_path, stop_loss_percent=2.0, risk_limit_percent=None,
+                         take_profit_percent=None, max_exposure_percent=100.0)
     _store_rule(tmp_path, settings, "BUY")
     df = _ohlc(_declining())
 
@@ -358,7 +378,15 @@ def test_stop_loss_caps_the_loss_and_truncates_the_leg(tmp_path):
 
 
 def test_take_profit_closes_early_and_the_rule_re_enters(tmp_path):
-    settings = _settings(tmp_path, apply_risk_layer=True, take_profit_percent=4.0)
+    # Both levels are named: an empty box means NOT APPLIED, so a test that relies on
+    # ambient .env values would be testing the developer's configuration.
+    settings = _settings(
+        tmp_path,
+        stop_loss_percent=2.0,
+        take_profit_percent=4.0,
+        risk_limit_percent=2.0,
+        max_exposure_percent=100.0,
+    )
     _store_rule(tmp_path, settings, "BUY")
     df = _ohlc(_zigzag())
 
@@ -385,80 +413,11 @@ def test_sizing_scales_returns_by_the_target_weight(tmp_path):
         assert t["equity_ret_pct"] == pytest.approx(t["ret_pct"] * 0.5, rel=1e-6, abs=1e-3)
 
 
-def test_circuit_breaker_halts_the_rest_of_the_day_intraday():
-    """The halt is per-day, so it needs several bars in one day to bite."""
-    n = 30
-    prices = _declining(n=n, step=0.01)
-    opens = highs = lows = closes = prices
-    out = apply_risk_layer(
-        ["BUY"] * n,
-        opens,
-        [p * 1.001 for p in prices],
-        [p * 0.999 for p in prices],
-        closes,
-        n,
-        config=RiskConfig(stop_loss_percent=2.0, max_consecutive_losses=3, max_loss_percent=99.0),
-        days=["2024-05-01"] * n,  # one long session, many decision bars
-    )
-    assert out.stats["breaker_trips"] >= 1
-    assert out.stats["breaker_skips"] > 0
-    # Once halted, everything after the third loss is skipped.
-    assert len(out.trades) == 3
-
-
-def test_circuit_breaker_refuses_nothing_on_daily_bars(tmp_path):
-    """Documented limitation: one decision per day means the halt cannot survive.
-
-    The day changes between every entry and the next, so the streak is reset before
-    it can reach the limit, and a daily-loss halt is cleared by the following day's
-    roll before an entry is evaluated against it. The trip COUNT may therefore be
-    non-zero — the trigger does reach its limit — while the number of entries
-    actually refused is zero. That distinction is the point: a non-zero trip count
-    here is not protection, so the assertion is on the skips.
-
-    Which is why ``APPLY_RISK_LAYER`` still matters on daily data for sizing and
-    stops, and the breaker only bites at intraday bar sizes (or live).
-    """
-    settings = _settings(
-        tmp_path,
-        apply_risk_layer=True,
-        stop_loss_percent=2.0,
-        max_consecutive_losses=2,
-        max_loss_percent=1.0,
-    )
-    _store_rule(tmp_path, settings, "BUY")
-    res = run_backtest(settings, dataset=_ohlc(_declining()))
-    risk = res["inputs"]["risk"]
-    assert risk["breaker_skips"] == 0, "on daily bars the halt cannot refuse an entry"
-    # The stop is still doing its job on every loss — that is what protects the run.
-    assert risk["stop_exits"] > 0
-
-
-def test_volatility_target_mode_records_the_volatility_stop(tmp_path):
-    settings = _settings(
-        tmp_path,
-        apply_risk_layer=True,
-        position_sizing_mode="volatility_target",
-        risk_limit_percent=2.0,
-    )
-    _store_rule(tmp_path, settings, "BUY")
-    res = run_backtest(settings, dataset=_ohlc(_zigzag()))
-    assert res["inputs"]["risk"]["sizing_mode"] == "volatility_target"
-
-
-def test_risk_config_from_settings_and_dict(tmp_path):
-    cfg = RiskConfig.from_settings(
-        _settings(tmp_path, risk_limit_percent=3.0, stop_loss_percent=6.0), enabled=True
-    )
-    assert cfg.risk_limit_percent == 3.0 and cfg.stop_loss_percent == 6.0
-    assert cfg.as_dict()["applied"] is True
-
-
 def test_apply_risk_layer_returns_zero_returns_when_flat():
     # No signals at all -> flat, no legs, no exposure.
     out = apply_risk_layer(
         ["HOLD"] * 10, [1.0] * 10, [1.0] * 10, [1.0] * 10, [1.0] * 10, 10,
-        config=RiskConfig(), days=["2024-01-01"] * 10,
+        config=RiskConfig(),
     )
     assert out.returns == [0.0] * 9
     assert out.trades == []

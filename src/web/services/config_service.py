@@ -81,7 +81,6 @@ _LABELS: Dict[str, str] = {
     "FEATURE_VOLUME_ENABLED": "Volume (vs. rolling average)",
     "FEATURE_VOLUME_ABS_ENABLED": "Volume (absolute per candle)",
     "ALLOW_SHORT": "Allow short positions",
-    "APPLY_RISK_LAYER": "Apply the risk layer in backtests",
     "RISK_LIMIT_PERCENT": "Risk per trade (% of account)",
     "POSITION_SIZING_MODE": "Position sizing mode",
     "STOP_LOSS_PERCENT": "Stop loss (%)",
@@ -89,7 +88,6 @@ _LABELS: Dict[str, str] = {
     "MAX_EXPOSURE_PERCENT": "Max exposure (% of account)",
     "MAX_LOSS_PERCENT": "Max daily loss before halt (%)",
     "MAX_CONSECUTIVE_LOSSES": "Max consecutive losses",
-    "CIRCUIT_BREAKER_ENABLED": "Circuit breaker enabled",
     # ── Account settings (settings/account/account.json) ──────────
     "DATA_DIR": "Data folder",
     "HISTORICAL_DATA_DIR": "Historical data subfolder",
@@ -167,6 +165,22 @@ _HINTS: Dict[str, str] = {
     "BACKTEST_START_DATE": "Optional window start, YYYY-MM-DD; empty = start of the dataset.",
     "BACKTEST_END_DATE": "Optional window end, YYYY-MM-DD; empty = end of the dataset.",
     "TRAIN_TEST_SPLIT": "0.8 = use 80% for training, 20% held out.",
+    # ── Risk Management ────────────────────────────────────────────────
+    # Every one of these says the same thing in its own terms: an empty box is a
+    # decision (leave it out), and the example is the size of number the field wants.
+    "MAX_EXPOSURE_PERCENT": "The most of the account one position may use (e.g. 90). "
+    "Default 100 = the whole account. Leave empty for the whole account.",
+    "RISK_LIMIT_PERCENT": "How much of the account a single trade may lose if it hits "
+    "the stop (e.g. 2). Needs a stop loss to have a distance to divide by — "
+    "leave empty to size by max exposure alone.",
+    "STOP_LOSS_PERCENT": "Maximum loss per trade as a % of the entry price (e.g. 2). "
+    "Leave empty for no stop.",
+    "TAKE_PROFIT_PERCENT": "Profit target as a % of the entry price (e.g. 4). "
+    "Leave empty for no target.",
+    "MAX_LOSS_PERCENT": "Stop trading for the rest of the day once the day's realised "
+    "loss reaches this % of the account (e.g. 5). Leave empty to not halt.",
+    "MAX_CONSECUTIVE_LOSSES": "Stop trading for the rest of the day after this many "
+    "losing trades in a row (e.g. 3). Leave empty to not halt.",
 }
 
 
@@ -281,15 +295,15 @@ _STRATEGY_SCOPE: List[Tuple[str, Tuple[str, ...]]] = [
     (
         "Risk Management",
         (
-            # The two master switches lead the panel: whether the layer runs at
-            # all, then whether the breaker is armed. Everything below only
-            # matters when the layer is on.
-            "APPLY_RISK_LAYER",
-            "CIRCUIT_BREAKER_ENABLED",
+            # Exposure leads the panel: it is the one risk setting with a default, so
+            # it is the one that describes how a run behaves before anything else is
+            # filled in. Everything below it is optional, and EMPTY MEANS NOT APPLIED —
+            # in the backtest and in live trading alike, because both read the same
+            # values. There is no master switch: what is set is applied.
+            "MAX_EXPOSURE_PERCENT",
             "ALLOW_SHORT",
             "RISK_LIMIT_PERCENT", "POSITION_SIZING_MODE", "STOP_LOSS_PERCENT",
-            "TAKE_PROFIT_PERCENT", "MAX_EXPOSURE_PERCENT", "MAX_LOSS_PERCENT",
-            "MAX_CONSECUTIVE_LOSSES",
+            "TAKE_PROFIT_PERCENT", "MAX_LOSS_PERCENT", "MAX_CONSECUTIVE_LOSSES",
         ),
     ),
 ]
@@ -305,6 +319,16 @@ PANEL_HIDDEN_STRATEGY_KEYS = frozenset({"EXECUTION_ENV"})
 RETIRED_STRATEGY_KEYS = frozenset(
     {
         "EXECUTION_LIVE_ACK",
+        # The two master switches are gone, and their removal is the point rather than
+        # an implementation detail: "apply the risk layer" and "circuit breaker
+        # enabled" each asked a question the individual settings already answer, and a
+        # switch can disagree with what it governs (armed, with every setting empty).
+        # What is configured is what is applied, so a stored strategy that carried
+        # either key must have it DROPPED on the next save rather than rejected — and
+        # a strategy that had the layer OFF now runs with whatever its settings say,
+        # which for those strategies is normally nothing.
+        "APPLY_RISK_LAYER",
+        "CIRCUIT_BREAKER_ENABLED",
         # The decision CADENCE is gone as a setting, not just from the panel: a
         # decision is made on every newly generated bar, so "every N hours" and "at
         # HH:MM daily" were describing a schedule the bot does not keep. Neither was

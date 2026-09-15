@@ -40,7 +40,6 @@ from src.strategy.engine import (
     Ledger,
     StrategyEngine,
     bar_from_row,
-    day_key,
 )
 from src.strategy.state import StrategyState
 
@@ -189,12 +188,8 @@ class LiveDriver:
 
     def _act(self, bar: Bar, intent: Intent) -> Dict[str, Any]:
         """Submit one intent and book what came back."""
-        # Every booked trade is DATED: the breaker counts losses per day, so a run that
-        # booked without a day would never trip it and would trade on through the halt the
-        # backtest honours. Found by the parity test, which is exactly what it is for.
-        day_at = self._day_of(bar)
         if intent.action == SKIP:
-            self.engine.settle(self.ledger, self.state, bar, intent, day_at=day_at)
+            self.engine.settle(self.ledger, self.state, bar, intent)
             return {"intent": intent.action, "reason": intent.reason, "skipped": True}
 
         fill = self._submit(intent)
@@ -213,7 +208,7 @@ class LiveDriver:
                 "status": fill.status,
             }
         if intent.action == CLOSE:
-            self.engine.settle(self.ledger, self.state, bar, intent, day_at=day_at, exit_price=real)
+            self.engine.settle(self.ledger, self.state, bar, intent, exit_price=real)
             return {
                 "intent": intent.action,
                 "reason": intent.reason,
@@ -222,21 +217,6 @@ class LiveDriver:
                 "status": fill.status,
             }
         return {"intent": intent.action, "reason": intent.reason}
-
-    def _day_of(self, bar: Bar):
-        """``day_at(idx)`` naming the bar's own day, whatever index it is asked for.
-
-        The ledger asks by index because a backtest has an array of day keys; a live run
-        knows the day of the bar it is processing and nothing about indices.
-        """
-        day = day_key(bar.time)
-        if not day:
-            return None
-
-        def day_at(_idx: int) -> str:
-            return day
-
-        return day_at
 
     def _submit(self, intent: Intent) -> Fill:
         if self.broker is None:
@@ -259,12 +239,7 @@ class LiveDriver:
         if pos is None:
             return
         pos.entry_price = float(price)
-        stop, take = self.engine.levels(pos.entry_price, pos.short)
-        pos.stop, pos.take = stop, take
-
-    # -- day keys ----------------------------------------------------------
-    def day_of(self, time_value: Any) -> Optional[str]:
-        return day_key(time_value)
+        pos.stop, pos.take = self.engine.levels(pos.entry_price, pos.short)
 
 
 def _safe(name: str) -> str:

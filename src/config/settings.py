@@ -182,21 +182,45 @@ class Settings(BaseSettings):
     )
 
     # ── Risk management ──────────────────────────────────────────────
-    risk_limit_percent: float = Field(default=2.0, ge=0.0, description="% of account risked per trade")
-    max_loss_percent: float = Field(default=10.0, ge=0.0, description="Max daily drawdown before circuit breaker")
-    max_consecutive_losses: int = Field(default=3, ge=1)
-    max_exposure_percent: float = Field(default=100.0, ge=0.0, description="Max % of account in one position")
-    position_sizing_mode: str = Field(default="fixed_risk", description="fixed_risk | volatility_target")
-    stop_loss_percent: float = Field(default=2.0, ge=0.0)
-    take_profit_percent: float = Field(default=4.0, ge=0.0)
-    circuit_breaker_enabled: bool = True
-    # Replay the SAME risk layer in backtests (sizing, stop/take, circuit
-    # breaker) so the Gate measures the system that will actually trade rather
-    # than a bare signal replay. Set False for the raw strategy numbers.
-    apply_risk_layer: bool = Field(
-        default=True,
-        description="Replay the risk layer (sizing, stop/take, circuit breaker) in backtests.",
+    # Every field here is OPTIONAL, and EMPTY MEANS NOT APPLIED. An unset field is
+    # not a default that quietly does something; it is the instruction to leave
+    # that behaviour out — of the backtest and of live trading alike, because both
+    # read these same values (see ``StrategyConfig.from_settings``).
+    #
+    # There is deliberately no master switch any more. "Apply the risk layer" and
+    # "circuit breaker enabled" both asked the same question a second time, and a
+    # second switch can disagree with the settings it governs: the layer could be
+    # "on" while every individual setting was empty. What is configured is what is
+    # applied, and what is empty is not.
+    #
+    # The single exception is MAX_EXPOSURE_PERCENT: it defaults to 100, because
+    # "deploy the whole account" is the neutral position — the one you get when you
+    # ask for nothing in particular.
+    max_exposure_percent: Optional[float] = Field(
+        default=100.0, ge=0.0, le=100.0,
+        description="Max % of the account in one position; empty = the whole account",
     )
+    risk_limit_percent: Optional[float] = Field(
+        default=None, ge=0.0, le=100.0,
+        description="% of the account risked per trade; empty = size by exposure only",
+    )
+    stop_loss_percent: Optional[float] = Field(
+        default=None, ge=0.0, le=100.0,
+        description="Stop loss distance below the entry (%); empty = no stop",
+    )
+    take_profit_percent: Optional[float] = Field(
+        default=None, ge=0.0, le=100.0,
+        description="Take profit distance above the entry (%); empty = no target",
+    )
+    max_loss_percent: Optional[float] = Field(
+        default=None, ge=0.0, le=100.0,
+        description="Max daily loss (%) before halting for the day; empty = not applied",
+    )
+    max_consecutive_losses: Optional[int] = Field(
+        default=None, ge=1,
+        description="Losses in a row that halt the day; empty = not applied",
+    )
+    position_sizing_mode: str = Field(default="fixed_risk", description="fixed_risk | volatility_target")
     # When False the model is long/flat only: a SELL closes a long and is
     # ignored while flat. When True a SELL while flat opens a SHORT instead.
     # Either way only ONE position (long OR short) exists at a time: a BUY
@@ -374,6 +398,30 @@ class Settings(BaseSettings):
         if not re.fullmatch(r"([01]?[0-9]|2[0-3]):[0-5][0-9]", v.strip()):
             raise ValueError(f"must be HH:MM in 24h format, got {v!r}")
         return v.strip()
+
+    @field_validator(
+        "max_exposure_percent",
+        "risk_limit_percent",
+        "stop_loss_percent",
+        "take_profit_percent",
+        "max_loss_percent",
+        "max_consecutive_losses",
+        mode="before",
+    )
+    @classmethod
+    def _empty_risk_setting_to_none(cls, v):
+        """An empty risk box means NOT APPLIED, not zero.
+
+        Zero and "unset" are different instructions — a 0% stop and no stop are not
+        the same thing, and a 0% risk limit would size every position to nothing —
+        so the empty string the panel posts is turned into ``None`` here rather
+        than being coerced to a number that would then be applied.
+        """
+        if v is None:
+            return v
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
 
     @field_validator(
         "historical_start_date",

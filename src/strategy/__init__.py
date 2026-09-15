@@ -5,8 +5,8 @@ lives anywhere else:
 
 * :mod:`src.strategy.engine` — the bar-at-a-time state machine (``StrategyEngine.step``)
   and the accounting that turns fills into trades and returns;
-* :mod:`src.strategy.state` — the strategy's state (position, breaker, last decided
-  bar) and its serialization, so a live run can be restarted without re-deciding;
+* :mod:`src.strategy.state` — the strategy's state (position, last decided bar) and its
+  serialization, so a live run can be restarted without re-deciding;
 * :mod:`src.strategy.config` — the knobs the machine reads, resolved from the
   strategy's effective settings;
 * :mod:`src.strategy.broker` — the small seam between a decision and a fill.

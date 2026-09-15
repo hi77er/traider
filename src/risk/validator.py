@@ -75,10 +75,14 @@ class RiskValidator:
 
     def __init__(self, settings, breaker: Optional[CircuitBreaker] = None) -> None:
         self.settings = settings
+        # Always armed here: the CIRCUIT_BREAKER_ENABLED setting is gone, and this
+        # class is not wired into a run — it is the standalone validator, and its
+        # breaker answers to its own constructor argument. The limits that HALT a run
+        # belong to the execution loop (see MAX_CONSECUTIVE_LOSSES / MAX_LOSS_PERCENT).
         self.breaker = breaker or CircuitBreaker(
-            max_consecutive_losses=getattr(settings, "max_consecutive_losses", 3),
-            max_loss_percent=getattr(settings, "max_loss_percent", 10.0),
-            enabled=bool(getattr(settings, "circuit_breaker_enabled", True)),
+            max_consecutive_losses=int(getattr(settings, "max_consecutive_losses", 3) or 3),
+            max_loss_percent=float(getattr(settings, "max_loss_percent", 10.0) or 10.0),
+            enabled=True,
         )
 
     # ── helpers ─────────────────────────────────────────────────────

@@ -17,7 +17,6 @@ import logging
 from typing import Dict, List
 
 from src.backtest import risk_sim
-from src.backtest.engine import position_intervals
 from src.config.effective import get_effective_settings
 from src.data.dataset import bar_label, chart_time, load_dataset
 from src.model.simple_model import RuleBasedSignalGenerator
@@ -116,9 +115,9 @@ def signal_payload() -> dict:
     # These MUST come from the same risk layer the backtest replays
     # (src.backtest.risk_sim), otherwise the chart tells a different story from
     # the Backtest panel and the report: a leg the risk layer stopped out early
-    # would still be shaded to its raw exit, and a circuit-breaker vetoed entry
-    # would still count as an executed fill. With APPLY_RISK_LAYER=False the raw
-    # strategy is shown instead, matching a backtest run with it off.
+    # would still be shaded to its raw exit, and a refused entry would still count
+    # as an executed fill. The risk settings ARE the switch — nothing configured
+    # means no stops and full exposure, which is the raw result exactly.
     sig = [str(v) for v in out["signal"].values]
     opens = df["open"].to_numpy(dtype=float)
     closes = df["close"].to_numpy(dtype=float)
@@ -128,117 +127,75 @@ def signal_payload() -> dict:
     fills: List[dict] = []
     vetoed: List[dict] = []
 
-    if bool(getattr(settings, "apply_risk_layer", True)):
-        risk_result = risk_sim.apply_risk_layer(
-            sig,
-            opens,
-            df["high"].to_numpy(dtype=float),
-            df["low"].to_numpy(dtype=float),
-            closes,
-            nrows,
-            config=risk_sim.RiskConfig.from_settings(settings, enabled=True),
-            allow_short=allow_short,
-            days=[str(ts)[:10] for ts in df.index],
+    # ONE path: the risk settings ARE the switch. An empty risk config (no stop, no
+    # target, the whole account) reproduces the raw replay exactly, so there is no
+    # second branch to keep in step with this one.
+    risk_config = risk_sim.RiskConfig.from_settings(settings)
+    risk_result = risk_sim.apply_risk_layer(
+        sig,
+        opens,
+        df["high"].to_numpy(dtype=float),
+        df["low"].to_numpy(dtype=float),
+        closes,
+        nrows,
+        config=risk_config,
+        allow_short=allow_short,
+    )
+    for leg in risk_result.legs:
+        e = int(leg["entry_idx"])
+        side = str(leg.get("direction") or "long")
+        if leg.get("skipped"):
+            # The entry was refused before it reached a broker — no position was
+            # ever opened, so it is reported separately (never as a fill).
+            vetoed.append(
+                {
+                    "time": chart_time(df.index[e], interval, tz),
+                    "side": side,
+                    "reason": str(leg.get("reason") or "refused"),
+                }
+            )
+            continue
+        x = min(int(leg["exit_idx"]), nrows - 1)
+        fills.append(
+            {
+                "time": chart_time(df.index[e], interval, tz),
+                "kind": "open",
+                "side": side,
+                "price": round(float(leg.get("raw_entry_price") or opens[e]), 6),
+            }
         )
-        for leg in risk_result.legs:
-            e = int(leg["entry_idx"])
-            side = str(leg.get("direction") or "long")
-            if leg.get("skipped"):
-                # The circuit breaker refused this entry — no position was ever
-                # opened, so it is reported separately (never as a fill).
-                vetoed.append(
-                    {
-                        "time": chart_time(df.index[e], interval, tz),
-                        "side": side,
-                        "reason": str(leg.get("reason") or "circuit_breaker"),
-                    }
-                )
-                continue
-            x = min(int(leg["exit_idx"]), nrows - 1)
-            fills.append(
-                {
-                    "time": chart_time(df.index[e], interval, tz),
-                    "kind": "open",
-                    "side": side,
-                    "price": round(float(leg.get("raw_entry_price") or opens[e]), 6),
-                }
-            )
-            # The outcome of the WHOLE round trip rides on its close fill: the
-            # chart colours the held-period band by it (green when the position
-            # made money, red when it lost). ``equity_ret`` is the return after
-            # position sizing, i.e. the actual equity change.
-            equity_ret = float(leg.get("equity_ret") or 0.0)
-            fills.append(
-                {
-                    "time": chart_time(df.index[x], interval, tz),
-                    "kind": "close",
-                    "side": side,
-                    "price": round(float(leg.get("exit_price") or closes[x]), 6),
-                    "reason": str(leg.get("reason") or "signal"),
-                    "ret_pct": round(float(leg.get("ret") or 0.0) * 100.0, 3),
-                    "equity_ret_pct": round(equity_ret * 100.0, 3),
-                    "win": equity_ret > 0.0,
-                }
-            )
-        stats = risk_result.stats or {}
-        payload["risk"] = {
-            "applied": True,
-            "weight": round(float(stats.get("weight", 1.0) or 0.0), 6),
-            "stop_exits": int(stats.get("stop_exits", 0) or 0),
-            "take_exits": int(stats.get("take_exits", 0) or 0),
-            "signal_exits": int(stats.get("signal_exits", 0) or 0),
-            "forced_exits": int(stats.get("forced_exits", 0) or 0),
-            "breaker_skips": int(stats.get("breaker_skips", 0) or 0),
-            "breaker_trips": int(stats.get("breaker_trips", 0) or 0),
-            "risk_limit_percent": float(getattr(settings, "risk_limit_percent", 0.0) or 0.0),
-            "stop_loss_percent": float(getattr(settings, "stop_loss_percent", 0.0) or 0.0),
-            "take_profit_percent": float(getattr(settings, "take_profit_percent", 0.0) or 0.0),
-            "max_exposure_percent": float(getattr(settings, "max_exposure_percent", 100.0) or 0.0),
-            "sizing_mode": str(getattr(settings, "position_sizing_mode", "fixed_risk")),
-        }
-    else:
-        for e, x, side in position_intervals(sig, nrows, allow_short):
-            entry_px = float(opens[e])
-            exit_px = float(opens[x]) if x < nrows else float(closes[nrows - 1])
-            if entry_px and exit_px:
-                price_ret = (
-                    (entry_px / exit_px - 1.0) if side == "short" else (exit_px / entry_px - 1.0)
-                )
-            else:
-                price_ret = 0.0
-            fills.append(
-                {
-                    "time": chart_time(df.index[e], interval, tz),
-                    "kind": "open",
-                    "side": side,
-                    "price": round(entry_px, 6),
-                }
-            )
-            outcome = {"ret_pct": round(price_ret * 100.0, 3), "win": price_ret > 0.0}
-            if x < nrows:
-                fills.append(
-                    {
-                        "time": chart_time(df.index[x], interval, tz),
-                        "kind": "close",
-                        "side": side,
-                        "price": round(exit_px, 6),
-                        "reason": "signal",
-                        **outcome,
-                    }
-                )
-            else:
-                # Still open when the data ran out — closed at the last close.
-                fills.append(
-                    {
-                        "time": chart_time(df.index[nrows - 1], interval, tz),
-                        "kind": "close",
-                        "side": side,
-                        "price": round(exit_px, 6),
-                        "reason": "forced",
-                        **outcome,
-                    }
-                )
-        payload["risk"] = {"applied": False}
+        # The outcome of the WHOLE round trip rides on its close fill: the
+        # chart colours the held-period band by it (green when the position
+        # made money, red when it lost). ``equity_ret`` is the return after
+        # position sizing, i.e. the actual equity change.
+        equity_ret = float(leg.get("equity_ret") or 0.0)
+        fills.append(
+            {
+                "time": chart_time(df.index[x], interval, tz),
+                "kind": "close",
+                "side": side,
+                "price": round(float(leg.get("exit_price") or closes[x]), 6),
+                "reason": str(leg.get("reason") or "signal"),
+                "ret_pct": round(float(leg.get("ret") or 0.0) * 100.0, 3),
+                "equity_ret_pct": round(equity_ret * 100.0, 3),
+                "win": equity_ret > 0.0,
+            }
+        )
+    stats = risk_result.stats or {}
+    payload["risk"] = {
+        "applied": risk_config.applied,
+        "weight": round(float(stats.get("weight", 1.0) or 0.0), 6),
+        "stop_exits": int(stats.get("stop_exits", 0) or 0),
+        "take_exits": int(stats.get("take_exits", 0) or 0),
+        "signal_exits": int(stats.get("signal_exits", 0) or 0),
+        "forced_exits": int(stats.get("forced_exits", 0) or 0),
+        "skipped_entries": int(stats.get("skipped_entries", 0) or 0),
+        "risk_limit_percent": getattr(settings, "risk_limit_percent", None),
+        "stop_loss_percent": getattr(settings, "stop_loss_percent", None),
+        "take_profit_percent": getattr(settings, "take_profit_percent", None),
+        "max_exposure_percent": getattr(settings, "max_exposure_percent", 100.0),
+        "sizing_mode": str(getattr(settings, "position_sizing_mode", "fixed_risk")),
+    }
 
     payload["fills"] = fills
     payload["vetoed"] = vetoed

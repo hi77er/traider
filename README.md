@@ -6,7 +6,7 @@ stack.
 
 The central design rule is that **the backtest replays the same code the live
 bot would run**. Data fetching, feature computation, signal generation,
-position sizing, stop/take handling and the circuit breaker all live in
+position sizing and stop/take handling all live in
 importable modules, and the backtest drives them directly - so a number in the
 report describes the system that would actually trade, not a simplified
 replay of it.
@@ -38,29 +38,31 @@ OpenBB/yfinance ──> canonical Parquet dataset ──> features ──> rule 
                                                                   │
                         ┌─────────────────────────────────────────┘
                         v
-                 RISK LAYER  (sizing -> stop / take -> circuit breaker)
+                 RISK LAYER  (exposure cap -> sizing -> stop / take)
                         │
           ┌─────────────┴──────────────┐
           v                            v
    BACKTEST (next-open fills)     EXECUTION (Alpaca paper / live)
           │                            │   ^ config + paper/live switch
           │                            │     + trading on/off lock done,
-          │                            │     executor not implemented
+          │                            │     executor implemented
           v                            v
    report page + run store        portfolio state <- not implemented
 ```
 
 Two consequences worth knowing:
 
-- **A signal is not a trade.** The risk layer decides whether an entry is
-  taken at all (the circuit breaker can veto it), how big it is, and when the
-  position actually ends (stop, take profit, or the opposite signal). The
-  chart, the backtest panel and the report all read the risk layer's output,
+- **A signal is not a trade.** The risk settings decide how big an entry is and
+  when the position actually ends (stop, take profit, or the opposite signal).
+  The chart, the backtest panel and the report all read the same layer's output,
   so they cannot disagree.
-- **`APPLY_RISK_LAYER` toggles the entire layer** for a strategy. With it off
-  the backtest replays the raw strategy - no sizing, no stops, no halt. That
-  mode is useful for attribution ("does my edge survive a stop?") but its
-  numbers are not achievable live.
+- **Every risk field is optional, and empty means NOT APPLIED** — in the backtest
+  and in live/paper trading alike, because both read these same values. There is
+  no master switch: `MAX_EXPOSURE_PERCENT` is the only one with a default (100 =
+  the whole account), and stopping a trade on losses (`MAX_CONSECUTIVE_LOSSES`,
+  `MAX_LOSS_PERCENT`) is collected but not yet applied — halting belongs to the
+  execution loop, which is where the frequent decisions are. See
+  [One strategy, two drivers](#one-strategy-two-drivers) for the sizing rule.
 
 ## Requirements
 
@@ -185,7 +187,7 @@ The portal is the whole interface:
   missing bars
 - **Report page** - the full picture for any stored run: equity vs buy & hold,
   drawdown, monthly/yearly returns, the trade distribution, the exit-reason
-  breakdown and the entries the circuit breaker refused
+  breakdown and the entries the risk layer refused
 - **Market page** (`/market`, 🌎 header button) - whole-market screening from
   Yahoo Finance: a preset screener, the whole US market, top gainers, highest
   volume, top losers and the small-cap gainers/volume lists. The two long tables
@@ -229,7 +231,7 @@ src/
   data/        OpenBB client, provider session, screener (Yahoo), dataset, delta backfill
   features/    indicators + feature engineering (no lookahead)
   model/       rule store and rule-based signal generator
-  risk/        position sizing, stop/take levels, circuit breaker, validator
+  risk/        position sizing and stop/take levels (plus an unwired validator)
   backtest/    engine, metrics + Gate, risk replay, report analytics, run store
   execution/   Alpaca paper/live resolver (config); executor not implemented
   state/       portfolio tracker      (not implemented)
@@ -294,7 +296,7 @@ being replayed from the past or arriving from the market:
 flowchart LR
     D["OpenBB candles"] --> F["FeatureEngineer<br/>+ rule set"]
     F -->|Signal per bar| E["StrategyEngine<br/>src/strategy/engine.py"]
-    S["StrategyState<br/>position · breaker · last bar"] <-->|step(state, bar, act)| E
+    S["StrategyState<br/>position · last bar"] <-->|step(state, bar, act)| E
     E -->|Intent| B{{"Broker seam<br/>src/strategy/broker.py"}}
     B --> SB["SimulatedBroker<br/>backtest"]
     B --> AB["AlpacaBroker<br/>paper / live (to be written)"]
@@ -304,8 +306,8 @@ flowchart LR
 
 | Module | Role |
 | --- | --- |
-| `src/strategy/engine.py` | every trading rule: entry, exit, stop/take levels, sizing, costs, the circuit breaker. Pure — it reads bars and an action, and returns an `Intent`; it never fetches, sleeps or persists |
-| `src/strategy/state.py` | what a run must remember across bars (position, breaker, last decided bar) and how it survives a restart |
+| `src/strategy/engine.py` | every trading rule: entry, exit, stop/take levels, sizing, costs. Pure — it reads bars and an action, and returns an `Intent`; it never fetches, sleeps or persists |
+| `src/strategy/state.py` | what a run must remember across bars (the position, the last decided bar) and how it survives a restart |
 | `src/strategy/broker.py` | the only seam between "decide" and "act": `SimulatedBroker` fills at the next open, `AlpacaBroker` will place real orders |
 | `src/strategy/live.py` | the live driver: feed it closed candles, it evaluates features, walks the engine from where it left off, submits intents and books the fills |
 | `src/backtest/risk_sim.py` | a translation layer only — it turns the backtest's arrays into `Bar`s and drives the same engine. It holds no decision of its own, and the raw replay (`simulate_frame`, `position_intervals`) now goes through it with the risk layer off |
@@ -327,7 +329,7 @@ actually call the shared machine — a driver that quietly grew its own logic
 fails the test rather than drifting for a year. It found two real bugs when it
 was written: a held position was never checked against its stop (the entry path
 returned early), and the live driver booked trades without a date, so its
-circuit breaker could never trip.
+engine's trade was booked undated, which the (then) breaker needed.
 
 The one deliberate asymmetry is the **fill price**: a backtest fills at the next
 bar's open and can assume no slippage beyond the configured cost, while a live
