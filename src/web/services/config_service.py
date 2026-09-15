@@ -841,11 +841,12 @@ def get_account_schema() -> dict:
 def verify_credentials(env: str, key_id: Optional[str] = None, secret: Optional[str] = None) -> dict:
     """Check one environment's credentials against Alpaca, on demand.
 
-    ``key_id``/``secret`` are the values currently in the form, so the Validate
-    button checks what the operator is looking at rather than only what has been
-    saved. A blank or masked box falls back to the stored value — the same rule the
-    save path uses — so validating after a save still works, and pressing Validate
-    with an empty form says so instead of silently checking nothing.
+    ``key_id``/``secret`` are the values currently in the form, and they are exactly
+    what gets checked: the Validate button reports on the boxes the operator is
+    looking at, never on the stored pair behind them. An empty box is therefore
+    "nothing to validate" rather than "reuse what is saved" — pressing Validate on an
+    empty form used to fall back to the stored credential and announce a rejection of
+    a key that was not on screen.
     """
     settings = get_effective_settings()
     result = credentials_mod.verify(
@@ -853,9 +854,10 @@ def verify_credentials(env: str, key_id: Optional[str] = None, secret: Optional[
         env,
         force=True,
         # The mask is this layer's convention, not the checker's: a box showing
-        # "********" holds no value to check, it means "unchanged".
-        key_id=None if key_id in (None, "", MASK) else key_id,
-        secret=None if secret in (None, "", MASK) else secret,
+        # "********" holds no value to check, and saying "nothing to validate" is
+        # more useful than letting Alpaca reject asterisks.
+        key_id=_form_value(key_id),
+        secret=_form_value(secret),
     )
     return {
         "ok": bool(result["ok"]),
@@ -863,6 +865,13 @@ def verify_credentials(env: str, key_id: Optional[str] = None, secret: Optional[
         "result": result,
         "credentials": credentials_mod.all_checks(settings),
     }
+
+
+def _form_value(raw: Optional[str]) -> str:
+    """A submitted credential box as a checkable value (``""`` when there is none)."""
+    if raw is None or raw in ("", MASK):
+        return ""
+    return str(raw).strip()
 
 
 def verify_new_credentials() -> Dict[str, dict]:

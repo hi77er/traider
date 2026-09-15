@@ -127,8 +127,11 @@ The portal is the whole interface:
   panels; the risk panel leads with the two master switches
 - **Account Settings** (🏦 header popup) - the Alpaca key pairs, the single data
   folder, backtest defaults and cloud/state storage; shared by all strategies. Each
-  key pair has a **Validate** button, which checks the values **in the form** (typed
-  but unsaved included; a blank or masked box means "unchanged"). The badge is the
+  key pair has a **Validate** button, which checks **only what the boxes contain**
+  (untyped-but-unsaved included) - an empty form is answered with "no credentials
+  found to validate" rather than quietly checking the stored pair, so the reply is
+  always about a key that is on screen. Saving is the other way round: a blank or
+  masked field there means "unchanged". The badge is the
   **result of a check, not stored state**: the rows are clean when the popup opens,
   and a pair is labelled only once it has been checked in that visit - by Validate
   (`✓ verified · <account> · <time>`, or `⚠ not valid` with the reason on hover) or

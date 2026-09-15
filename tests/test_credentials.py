@@ -199,7 +199,8 @@ def test_verify_refuses_to_check_half_a_pair(tmp_path):
 def test_verify_reports_when_there_is_nothing_at_all_to_check(tmp_path):
     got = credentials.verify(_s(tmp_path), "live")
     assert got["ok"] is False and got["checked"] is False
-    assert "No LIVE API key or secret to verify" in got["message"]
+    assert "No LIVE credentials found to validate" in got["message"]
+    assert got["has_verdict"] is False, "nothing was examined, so there is no verdict"
 
 
 def test_an_unknown_environment_is_rejected():
@@ -260,16 +261,28 @@ def test_the_verdict_distinguishes_having_no_verdict_from_failing(tmp_path, monk
 
 
 def test_the_verify_endpoint_reports_a_pass_and_a_failure(tmp_path, monkeypatch):
+    from src.web.services import config_service
+
     settings = _s(tmp_path, **PAPER)
+    # The popup's endpoint reads the effective settings itself, and its reply carries
+    # the verdicts for the STORED pair — so the pair being validated has to be the
+    # stored one for the two halves of the response to agree.
+    monkeypatch.setattr(config_service, "get_effective_settings", lambda: settings)
     app.dependency_overrides[get_effective_settings_dep] = lambda: settings
     try:
         monkeypatch.setattr(credentials, "probe", lambda *a, **k: {"ok": True, "message": "Credentials accepted", "account_number": "A1", "status": "ACTIVE"})
-        good = client.post("/api/v1/account/verify", json={"env": "paper"}).json()
+        good = client.post(
+            "/api/v1/account/verify",
+            json={"env": "paper", "key_id": PAPER["alpaca_paper_api_key"], "secret": PAPER["alpaca_paper_api_secret"]},
+        ).json()
         assert good["ok"] is True and good["result"]["verified"] is True
         assert good["credentials"]["paper"]["verified"] is True
 
         monkeypatch.setattr(credentials, "probe", lambda *a, **k: {"ok": False, "message": "Alpaca rejected these credentials (401)"})
-        bad = client.post("/api/v1/account/verify", json={"env": "paper"}).json()
+        bad = client.post(
+            "/api/v1/account/verify",
+            json={"env": "paper", "key_id": PAPER["alpaca_paper_api_key"], "secret": PAPER["alpaca_paper_api_secret"]},
+        ).json()
         assert bad["ok"] is False and "401" in bad["message"]
         assert bad["credentials"]["paper"]["verified"] is False
     finally:
@@ -360,14 +373,38 @@ def test_a_half_filled_form_says_which_half_is_missing(tmp_path, monkeypatch):
     assert "LK-typed" not in body["message"], "no credential comes back out"
 
 
-def test_a_masked_box_validates_the_stored_pair_not_the_mask(tmp_path, monkeypatch):
-    """A re-opened popup shows "********" instead of the secret, so pressing Validate
-    without touching the form must check what is stored — not the asterisks."""
+def test_a_masked_box_is_nothing_to_validate(tmp_path, monkeypatch):
+    """A re-opened popup shows "********" instead of the secret. Echoing that back
+    must be answered as "nothing to validate" — never by quietly checking the stored
+    pair, or by asking Alpaca to authenticate asterisks."""
     from src.web.services import config_service
 
     settings = _s(tmp_path, alpaca_live_api_key="LK-saved", alpaca_live_api_secret="LS-saved")
     monkeypatch.setattr(credentials, "state_path", lambda s: tmp_path / "credential_checks.json")
     monkeypatch.setattr(config_service, "get_effective_settings", lambda: settings)
+    monkeypatch.setattr(credentials, "probe", lambda *a, **k: pytest.fail("nothing to check"))
+
+    for key_id, secret in (("********", "********"), ("", ""), (None, None)):
+        got = config_service.verify_credentials("live", key_id, secret)
+        assert got["ok"] is False and got["result"]["checked"] is False, (key_id, secret)
+        assert "No LIVE credentials found to validate" in got["message"]
+
+
+def test_a_blank_field_is_not_silently_filled_from_the_stored_pair(tmp_path, monkeypatch):
+    """Supplying form values means checking the FORM. Half of it is half of it — the
+    stored secret must not be substituted, because then an empty box would produce a
+    verdict about a credential that is not on screen."""
+    settings = _s(tmp_path, alpaca_live_api_key="LK-saved", alpaca_live_api_secret="LS-saved")
+    monkeypatch.setattr(credentials, "probe", lambda *a, **k: pytest.fail("the stored secret must not be used"))
+    got = credentials.verify(settings, "live", force=True, key_id="LK-new", secret="")
+    assert got["ok"] is False and got["checked"] is False
+    assert "key and its secret are needed" in got["message"]
+
+
+def test_omitting_the_arguments_checks_the_stored_pair(tmp_path, monkeypatch):
+    """...while the callers that care about the pair the BOT would use — the save-time
+    check and turning trading on — get exactly that pair."""
+    settings = _s(tmp_path, alpaca_live_api_key="LK-saved", alpaca_live_api_secret="LS-saved")
     seen = []
 
     def fake_probe(key_id, secret, url, **kw):
@@ -375,29 +412,56 @@ def test_a_masked_box_validates_the_stored_pair_not_the_mask(tmp_path, monkeypat
         return {"ok": True, "message": "ok", "account_number": "A1", "status": "ACTIVE"}
 
     monkeypatch.setattr(credentials, "probe", fake_probe)
-    got = config_service.verify_credentials("live", "********", "********")
-    assert got["ok"] is True
-    assert seen == [("LK-saved", "LS-saved")], "the mask is not a credential"
+    assert credentials.verify(settings, "live", force=True)["ok"] is True
+    assert seen == [("LK-saved", "LS-saved")]
 
 
-def test_a_blank_field_falls_back_to_the_stored_value(tmp_path, monkeypatch):
-    """Blank means "unchanged", exactly like a save — so validating a form where only
-    the key was retyped must check the retyped key against the stored secret."""
-    settings = _s(tmp_path, alpaca_live_api_key="LK-saved", alpaca_live_api_secret="LS-saved")
+def test_validating_an_empty_paper_form_reports_nothing_to_validate(tmp_path, monkeypatch):
+    """The reported bug: pressing Validate on the paper row with an empty form
+    announced a rejection. It had silently fallen back to the stored pair, so it was
+    reporting on a credential that was not on screen."""
+    from src.web.services import config_service
 
-    def fake_probe(key_id, secret, url, **kw):
-        assert (key_id, secret) == ("LK-new", "LS-saved"), "the form's key, the stored secret"
-        return {"ok": True, "message": "ok", "account_number": "A1", "status": "ACTIVE"}
+    settings = _s(tmp_path, **PAPER)  # a stored pair exists...
+    monkeypatch.setattr(config_service, "get_effective_settings", lambda: settings)
+    monkeypatch.setattr(credentials, "probe", lambda *a, **k: pytest.fail("an empty form is not a request to Alpaca"))
+    app.dependency_overrides[get_effective_settings_dep] = lambda: settings
+    try:
+        body = client.post("/api/v1/account/verify", json={"env": "paper"}).json()
+    finally:
+        app.dependency_overrides.clear()
 
-    monkeypatch.setattr(credentials, "probe", fake_probe)
-    got = credentials.verify(settings, "live", force=True, key_id="LK-new", secret="")
-    assert got["ok"] is True and got["saved"] is False
+    assert body["ok"] is False
+    assert body["message"] == (
+        "No PAPER credentials found to validate — enter the API key and its secret."
+    )
+    assert body["result"]["checked"] is False and body["result"]["has_verdict"] is False
+    assert credentials.check_for(settings, "paper")["has_verdict"] is False, "no verdict was earned"
 
+
+def test_typing_credentials_that_are_wrong_still_says_invalid(tmp_path, monkeypatch):
+    """The other half of the rule: once something IS entered, it is checked and a
+    rejection is reported as a rejection."""
+    from src.web.services import config_service
+
+    settings = _s(tmp_path, **PAPER)
+    monkeypatch.setattr(config_service, "get_effective_settings", lambda: settings)
     monkeypatch.setattr(
         credentials, "probe",
-        lambda key_id, secret, url, **k: {"ok": True, "message": "ok", "account_number": "A1"},
+        lambda key_id, secret, url, **k: {"ok": False, "message": "Alpaca rejected these credentials (401)"},
     )
-    assert credentials.verify(settings, "live", force=True, key_id="", secret="")["ok"] is True
+    app.dependency_overrides[get_effective_settings_dep] = lambda: settings
+    try:
+        body = client.post(
+            "/api/v1/account/verify",
+            json={"env": "paper", "key_id": "PK-typed", "secret": "PS-typed"},
+        ).json()
+    finally:
+        app.dependency_overrides.clear()
+
+    assert body["ok"] is False and body["result"]["checked"] is True
+    assert "NOT valid" not in body["message"], "the endpoint states it plainly..."
+    assert "401" in body["message"]
 
 
 def test_the_verify_endpoint_works_even_while_trading_is_on(tmp_path, monkeypatch):

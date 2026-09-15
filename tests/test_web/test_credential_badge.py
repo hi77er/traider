@@ -245,6 +245,8 @@ def test_a_press_with_nothing_to_check_leaves_the_row_clean(badge_results):
     got = badge_results["nothingToCheck"]
     assert got["badge"]["hidden"] is True and got["badge"]["text"] == ""
     assert "No LIVE API key" in got["messages"][-1]["text"]
+    # Information, not a failure: neither the warning nor the success colour.
+    assert got["messages"][-1]["kind"] == ""
 
 
 def test_an_accepted_pair_shows_the_verdict_and_the_account(badge_results):

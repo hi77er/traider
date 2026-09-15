@@ -183,6 +183,25 @@ def all_checks(settings) -> Dict[str, Dict[str, Any]]:
     return {env: check_for(settings, env) for env in ENVIRONMENTS}
 
 
+def _nothing_to_check(env: str, message: str) -> Dict[str, Any]:
+    """The answer to a check that had nothing to look at.
+
+    Deliberately shapeless as a verdict: ``checked`` and ``has_verdict`` are both
+    False, so the UI reports the message and leaves the row alone instead of
+    labelling a pair that was never examined.
+    """
+    return {
+        "env": env,
+        "ok": False,
+        "verified": False,
+        "keys_set": False,
+        "checked": False,
+        "saved": False,
+        "has_verdict": False,
+        "message": message,
+    }
+
+
 def verify(
     settings,
     env: str,
@@ -193,17 +212,21 @@ def verify(
 ) -> Dict[str, Any]:
     """Verify one environment's credentials and record the verdict.
 
-    ``key_id``/``secret`` check the values someone is *looking at* — the ones typed
-    into the Account popup — instead of the stored pair. Without them the Validate
-    button would report "not set" for a key that is right there in the form, which is
-    exactly the bug this parameter exists to prevent. The verdict is recorded under
-    the fingerprint of whichever pair was actually checked, so saving those same
-    values afterwards opens the gate without a second call.
+    ``key_id``/``secret`` are the values someone is *looking at* — the ones typed
+    into the Account popup. Supplying them (even as empty strings) means "check the
+    form, not the file": the Validate button must never answer about a pair the
+    operator cannot see, and it must never fall back to a stored credential when the
+    boxes are empty, because pressing Validate on an empty form would then report a
+    verdict about a key nobody asked about. An empty form is answered with "nothing
+    to validate".
 
-    A field left ``None`` **or blank** means "unchanged", the same rule a save
-    follows: a re-opened form shows a mask instead of the secret, so the value in the
-    box is routinely not the value to check. Only a real value replaces the stored
-    one.
+    Passing neither argument checks the STORED pair instead, which is what the
+    save-time check and turning trading on need: they care about the pair the bot
+    would actually trade with.
+
+    Either way the verdict is recorded under the fingerprint of the pair that was
+    really checked, so saving the same values afterwards opens the gate without a
+    second call.
 
     ``force=False`` (the save path, and turning trading on) skips a pair that already
     has a PASSING record for the same key: re-checking a known-good pair would be a
@@ -211,27 +234,23 @@ def verify(
     ``force=True`` (the Validate button) always asks.
     """
     stored = keys_for(settings, env)
-    typed_key, typed_secret = _text(key_id), _text(secret)
-    keys = {
-        "key_id": typed_key or stored["key_id"],
-        "secret": typed_secret or stored["secret"],
-        "base_url": stored["base_url"],
-    }
-    stored_match = keys["key_id"] == stored["key_id"] and keys["secret"] == stored["secret"]
-    if not keys["key_id"] or not keys["secret"]:
-        return {
-            "env": env,
-            "ok": False,
-            "verified": False,
-            "keys_set": False,
-            "checked": False,
-            "saved": False,
-            "message": (
-                f"Both the {env.upper()} API key and its secret are needed before they can "
-                "be verified." if (keys["key_id"] or keys["secret"]) else
-                f"No {env.upper()} API key or secret to verify."
-            ),
+    if key_id is None and secret is None:
+        keys = dict(stored)  # the pair the bot would trade with
+    else:
+        keys = {
+            "key_id": _text(key_id),
+            "secret": _text(secret),
+            "base_url": stored["base_url"],
         }
+    stored_match = keys["key_id"] == stored["key_id"] and keys["secret"] == stored["secret"]
+    if not keys["key_id"] and not keys["secret"]:
+        return _nothing_to_check(
+            env, f"No {env.upper()} credentials found to validate — enter the API key and its secret."
+        )
+    if not keys["key_id"] or not keys["secret"]:
+        return _nothing_to_check(
+            env, f"Both the {env.upper()} API key and its secret are needed before they can be verified."
+        )
     # A check of what is already stored, and already passing, needs no call.
     if not force and stored_match and check_for(settings, env)["verified"]:
         return {**check_for(settings, env), "checked": False, "saved": True, "message": "Already verified"}

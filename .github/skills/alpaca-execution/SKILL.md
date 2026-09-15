@@ -70,8 +70,11 @@ click** — arming real orders must not be the moment a bad key is discovered. A
 verdict belongs to the key that earned it: swapping keys expires it. A pass is
 cached, a failure is not (it may be the network). Verification is the Account
 popup's **Validate** button (`POST /api/v1/account/verify`), which checks the values
-submitted from the form — unsaved pairs included, with blank/masked meaning
-"unchanged" like a save — and a newly saved pair is checked as the form is saved.
+submitted from the form — unsaved pairs included, and ONLY those: an empty box is
+answered as "nothing to validate" rather than falling back to the stored pair, so a
+verdict is never reported about a credential that is not on screen. (A blank field
+still means "unchanged" on SAVE.) A newly saved pair is checked as the form is
+saved.
 `check_for()` reports `has_verdict` separately from `verified`, which is what the UI
 uses to decide whether to show anything at all. If you change how credentials are
 read, keep `credentials.keys_for()` the single place that maps an environment to its

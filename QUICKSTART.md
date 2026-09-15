@@ -257,17 +257,21 @@ copied from the wrong account page, revoked, or paired with the other environmen
 secret. Nothing local can tell, so the bot asks Alpaca (`GET /v2/account`) and
 remembers the answer:
 
-- **🏦 Account Settings** has a **Validate** button per pair, which checks the values
-  **currently in the boxes** — so a pair can be tested before it is saved. A blank or
-  masked box means "unchanged" and falls back to what is stored, exactly like Save.
+- **🏦 Account Settings** has a **Validate** button per pair. It checks **only what is
+  in the boxes** - so a pair can be tested before it is saved - and reports one of
+  three things: `No PAPER credentials found to validate — enter the API key and its
+  secret.` when a box is empty (it does NOT fall back to the stored pair, so the
+  answer is never about a key you cannot see), "both the key and its secret are
+  needed" when only half is filled in, or the broker's verdict once there is a pair
+  to check. Blank still means "unchanged" when **saving**; Validate is about the
+  form.
 - A badge appears next to a pair **only after it has been checked in that visit**:
   `✓ verified · <account> · <time>`, or `⚠ not valid` with the reason on hover. The
   rows are clean when the popup opens - a verdict already on file is not painted,
   because a masked box with "⚠ not valid" beside it reads as a bug rather than as
   news. Every visit starts from "press Validate to find out".
 - Pressing Validate with nothing in the boxes says so; a rejection shows what Alpaca
-  answered; a pass shows the account that answered.
-- A pair is also checked **automatically when it is new** (as the form is saved). A
+  answered; a pass shows the account that answered.- A pair is also checked **automatically when it is new** (as the form is saved). A
   pair that already passed is not re-asked on every save; a pair that *failed* is
   retried, because a failure may just be the network.
 - A verdict belongs to the key that earned it: change the key and it expires, so a

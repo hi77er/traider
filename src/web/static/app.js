@@ -870,7 +870,9 @@ async function validateCredentials(spec, btn) {
     // state of every other pair, and painting that here is how a stale "not valid"
     // ended up next to a row nobody had asked about.
     applyCredentialBadge(document.getElementById("cred-badge-" + env), res);
-    showAccountErrors(credentialMessage(env, res), res.ok ? "ok" : "warn");
+    // "Nothing to validate" is information, not a failure: an empty form is answered
+    // in the message area, in neither the warning nor the success colour.
+    showAccountErrors(credentialMessage(env, res), res.checked ? (res.ok ? "ok" : "warn") : "");
     flashToast(res.message || "", res.ok ? "ok" : "warn");
     await loadTrading(); // a pass may just have opened the switch
   } catch (err) {
