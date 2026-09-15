@@ -231,8 +231,8 @@ window/period parameters under **Feature Parameters** (`FEATURES_*`). The
 ### Trading switch and the configuration lock
 
 Both pills are **one style in every state** — same border, radius, padding, height,
-font, tint, background and text colour, whichever account is selected and whether or
-not trading is on. The state is carried by the words:
+font, tint, background, glass highlight, bloom and label glow, whichever account is
+selected and whether or not trading is on. The state is carried by the words:
 
 | Control | Says | Dot |
 |---------|------|-----|

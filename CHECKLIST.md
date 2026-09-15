@@ -437,12 +437,11 @@ The unfinished Phase 2 & 3 work lives here so Risk & Execution can proceed first
 ### Go Live
 - [ ] **live-go-live** (39) — Switch to live trading
   - [ ] Add the Alpaca LIVE key pair in Account Settings (paper keys are not accepted for live)
-  - [ ] Switch the header dropdown to `LIVE — REAL ORDERS` and confirm the pill turns red
+  - [ ] Switch the header dropdown to `LIVE — REAL ORDERS` and confirm the pill's dot turns red and blinks
   - [ ] Confirm the pill's label carries no `— ⚠ no keys` (that marker = the keys do not resolve)
-  - [ ] Confirm the pill ends with a blue dot (paper) and the switch with a blue dot (off)
+  - [ ] Confirm both pills look the same (glass fill, glow) whichever state they are in — only the dot colour differs
   - [ ] Turn trading ON from the header switch and accept the confirmation prompt (asked for paper too)
-  - [ ] Confirm the switch label flips to `⏹ Turn trading off` with a BLINKING RED dot, and the Trading panel appears under the chart
-  - [ ] Switch the pill to LIVE: its dot turns red and blinks as well (both dots blink in step)
+  - [ ] Confirm the switch label flips to `⏹ Turn trading off` and its dot starts blinking
   - [ ] Confirm the Trading panel appears under the chart and the config/backtest buttons are disabled
   - [ ] Start with 1% of capital
   - [ ] Verify first week:

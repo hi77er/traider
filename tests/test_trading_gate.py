@@ -416,17 +416,27 @@ def test_the_two_header_controls_are_one_pill_in_every_state():
     base = rule(".exec-pill")
     for prop in ("border", "border-radius", "padding", "color", "background-color", "font-size", "font-weight"):
         assert prop in base, f"the shared pill must define {prop}"
+    # The finish is shared too, and state-independent: a glass highlight, a bloom
+    # and a label glow (which rims the status dot at the end of the label).
+    for prop in ("background-image", "box-shadow", "text-shadow"):
+        assert prop in base, f"the shared finish must define {prop}"
+    assert "var(--pill-glow)" in base, "the bloom colour comes from the shared palette"
 
-    # The select is forced into the button's box: no caret, the same height and
-    # padding, and its text centred like the button's.
+    # The select is forced into the button's box: the native arrow suppressed, the
+    # same height and padding, and its text centred like the button's.
     sel = rule(".exec-select")
+    assert "appearance: none" in sel, "must suppress the native control"
     assert "height: 34px" in sel, "must match the global button height"
-    assert "background-image: none" in sel, "a caret would make it a different shape"
     assert "padding: 5px 14px" in sel
     assert "text-align-last: center" in sel, "the button centres its label"
+    # ...but it must NOT re-declare background-image: that would strip the glass fill
+    # the button has, and the pair would stop matching.
+    assert "background-image" not in sel
+    assert "url(" not in sel and "data:image" not in sel, "no caret of its own"
 
     # One palette, defined once, used by both.
-    assert "--pill-text" in css and "--pill-bg" in css and "--pill-border" in css
+    for var in ("--pill-text", "--pill-bg", "--pill-border", "--pill-glow"):
+        assert var in css
 
     # "Orders would be refused" is said in words now (the label is marked), so the
     # warning does not need a colour — but it must still be said.
