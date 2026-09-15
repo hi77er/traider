@@ -23,6 +23,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from src.config import session
 from src.config.settings import Settings
 from src.data.dataset import load_dataset, save_dataset
 from src.data.openbb_client import OpenBBClient
@@ -65,7 +66,7 @@ def eligible_until_date(settings: Settings, now: Optional[datetime] = None) -> d
         now = now.replace(tzinfo=tz)
     now = now.astimezone(tz)
     today = now.date()
-    close = time.fromisoformat(settings.trading_end_hour)
+    close = session.parse_hhmm(settings.trading_end_hour)
 
     if today.weekday() >= 5:  # weekend -> previous weekday
         d = today - timedelta(days=1)

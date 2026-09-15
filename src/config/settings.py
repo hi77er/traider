@@ -42,8 +42,14 @@ class Settings(BaseSettings):
 
     # ── Trading instrument & trading period ──────────────────────────
     instrument: str = Field(default="AAPL", description="Stock ticker the strategy operates on")
-    trading_start_hour: str = Field(default="09:30", description="Start of trading window (HH:MM, exchange-local)")
-    trading_end_hour: str = Field(default="16:00", description="End of trading window (HH:MM, exchange-local)")
+    trading_start_hour: str = Field(
+        default="09:30",
+        description="Session start (HH:MM, exchange-local); no decision is made on a bar before it",
+    )
+    trading_end_hour: str = Field(
+        default="16:00",
+        description="Session end (HH:MM, exchange-local); no decision on a bar after it, and a daily bar is final after it",
+    )
     market_timezone: str = Field(default="America/New_York", description="Timezone of the exchange where the symbol trades")
     # There is deliberately NO decision cadence here. A decision is made on every
     # newly generated bar: the signal for a bar is computed at that bar's close and

@@ -142,7 +142,14 @@ The portal is the whole interface:
   Nasdaq/NYSE (`America/New_York`), Frankfurt (`Europe/Berlin`) and London
   (`Europe/London`) — rather than free text, because the zone is what the trading
   hours, chart timestamps and period windows are measured in, and a typo there would
-  be silent. There is no **Model** group: rule-based is the only model implemented
+  be silent. The **trading window** is a bound on decisions, not a note: an intraday
+  bar whose own timestamp is outside `TRADING_START_HOUR`–`TRADING_END_HOUR` produces
+  no signal at all, so neither a backtest nor a live tick can act on a pre-market,
+  after-hours, overnight or weekend bar. Daily bars are exempt — a daily bar *is* a
+  session, so there is no clock time to compare. One rule, in
+  `src/config/session.py`, is shared by the decision filter and the live poll, so the
+  bot can never fetch a bar it refuses to decide on (or decide on one it would not
+  fetch). There is no **Model** group: rule-based is the only model implemented
   (the backtester and the signal service both refuse to run under any other), so
   `MODEL_TYPE` and its thresholds are set in `.env` and are no longer per-strategy.
 - **Account Settings** (🏦 header popup) - the Alpaca key pairs, the single data

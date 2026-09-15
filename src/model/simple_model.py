@@ -36,8 +36,10 @@ from typing import Dict, List, Mapping, Optional, Sequence, Tuple
 import numpy as np
 import pandas as pd
 
+from src.config import session
 from src.config.effective import get_effective_settings, resolve_effective
 from src.config.settings import Settings
+from src.data import dataset
 from src.features.engineering import FeatureEngineer
 from src.features.schema import allowed_series
 from src.model import rules as rules_mod
@@ -358,6 +360,13 @@ class RuleBasedSignalGenerator:
         Shares the exact feature computation used live, so backtest results
         transfer. Bars inside feature warmup have NaN features and therefore
         evaluate to HOLD.
+
+        A bar OUTSIDE the trading window is a HOLD too, whatever the rules say: the
+        window is when an order may be placed, so a pre-market, after-hours or
+        overnight bar must not produce a decision. This is the single place the
+        window is applied to decisions, so the backtest, the chart's signals and a
+        live tick all read the same series — the features are still computed for
+        every bar, only the DECISION is suppressed.
         """
         columns = ["signal", "confidence", "reason"]
         if candles is None or candles.empty:
@@ -366,19 +375,34 @@ class RuleBasedSignalGenerator:
         # full series so callers/UI can render an all-HOLD result cleanly.
         candles = candles.sort_index()
         feats = FeatureEngineer(self.settings).compute_frame(candles)
+        outside = {
+            ts for ts in candles.index if not dataset.bar_in_trading_window(self.settings, ts)
+        }
+        if outside:
+            logger.info(
+                "%d of %d bar(s) are outside the trading window (%s) — HOLD on those",
+                len(outside), len(candles), session.describe(self.settings),
+            )
+        closed = f"outside the trading window ({session.describe(self.settings)})"
         records: List[Tuple[str, float, str]] = []
         prev: Optional[Dict[str, float]] = None
         for ts, crow in candles.iterrows():
             frow = feats.loc[ts] if ts in feats.index else None
             cur = _row_context(crow, frow)
-            sig = decide_row(
-                self.rules,
-                cur,
-                prev,
-                buy_threshold=self.buy_threshold,
-                sell_threshold=self.sell_threshold,
-            )
+            if ts in outside:
+                sig = Signal(HOLD, 0.0, closed)
+            else:
+                sig = decide_row(
+                    self.rules,
+                    cur,
+                    prev,
+                    buy_threshold=self.buy_threshold,
+                    sell_threshold=self.sell_threshold,
+                )
             records.append((sig.signal, sig.confidence, sig.reason))
+            # ``prev`` advances on every bar, in or out of the window: a rule that
+            # compares with the previous row (a cross) must see the real previous
+            # bar, not the last one it was allowed to decide on.
             prev = cur
         return pd.DataFrame(records, index=candles.index, columns=columns)
 

@@ -20,6 +20,7 @@ from typing import Optional
 
 import pandas as pd
 
+from src.config import session
 from src.config.settings import Settings
 from src.data.openbb_client import PRICE_COLUMNS
 
@@ -41,6 +42,26 @@ def is_intraday(interval: Optional[str]) -> bool:
     """True for sub-daily bar sizes (1m/15m/1h/4h/...); calendar bars (1d/1W/1M)
     are keyed by their date alone."""
     return str(interval or "") not in _CALENDAR_BARS
+
+
+def bar_in_trading_window(settings: Settings, ts) -> bool:
+    """True when a decision may be taken on the bar stamped ``ts``.
+
+    A *calendar* bar (1d or coarser) is always eligible: it IS a session, its
+    decision is taken at that session's close and filled at the next session's open,
+    so there is no clock time to compare. An *intraday* bar is eligible only when its
+    own timestamp — exchange-local, and the bar's START for every provider we use —
+    falls inside ``TRADING_START_HOUR``–``TRADING_END_HOUR`` on a weekday. That is
+    what makes the window a real bound on decisions rather than a note in the docs:
+    neither the backtest nor a live tick can act on a pre-market, after-hours or
+    overnight bar, and neither can trade on a weekend.
+    """
+    if not is_intraday(settings.historical_bar_size):
+        return True
+    stamp = pd.Timestamp(ts)
+    if stamp.tz is None:
+        stamp = stamp.tz_localize(settings.market_timezone or "America/New_York")
+    return session.is_open_at(settings, stamp.to_pydatetime())
 
 
 def chart_time(

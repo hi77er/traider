@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
+from src.config import session
 from src.config.settings import Settings
 from src.data.openbb_client import OpenBBClient
 
@@ -22,22 +23,13 @@ logger = logging.getLogger(__name__)
 
 def is_market_open(settings: Settings, now: Optional[datetime] = None) -> bool:
     """Return True if ``now`` (default: current time) falls inside the
-    configured US equity trading window on a weekday."""
-    tz = ZoneInfo(settings.market_timezone)
-    now = now or datetime.now(tz)
-    if now.tzinfo is None:
-        now = now.replace(tzinfo=tz)
-    now = now.astimezone(tz)
+    configured trading window on a weekday.
 
-    if now.weekday() >= 5:  # Saturday / Sunday
-        return False
-
-    start = time.fromisoformat(settings.trading_start_hour)
-    end = time.fromisoformat(settings.trading_end_hour)
-    if start <= end:
-        return start <= now.time() <= end
-    # Window crosses midnight (unlikely for equities but handled anyway).
-    return now.time() >= start or now.time() <= end
+    Thin wrapper over ``src.config.session``, which owns the rule: the poll and the
+    per-bar decision filter must agree, or the bot could fetch a bar it then refuses
+    to decide on (or worse, decide on a bar it would not fetch).
+    """
+    return session.is_open_at(settings, now)
 
 
 def get_latest_candle(
