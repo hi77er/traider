@@ -13,6 +13,7 @@ import threading
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
+from src.config import history
 from src.config.effective import get_effective_settings
 from src.config.settings import Settings
 from src.data.dataset import (
@@ -44,7 +45,8 @@ def dataset_status(settings: Optional[Settings] = None) -> dict:
         "exists": exists,
         "symbol": symbol,
         "interval": interval,
-        "period_years": settings.historical_lookback_years,
+        "period": settings.historical_lookback,
+        "period_label": history.format_period(settings.historical_lookback),
         "rows": 0,
         "start": None,
         "end": None,
@@ -188,14 +190,14 @@ def start_rebuild(settings: Optional[Settings] = None, old_bar_size: Optional[st
     settings = settings or get_effective_settings()
     symbol = settings.instrument
     bar = settings.historical_bar_size
-    years = settings.historical_lookback_years
+    period = history.format_period(settings.historical_lookback, unknown="?")
     with _REBUILD_LOCK:
         if _REBUILD["running"]:
             return {"started": False, "reason": "a re-download is already running", "job": rebuild_status()}
         _REBUILD["running"] = True
         _REBUILD["last_error"] = None
         _REBUILD["rows"] = 0
-        _REBUILD["label"] = f"{symbol} · {years or '?'}y · {bar}"
+        _REBUILD["label"] = f"{symbol} · {period} · {bar}"
     start, end = resolve_history_window(settings)
     logger.info(
         "Starting dataset re-download: %s %s (%s -> %s), old bar size=%s",

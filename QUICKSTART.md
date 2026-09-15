@@ -413,6 +413,7 @@ OPENBB_PROVIDER=yfinance        # free provider, no key needed (options: polygon
 
 # Historical data period
 HISTORICAL_BAR_SIZE=1d
+HISTORICAL_LOOKBACK=2y   # or 30d — which periods are usable depends on the bar size
 HISTORICAL_START_DATE=2022-01-01
 HISTORICAL_END_DATE=
 

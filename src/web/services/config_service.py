@@ -25,6 +25,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from pydantic import ValidationError
 
 from src.config import account as account_mod
+from src.config import history
 from src.config.effective import get_effective_settings, invalidate
 from src.config.settings import Settings
 from src.execution import credentials as credentials_mod
@@ -42,21 +43,9 @@ _SENSITIVE_SUFFIXES = ("_PASSWORD", "_API_KEY", "_SECRET", "_TOKEN")
 _OPTIONS: Dict[str, List[Any]] = {
     "MODEL_TYPE": ["logistic_regression", "rule_based"],
     "POSITION_SIZING_MODE": ["fixed_risk", "volatility_target"],
-    "HISTORICAL_BAR_SIZE": [
-        {"label": "1 hour", "value": "1h"},
-        {"label": "2 hours", "value": "2h"},
-        {"label": "4 hours", "value": "4h"},
-        {"label": "8 hours", "value": "8h"},
-        {"label": "12 hours", "value": "12h"},
-        {"label": "1 day", "value": "1d"},
-    ],
-    "HISTORICAL_LOOKBACK_YEARS": [
-        {"label": "1 year", "value": "1"},
-        {"label": "2 years", "value": "2"},
-        {"label": "3 years", "value": "3"},
-        {"label": "4 years", "value": "4"},
-        {"label": "5 years", "value": "5"},
-    ],
+    # HISTORICAL_BAR_SIZE and HISTORICAL_LOOKBACK are NOT here: the period a bar
+    # size may be fetched for depends on the bar size, so both lists are built
+    # from src/config/history.py in ``strategy_config_groups``.
 }
 
 # The paper/live switch, served to the header dropdown so the client reads it from
@@ -70,8 +59,8 @@ EXECUTION_ENV_OPTIONS: List[Dict[str, str]] = [
 
 # Friendlier labels for the Features Engineering on/off toggles.
 _LABELS: Dict[str, str] = {
-    "HISTORICAL_LOOKBACK_YEARS": "Historical Period",
     "HISTORICAL_BAR_SIZE": "Historical Bar Size",
+    "HISTORICAL_LOOKBACK": "Historical Period",
     "FEATURE_SMA_ENABLED": "Simple Moving Average (SMA)",
     "FEATURE_EMA_ENABLED": "Exponential Moving Average (EMA)",
     "FEATURE_MACD_ENABLED": "MACD (moving average convergence/divergence)",
@@ -233,9 +222,12 @@ _STRATEGY_SCOPE: List[Tuple[str, Tuple[str, ...]]] = [
     (
         "Instrument",
         (
+            # The bar size comes FIRST: the period under it is limited to what
+            # this bar size can actually be fetched for, so the pair reads in the
+            # order the decision is made (pick the candle, then how far back).
             "INSTRUMENT",
-            "HISTORICAL_LOOKBACK_YEARS",
             "HISTORICAL_BAR_SIZE",
+            "HISTORICAL_LOOKBACK",
         ),
     ),
     (
@@ -393,6 +385,12 @@ def strategy_config_groups(settings: Settings, overrides: Optional[Dict[str, str
     back to the current global default (read from ``settings``).
     """
     field_by_key = _field_by_env_key()
+    # The bar size the panel will show, so the period list it offers is the one
+    # that goes with THAT bar size (a caller may pass the strategy's stored values
+    # as overrides without the resolver having been involved).
+    bar_size = str((overrides or {}).get("HISTORICAL_BAR_SIZE") or "").strip() or getattr(
+        settings, "historical_bar_size", ""
+    )
     groups: List[dict] = []
     for name, keys in _STRATEGY_SCOPE:
         fields: List[dict] = []
@@ -415,6 +413,18 @@ def strategy_config_groups(settings: Settings, overrides: Optional[Dict[str, str
             )
             if bounds := _field_bounds(info):
                 fields[-1].update(bounds)
+            if key == "HISTORICAL_BAR_SIZE":
+                fields[-1]["options"] = [
+                    {"label": label, "value": code} for code, label in history.BAR_SIZES
+                ]
+            elif key == "HISTORICAL_LOOKBACK":
+                # The periods on offer are the ones THIS bar size may be fetched
+                # for, and the table travels with the field so the browser can
+                # repopulate the list the moment the bar size changes — the panel
+                # can then never show (or submit) a combination the rule forbids.
+                fields[-1]["options"] = history.periods_for_options(bar_size)
+                fields[-1]["options_by"] = history.periods_by_bar_size()
+                fields[-1]["depends_on"] = "HISTORICAL_BAR_SIZE"
         groups.append({"name": name, "fields": fields})
     return groups
 

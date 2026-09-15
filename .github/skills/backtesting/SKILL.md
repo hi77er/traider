@@ -24,7 +24,7 @@ The non-negotiable gate before live trading. A strategy may only go live after t
 
 ## Procedure
 
-1. **Load historical candles** from the canonical Parquet dataset (see `src/data/dataset.py`; fetched via OpenBB for the `BACKTEST_START_DATE`→`BACKTEST_END_DATE` window at `HISTORICAL_BAR_SIZE`) into the canonical OHLCV schema.
+1. **Load historical candles** from the canonical Parquet dataset (see `src/data/dataset.py`; fetched via OpenBB for the `HISTORICAL_LOOKBACK` / `HISTORICAL_START_DATE`→`HISTORICAL_END_DATE` window at `HISTORICAL_BAR_SIZE`) into the canonical OHLCV schema.
 2. **Walk forward bar by bar**: compute features → generate signal → apply risk checks → simulate fill (open/close) at the next bar's open plus slippage.
 3. **Model costs**: apply spread/slippage and commission per trade — a backtest that ignores costs overstates edge.
 4. **Split data**: train model on the earlier period, test on the later/unseen period (no lookahead).

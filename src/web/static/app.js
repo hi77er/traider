@@ -117,15 +117,25 @@ async function startBackfill() {
 /* ---------- State B: summary (now in the header) + chart ---------- */
 function barSizeLabel(code) {
   return ({
-    "1h": "1 hour", "2h": "2 hours", "4h": "4 hours", "8h": "8 hours",
-    "12h": "12 hours", "1d": "1 day", "1W": "1 week", "1M": "1 month",
+    "1m": "1 minute", "2m": "2 minutes", "5m": "5 minutes", "15m": "15 minutes",
+    "30m": "30 minutes", "1h": "1 hour", "2h": "2 hours", "4h": "4 hours",
+    "8h": "8 hours", "12h": "12 hours", "1d": "1 day", "1W": "1 week",
+    "1M": "1 month",
   })[code] || code;
 }
 
-function periodLabel(years) {
-  if (years == null || years === "") return "—";
-  const n = Number(years);
-  return Number.isFinite(n) ? `${n} year${n === 1 ? "" : "s"}` : String(years);
+/* A history window reads as a duration with its unit: "2y" -> "2 years",
+   "30d" -> "30 days". A bare number is read as YEARS, because that is what the
+   setting stored before the unit existed, so a legacy value still displays
+   correctly. Anything unreadable is shown as-is rather than as a wrong guess. */
+function periodLabel(period) {
+  if (period == null || period === "") return "—";
+  const m = /^(\d+)\s*([A-Za-z]*)$/.exec(String(period).trim());
+  if (!m) return String(period);
+  const n = Number(m[1]);
+  const unit = m[2].toLowerCase();
+  const word = (unit === "d" || unit === "day" || unit === "days") ? "day" : "year";
+  return `${n} ${word}${n === 1 ? "" : "s"}`;
 }
 
 // The delta UI always counts BARS (a daily candle is one bar too).
@@ -140,7 +150,7 @@ function renderSummary(s) {
   host.innerHTML = `
     <div class="stats">
       <div><span class="label">Symbol</span><span>${s.symbol}</span></div>
-      <div><span class="label">Historical Period</span><span>${periodLabel(s.period_years)}</span></div>
+      <div><span class="label">Historical Period</span><span>${periodLabel(s.period_label || s.period || s.period_years)}</span></div>
       <div><span class="label">Historical Bar Size</span><span>${barSizeLabel(s.interval)}</span></div>
       <div><span class="label">Rows</span><span>${s.rows.toLocaleString()}</span></div>
       <div><span class="label">Last close</span><span>${last}</span></div>
@@ -731,6 +741,15 @@ function fieldInput(f, prefix) {
     hint.className = "hint ro-note";
     hint.textContent = f.readonly_note || "Read-only — change it directly in .env";
     wrap.appendChild(hint);
+  }
+  // A field whose options depend on another field gets a line saying WHICH
+  // combinations are allowed. It is filled in by wireDependentOptions (and
+  // rewritten when the controlling field changes), so it always describes the
+  // list that is actually on offer.
+  if (f.options_by && f.depends_on) {
+    const dep = document.createElement("span");
+    dep.className = "hint dep-note";
+    wrap.appendChild(dep);
   }
   // A credential pair gets a Validate button, placed by the schema (f.verify)
   // rather than by a hard-coded key list. The row renders CLEAN: a verdict is the
@@ -2326,6 +2345,55 @@ function renderConfigGroups(host, groups, prefix) {
     });
     host.appendChild(fieldset);
   });
+  wireDependentOptions(host, groups, prefix);
+}
+
+/* ---------- one field's value space depending on another ----------
+   The historical period is not independent of the bar size: a finer candle
+   cannot reach as far back before the provider stops serving it, so each bar
+   size offers its own periods. The schema ships both the list for the CURRENT
+   bar size and the whole table, so the dropdown can be repopulated here the
+   moment the bar size changes — no round trip, and the panel can never show a
+   pair the rule forbids.
+
+   A stored value that the new bar size cannot use is NOT silently kept: the
+   select falls back to the first allowed period and the note says so, so the
+   operator sees the change before the Save that makes it stick. */
+function wireDependentOptions(host, groups, prefix) {
+  groups.forEach((group) => {
+    (group.fields || []).forEach((f) => {
+      if (!f.options_by || !f.depends_on) return;
+      const controller = document.getElementById(prefix + "-" + f.depends_on);
+      const select = document.getElementById(prefix + "-" + f.key);
+      if (!controller || !select) return;
+      const wrap = select.closest(".field");
+      const note = wrap ? wrap.querySelector(".dep-note") : null;
+
+      const apply = () => {
+        const options = f.options_by[controller.value] || f.options || [];
+        if (!options.length) return;
+        const wanted = String(select.value);
+        select.innerHTML = options
+          .map((o) => _optHtml(o.value, o.label, wanted))
+          .join("");
+        const usable = options.some((o) => String(o.value) === wanted);
+        if (!usable) select.value = options[0].value;
+        if (note) {
+          const barText = controller.options[controller.selectedIndex]
+            ? controller.options[controller.selectedIndex].textContent
+            : controller.value;
+          let text = `Bar size ${barText} allows: ${options.map((o) => o.label).join(", ")}.`;
+          if (!usable) {
+            text += ` “${periodLabel(wanted)}” is not one of them, so it now reads ` +
+              `“${select.options[select.selectedIndex].textContent}” — Save to apply that.`;
+          }
+          note.textContent = text;
+        }
+      };
+      controller.addEventListener("change", apply);
+      apply();
+    });
+  });
 }
 
 /* ---------- Risk Management panel ---------- */
@@ -2570,31 +2638,31 @@ async function saveStrategyFull(kind) {
   }
 
   // Capture the PRE-save context: instrument, bar size, historical period.
-  const DEFAULT_YEARS = "2"; // matches Settings' historical_lookback_years default
+  const DEFAULT_PERIOD = "2y"; // matches Settings' historical_lookback default
   const cfg = rs.config || {};
   const oldInstrument = (cfg.INSTRUMENT || rs.instrument || "").trim().toUpperCase();
   const oldBar = (cfg.HISTORICAL_BAR_SIZE || "").trim();
-  const oldYears = cfg.HISTORICAL_LOOKBACK_YEARS != null
-    ? String(cfg.HISTORICAL_LOOKBACK_YEARS).trim()
-    : DEFAULT_YEARS;
+  const oldPeriod = cfg.HISTORICAL_LOOKBACK != null
+    ? String(cfg.HISTORICAL_LOOKBACK).trim()
+    : DEFAULT_PERIOD;
   const instrInput = document.getElementById("scfg-INSTRUMENT");
   const barInput = document.getElementById("scfg-HISTORICAL_BAR_SIZE");
-  const yearsInput = document.getElementById("scfg-HISTORICAL_LOOKBACK_YEARS");
+  const periodInput = document.getElementById("scfg-HISTORICAL_LOOKBACK");
   const newInstrument = instrInput ? (instrInput.value || "").trim().toUpperCase() : oldInstrument;
   const newBar = barInput ? (barInput.value || "").trim() : oldBar;
-  const newYears = yearsInput ? String(yearsInput.value || "").trim() : oldYears;
+  const newPeriod = periodInput ? String(periodInput.value || "").trim() : oldPeriod;
 
   const instrumentChanged = newInstrument !== oldInstrument;
   const barChanged = newBar !== oldBar;
-  // A stored/absent years value is compared to the effective default ("2"), so
+  // A stored/absent period value is compared to the effective default ("2y"), so
   // changing the select (even on a legacy strategy) is recognized as a change.
-  const yearsChanged = newYears != null && newYears !== oldYears;
-  const historyChanged = barChanged || yearsChanged;
+  const periodChanged = newPeriod != null && newPeriod !== oldPeriod;
+  const historyChanged = barChanged || periodChanged;
 
   const revert = () => {
     if (instrInput) instrInput.value = oldInstrument;
     if (barInput) barInput.value = oldBar;
-    if (yearsInput) yearsInput.value = oldYears;
+    if (periodInput) periodInput.value = oldPeriod;
   };
 
   // ── Instrument change → confirm + reload into the new symbol's context ──
@@ -2614,15 +2682,15 @@ async function saveStrategyFull(kind) {
   } else if (historyChanged) {
     // ── Historical window / bar size change → delete old data & re-download ──
     const parts = [];
-    if (newBar !== oldBar) parts.push(`bar size <b>${oldBar || "—"}</b> → <b>${newBar || "—"}</b>`);
-    if (yearsChanged) parts.push(`history <b>${oldYears || "—"} year(s)</b> → <b>${newYears} year(s)</b>`);
+    if (newBar !== oldBar) parts.push(`bar size <b>${barSizeLabel(oldBar) || "—"}</b> → <b>${barSizeLabel(newBar) || "—"}</b>`);
+    if (periodChanged) parts.push(`history <b>${periodLabel(oldPeriod)}</b> → <b>${periodLabel(newPeriod)}</b>`);
     const ok = await confirmDialog({
       title: "Re-download historical data?",
       messageHtml:
         `<p>You changed the ${parts.join(" and ")}.</p>` +
         `<p>The existing historical data will be <b>deleted</b> and the new window will be ` +
         `<b>downloaded automatically</b> for <b>${escapeHtml(newInstrument || oldInstrument)}</b> ` +
-        `(<b>${escapeHtml(newYears || "2")} year(s)</b> at <b>${escapeHtml(newBar || oldBar)}</b>).</p>` +
+        `(<b>${escapeHtml(periodLabel(newPeriod) || "2 years")}</b> at <b>${escapeHtml(barSizeLabel(newBar || oldBar))}</b>).</p>` +
         `<p class="muted">A progress message is shown while this runs. Your rules are kept and are ` +
         `re-applied to the new dataset afterwards.</p>`,
       confirmText: "Save & re-download",

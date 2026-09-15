@@ -17,12 +17,13 @@ The TRAIDER bot gets ALL price data from the **OpenBB Platform SDK** (`from open
 
 ## Project Facts
 - Config: `OPENBB_PROVIDER` (default `yfinance`, free, no key), optional `OPENBB_API_KEY` (premium: `polygon`, `fmp`, `intrinio`, `tradier`)
-- Historical window & bar size from config: `HISTORICAL_START_DATE`, `HISTORICAL_END_DATE`, `HISTORICAL_BAR_SIZE`; instrument from `INSTRUMENT`
+- Historical window & bar size from config: `HISTORICAL_BAR_SIZE` (1m/2m/5m/15m/1h/2h/4h/8h/12h/1d) and `HISTORICAL_LOOKBACK` (`"2y"`/`"30d"`, counted back from now; `HISTORICAL_START_DATE`/`HISTORICAL_END_DATE` are the fallback when it is empty); instrument from `INSTRUMENT`
 - **Canonical dataset:** `fetch_candles` persists the backfill to Parquet in `HISTORICAL_DATA_DIR` (e.g. `data/historical/AAPL_1d.parquet`) — backtesting/training read this stable store via `load_dataset`. The `.cache/` CSVs are only the live-poll fast-path cache
 - **Optional S3 sync:** when `S3_ENABLED=True` + `S3_BUCKET` is set, the dataset is written locally then uploaded to S3 (durable source of truth); a missing local dataset is auto-restored from S3. Enable bucket versioning for crash safety
 - Symlink-free invariant: **the exact same OpenBB code path must run in backtest and live** — wrap all calls in `openbb_client.py`
 - Output: OpenBB returns standardized results; call `.to_df()` for a pandas DataFrame of OHLCV
-- **Interval resampling:** yfinance only supports 1m–1Q intervals (no `4h`). `OpenBBClient` auto-fetches `1h` and resamples to the configured `HISTORICAL_BAR_SIZE` when it isn't natively supported. The default `HISTORICAL_BAR_SIZE=1d` needs no resampling
+- **Interval resampling:** yfinance only supports 1m–1Q intervals (no `4h`). `OpenBBClient` auto-fetches `1h` and resamples to the configured `HISTORICAL_BAR_SIZE` when it isn't natively supported (2h/4h/8h/12h). The default `HISTORICAL_BAR_SIZE=1d` needs no resampling.
+- **Intraday depth is a PROVIDER limit, not a setting:** yfinance serves ~7 days of 1m bars and ~60 days of 2m/5m/15m/30m/60m bars, ~730 days of hourly, everything for daily. That is why `src/config/history.py` binds each bar size to the periods it may be fetched for and the dashboard only offers those. Note the notation collides: `1m` is one MINUTE, `1M` is one MONTH.
 
 ## Procedure
 

@@ -31,10 +31,16 @@ def dataset_path(settings: Settings, symbol: str, interval: str) -> Path:
     return Path(settings.historical_data_dir) / f"{symbol}_{interval}.parquet"
 
 
+# Bar codes that are keyed by their DATE alone. Compared case-sensitively and by
+# exact match, because the provider's notation collides otherwise: "1m" is one
+# MINUTE and "1M" is one MONTH. Anything not in this set is a sub-daily bar.
+_CALENDAR_BARS = frozenset({"1d", "5d", "3d", "1W", "2W", "1M", "2M", "3M", "1Q"})
+
+
 def is_intraday(interval: Optional[str]) -> bool:
-    """True for sub-daily bar sizes (1h/4h/...); calendar bars (1d/1W/1M)
+    """True for sub-daily bar sizes (1m/15m/1h/4h/...); calendar bars (1d/1W/1M)
     are keyed by their date alone."""
-    return str(interval or "").lower() not in ("1d", "1w", "1m")
+    return str(interval or "") not in _CALENDAR_BARS
 
 
 def chart_time(

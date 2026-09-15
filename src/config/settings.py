@@ -26,6 +26,8 @@ from typing import List, Optional
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from src.config import history
+
 
 class Settings(BaseSettings):
     """One source of truth for every tunable in the bot."""
@@ -57,12 +59,14 @@ class Settings(BaseSettings):
     cache_dir: str = Field(default=".cache", description="Local data cache directory")
 
     # ── Historical data period (backtest & training) ─────────────────
-    historical_bar_size: str = Field(default="1d", description="Candle size to fetch (1h, 4h, 1d, ...)")
+    historical_bar_size: str = Field(default="1d", description="Candle size to fetch (1m, 15m, 1h, 4h, 1d, ...)")
     historical_start_date: Optional[str] = Field(default="2022-01-01", description="Fetch history from (YYYY-MM-DD)")
     historical_end_date: Optional[str] = Field(default=None, description="Fetch history until (YYYY-MM-DD); empty = now")
-    historical_lookback_years: Optional[int] = Field(
-        default=2, ge=1, le=5,
-        description="Fetch history for the last N years (1-5) up to now; overrides HISTORICAL_START_DATE",
+    historical_lookback: Optional[str] = Field(
+        default="2y",
+        description="How much history to fetch, as <N>y years or <N>d days (e.g. 2y, 30d) up to now; "
+        "overrides HISTORICAL_START_DATE. Which periods are usable depends on HISTORICAL_BAR_SIZE — "
+        "see src/config/history.py",
     )
     backtest_start_date: Optional[str] = Field(default=None, description="Backtest window start; empty = historical start")
     backtest_end_date: Optional[str] = Field(default=None, description="Backtest window end; empty = historical end")
@@ -391,6 +395,28 @@ class Settings(BaseSettings):
             if low in ("off", "false", "no", "0", "n", "f"):
                 return False
         return v
+
+    @field_validator("historical_lookback", mode="before")
+    @classmethod
+    def _normalize_history_period(cls, v):
+        """Rewrite the history window in its canonical ``<N><y|d>`` spelling.
+
+        The setting is ONE value with its unit, so the window cannot be
+        half-specified in two fields that then disagree about which one wins.
+        A bare number is read as YEARS: that is what this setting used to mean
+        (the retired ``HISTORICAL_LOOKBACK_YEARS``), so a value written before
+        the unit existed keeps meaning what it always did. An unreadable value
+        raises rather than silently reverting to "2 years" — an operator who
+        typed ``30days`` deserves to be told, not quietly given something else.
+        """
+        if v in (None, ""):
+            return None
+        normalized = history.normalize_period(str(v))
+        if normalized is None:
+            raise ValueError(
+                f"must be a period like '2y' (years) or '30d' (days), got {v!r}"
+            )
+        return normalized
 
 
 @lru_cache

@@ -129,7 +129,16 @@ The portal is the whole interface:
   bands (green when the round trip made money, red when it lost) and the
   stop/take exits
 - **Strategy Configuration / Rules / Risk Management** - three collapsible
-  panels; the risk panel leads with the two master switches
+  panels; the risk panel leads with the two master switches. The Instrument group
+  reads **bar size first, then historical period**, because the period's options
+  depend on the bar size: a finer candle cannot reach as far back before the data
+  provider stops serving intraday bars, so 1-minute bars offer 15–30 days,
+  hourly bars 1–2 years and daily bars 2–5 years (the table lives in
+  `src/config/history.py`). Choosing a bar size the stored period cannot be paired
+  with moves the selection onto the allowed list and says which value it replaced —
+  the panel cannot submit a pair the rule forbids, and nothing is rewritten in
+  silence. Both settings are one value each: the period carries its unit
+  (`2y`, `30d`), so a window can never be half-specified in two places.
 - **Account Settings** (🏦 header popup) - the Alpaca key pairs, the single data
   folder and the backtest costs; shared by all strategies. Three sections and nothing
   else — what belongs to a *trading account*. The history window, the backtest window
@@ -245,7 +254,7 @@ Three layers, two editors in the dashboard:
 |-------|------|-------------|-------|
 | **Global** | `.env` | by hand | data provider + keys, the paths of the two JSON stores, cloud storage (read by the dataset sync, off by default) and state persistence (unbuilt) |
 | **Account** | `settings/account/account.json` | 🏦 Account Settings | the Alpaca key pairs (paper + live), the data folder, backtest costs |
-| **Strategy** | `settings/strategies/store.json` | Strategy Configuration / Rules / Risk panels, plus the header dropdown for `EXECUTION_ENV` | instrument, bar size, features, model, gates, schedule, risk limits, rules, paper/live |
+| **Strategy** | `settings/strategies/store.json` | Strategy Configuration / Rules / Risk panels, plus the header dropdown for `EXECUTION_ENV` | instrument, bar size + history period, features, model, gates, schedule, risk limits, rules, paper/live |
 
 Precedence is **strategy > account > .env**, and the process environment still
 wins over `.env` (which is why a stray exported variable can silently override

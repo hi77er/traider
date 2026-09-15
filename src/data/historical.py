@@ -15,6 +15,7 @@ from typing import Optional
 
 import pandas as pd
 
+from src.config import history
 from src.config.settings import Settings
 from src.data.dataset import save_dataset
 from src.data.openbb_client import OpenBBClient
@@ -25,14 +26,19 @@ logger = logging.getLogger(__name__)
 def resolve_history_window(settings: Settings) -> tuple:
     """(start_date, end_date) for a full historical fetch, YYYY-MM-DD strings.
 
-    Prefers the years-based window (``HISTORICAL_LOOKBACK_YEARS``, up to now)
-    and falls back to the legacy free-text start/end dates when years are unset.
+    Prefers the period window (``HISTORICAL_LOOKBACK``, e.g. ``2y`` or ``30d``,
+    counted back from now) and falls back to the legacy free-text start/end dates
+    when no period is set. A day-based period is what intraday bar sizes use:
+    the provider only serves a short trailing window of minute bars, so the
+    window is measured in days there and in years for the coarser bars.
     """
     end = settings.historical_end_date or None
-    years = settings.historical_lookback_years
-    if years:
+    parts = history.period_parts(settings.historical_lookback)
+    if parts:
+        n, unit = parts
         today = pd.Timestamp.now(tz=settings.market_timezone).normalize()
-        start = (today - pd.DateOffset(years=int(years))).strftime("%Y-%m-%d")
+        offset = pd.DateOffset(days=n) if unit == history.UNIT_DAYS else pd.DateOffset(years=n)
+        start = (today - offset).strftime("%Y-%m-%d")
         return start, end
     return (settings.historical_start_date or None), end
 

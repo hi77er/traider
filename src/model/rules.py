@@ -169,6 +169,38 @@ def empty_strategy(name: str, instrument: Optional[str] = None) -> RuleSet:
     return RuleSet(name=name, instrument=instrument, description="", rules=[])
 
 
+# Settings keys that used to be stored per strategy and have been REPLACED by
+# another key carrying the same meaning. Renamed keys are translated rather than
+# dropped — a drop would silently change the strategy (a 5-year history window
+# becoming the 2-year default) — and this is done on LOAD, so every reader (the
+# panel, the effective-settings resolver, the backtester) sees one spelling and
+# the next save writes only the new key.
+RENAMED_CONFIG_KEYS = {
+    # int years -> the ONE period value with its unit ("5" -> "5y")
+    "HISTORICAL_LOOKBACK_YEARS": ("HISTORICAL_LOOKBACK", lambda v: f"{str(v).strip()}y"),
+}
+
+
+def migrate_config_keys(store: StrategyStore) -> StrategyStore:
+    """Translate renamed per-strategy config keys in place; returns the store."""
+    changed = False
+    for rs in store.strategies.values():
+        config = rs.config or {}
+        for old, (new, convert) in RENAMED_CONFIG_KEYS.items():
+            if old not in config:
+                continue
+            raw = str(config.pop(old)).strip()
+            # Only fill the new key when it is unset: an explicit new value is
+            # the operator's latest word on the subject and must win.
+            if raw and not str(config.get(new, "")).strip():
+                config[new] = convert(raw)
+            changed = True
+        rs.config = config
+    if changed:
+        logger.info("Translated renamed strategy config keys: %s", ", ".join(RENAMED_CONFIG_KEYS))
+    return store
+
+
 def normalize_active(store: StrategyStore) -> StrategyStore:
     """Ensure ``active`` points at a LIVE strategy (or None when none left)."""
     if not store.strategies:
@@ -241,7 +273,7 @@ def load_store(settings: Settings) -> StrategyStore:
             logger.info("Migrated legacy rules file to strategy store format")
         else:
             return StrategyStore()
-        return normalize_active(store)
+        return normalize_active(migrate_config_keys(store))
     except (json.JSONDecodeError, ValidationError) as exc:
         logger.warning("Rules file %s is invalid — starting empty: %s", path, exc)
         return StrategyStore()
