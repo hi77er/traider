@@ -14,12 +14,51 @@ daily. That is the difference between "runs unattended in the cloud" and "needs
 a human with a phone every morning".
 
 ## When to Use
-- Implementing `src/execution/alpaca_executor.py` and `retry.py`
+- Changing `src/execution/alpaca_executor.py`, `alpaca_client.py` or `retry.py`
+  (all built — see "What exists" below)
 - Resolving which environment (paper/live) an order belongs to
 - Attaching a stop-loss and take-profit to an entry (bracket / OCO)
 - Polling order status, handling partial fills, cancelling
 - Mocking Alpaca in tests so CI never contacts a real account
 - Debugging a refused order or a refused *configuration*
+
+## What exists (and what does not)
+
+The order path is IMPLEMENTED and tested (`tests/test_execution_orders.py`, 35 tests,
+no network). The layering, outermost last:
+
+| Module | Answers |
+|---|---|
+| `config.py` | Where would an order go? `resolve_execution_target` raises rather than downgrading |
+| `credentials.py` | Are the keys working, or merely present? Discovered by asking Alpaca |
+| `alpaca_client.py` | The API in URLs and status codes; `calls` records every request (tests assert on it) |
+| `retry.py` | May this be tried again? Only a failure that never reached a verdict |
+| `alpaca_executor.py` | `place_order`, `poll`, `cancel`, `cancel_open_orders`, `last_fill_price`, `flatten` |
+| `alpaca_broker.py` | `AlpacaBroker` — the `src/strategy/broker.py` protocol |
+
+NOT built: anything that STARTS a tick. No scheduler, no route, no startup hook calls
+`LiveDriver` or `AlpacaBroker`, so no order can leave the process today. `src/scheduler/`
+is an empty package and `SCHEDULER_ENABLED` is read by nothing. That wiring is the next
+step; do not assume a running bot exists because this layer is complete.
+
+Behaviour worth not re-litigating (each is asserted by a test):
+- Refusals happen BEFORE anything is sent (`OrderRefused`), from four checks: config,
+  the trading switch, the numbers, and an optional risk validator. `submit()` on the
+  broker never raises — it returns a REJECTED `Fill`, because the driver records.
+- Brackets: `order_class: "bracket"` with both legs, in the entry's own call. A
+  fractional quantity with exits is REFUSED (Alpaca takes fractional orders DAY-only,
+  so the entry would be naked).
+- A retry reuses its `client_order_id` (Alpaca deduplicates on it). 401/403/422 are not
+  retried; transport failures, 429 and 5xx are.
+- A timeout is reported (`timed_out`) and never re-sent. An unfilled order is `NO_FILL`,
+  never a fill at a guessed price.
+- `flatten()` cancels the symbol's resting orders BEFORE closing — a surviving stop
+  after a close opens the OPPOSITE position.
+- If the resting bracket already flattened the position, the exit is reported FILLED at
+  the price read back from `GET /v2/orders?status=closed` (never re-derived locally).
+- `position()` DOES raise if the broker cannot be asked. An unreachable broker that
+  answers "flat" would tell the driver it is safe to open a position it may already
+  hold.
 
 ## Project Facts
 - **Resolution lives in `src/execution/config.py`** and nowhere else. It returns

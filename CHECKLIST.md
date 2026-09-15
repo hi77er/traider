@@ -200,20 +200,46 @@ Track your progress through all 41 tasks across 9 phases.
         its stop; the live driver booked trades undated so its breaker could never trip
   - [x] Verified on real data: NVDA 1h — 28 trades, signals 3386/88/41, Sharpe 0.709,
         profit factor 1.761 — unchanged from before the extraction
-  - [ ] `AlpacaBroker` (the one piece still missing, deliberately written AFTER the
-        equivalence test so the seam is proven before it can spend money)
-- [ ] **execution-alpaca** (25) — Implement the Alpaca executor (execution only)
-  - [ ] src/execution/alpaca_executor.py — now a `Broker` implementation
-        (`src/strategy/broker.py`); the driver, the state machine and the parity test are
-        already in place, so this only has to translate an `Intent` into an order and
-        report the fill back
-  - [ ] AlpacaExecutor class
-  - [ ] place_order(instrument, side, quantity, stop_loss, take_profit)
-  - [ ] Uses the Alpaca Trading API (bracket / OCO orders for the exits)
-  - [ ] Resolve paper vs live via src/execution/config.py — never re-derive it
-  - [ ] Refuse to send anything while `trading_service.is_trading_on()` is False
-  - [ ] Poll for confirmation
-  - [ ] Data for decisions comes from OpenBB, not Alpaca
+  - [x] `AlpacaBroker` — built in `src/execution/alpaca_broker.py` (task 25)
+- [x] **execution-alpaca** (25) — Implement the Alpaca executor (execution only)  ✅ COMPLETE
+  - [x] `src/execution/alpaca_client.py` — the API as URLs and status codes: auth
+        headers on every call, timeout, `X-Request-ID` captured, 404 on a position read
+        as "flat" rather than as an error, and what is retryable decided where the
+        status code is known
+  - [x] `src/execution/retry.py` — `execute_with_retry`: exponential backoff that
+        retries ONLY a failure which never reached a verdict (transport errors, 429,
+        5xx) and never a revoked key or a bad order
+  - [x] `src/execution/alpaca_executor.py` — `place_order(instrument, side, quantity,
+        stop_loss_price, take_profit_price)`, plus `poll`, `cancel`,
+        `cancel_open_orders`, `last_fill_price`, `flatten`; refuses on the trading
+        switch, on impossible numbers and on a risk veto BEFORE anything is sent
+  - [x] Stops/takes attached as Alpaca **bracket** orders in the SAME call as the entry
+        (hand-rolled exits are the classic way to leave a position naked or a stop
+        resting to open the opposite position); a fractional size with exits is refused
+        rather than sent unprotected, since Alpaca takes fractional orders DAY-only
+  - [x] `src/execution/alpaca_broker.py` — `AlpacaBroker` implements the
+        `src/strategy/broker.py` `Broker` protocol, so `LiveDriver` can drive it.
+        Sizing comes from the intent's weight (whole shares), the bracket from the
+        intent's own levels; a broker failure is a REJECTED `Fill`, never a raise, so a
+        tick cannot die half-updated
+  - [x] A resting bracket that already closed the position is reported as a FILL at the
+        broker's own price (read back from order history) — never re-derived locally
+  - [x] Paper and live are the same code path: `EXECUTION_ENV` picks the base URL and
+        key pair in `config.resolve_execution_target`, and the label is printed on every
+        order line because the portals look identical
+  - [x] `tests/test_execution_orders.py` (35) — nothing touches the network: a stubbed
+        session asserts the auth headers, that a refused order sends NOTHING, that one
+        bracket order goes out instead of three, that a 403/422 is not retried while a
+        503 is, that a timeout is reported and not re-sent, that a partial fill is
+        reported as it happens, and that only this package may know `/v2/orders`
+  - [ ] Wire a scheduler to `LiveDriver` + `AlpacaBroker` (nothing starts a tick yet,
+        so no order can leave the process today)
+  - [x] Resolve paper vs live via src/execution/config.py — never re-derive it
+  - [x] Refuse to send anything while `trading_service.is_trading_on()` is False
+        (checked in `AlpacaExecutor._check_guard`, and it fails CLOSED: if the switch
+        cannot be read, no order is sent)
+  - [x] Poll for confirmation
+  - [x] Data for decisions comes from OpenBB, not Alpaca
 
 - [x] **trading-switch** — Trading ON/OFF + the configuration lock (done)
   - [x] `data/trading.json` (runtime state, gitignored), always starts OFF

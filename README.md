@@ -346,6 +346,42 @@ handed too few bars evaluates NaN indicators and would emit `HOLD` forever,
 which looks exactly like a quiet market. `LiveDriver.check_history` refuses to
 decide instead, loudly.
 
+## Order execution
+
+`src/execution` is the only part of TRAIDER that can move money, and it is layered so
+each question is answered in exactly one place:
+
+| Module | The question it answers |
+| --- | --- |
+| `config.py` | *Where* would an order go — paper or live? Resolved once; raises rather than downgrading |
+| `credentials.py` | Are the keys **working**, or merely present? Asked of Alpaca, never inferred from the file |
+| `alpaca_client.py` | The API in URLs and status codes: auth headers, timeouts, what is retryable |
+| `retry.py` | May this call be tried again? Only a failure that never reached a verdict |
+| `alpaca_executor.py` | Place ONE order: refuse before sending, bracket the exits, poll, report |
+| `alpaca_broker.py` | The strategy's `Broker` seam: an `Intent` in, a `Fill` out |
+
+Five decisions worth knowing about:
+
+- **Refuse before sending, never after.** Four checks run first — the configuration,
+  the trading switch, the numbers, and the risk layer — and all four raise
+  `OrderRefused` with nothing sent. An order that is never sent is the only kind that
+  cannot be wrong.
+- **The exits ride on the entry.** A stop and a take-profit go out as Alpaca's
+  `bracket` order class in the *same* call. Sending them afterwards is the classic way
+  to leave a position naked, or to leave a filled take-profit's twin stop resting to
+  open the opposite position.
+- **A retry reuses its `client_order_id`.** A submit that times out may have been
+  received; Alpaca deduplicates on that id, so a retry cannot double-fill. And only
+  retryable failures are retried — a revoked key (401/403) or a bad order (4xx) is
+  reported instead.
+- **A timeout is reported, not retried, and a live order is never mistaken for a
+  fill.** An order that has not filled comes back as `NO_FILL` with its real status,
+  so a run never books a price the broker did not give.
+- **An exit may have already happened.** In a live run the resting bracket can close a
+  position before the strategy's next bar notices. The broker then reports it as
+  closed, at the price read back from its own order history, and cancels any surviving
+  leg — never re-deriving the price locally.
+
 ## Documentation
 
 | File | What it is |
@@ -360,9 +396,11 @@ decide instead, loudly.
 
 ## Safety
 
-- **Nothing here places an order yet.** The broker, credentials, the
-  per-strategy paper/live switch and the trading on/off lock are configured and
-  enforced, but the executor itself is still to be written.
+- **The order path exists, and nothing calls it yet.** `src/execution` can place a
+  bracket order in either environment, and the live driver
+  (`src/strategy/live.py`) is written against the same broker seam — but no
+  scheduler starts it, so orders only go out if something explicitly runs a tick.
+  Turning trading on is the gate that must be open first, in both environments.
 - **Trading starts OFF, and going live is refused rather than downgraded.**
   Turning trading on is refused outright while the selected Alpaca account has no
   API keys for it (otherwise "trading on" would be a lie), and it is confirmed on
