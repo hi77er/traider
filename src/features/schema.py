@@ -51,6 +51,41 @@ def allowed_series(settings: Settings) -> List[str]:
     return out
 
 
+def longest_window(settings: Settings) -> int:
+    """The longest bar window any ENABLED indicator looks back over (0 if none).
+
+    Used to derive how much history a decision needs: an EMA(50) is a number only
+    after 50 bars, so a live run handed fewer bars would evaluate ``NaN`` and emit HOLD
+    — which looks exactly like a quiet market. See ``src/data/live.required_bars``.
+    """
+    windows: List[int] = []
+    if settings.feature_sma_enabled:
+        windows.extend(int(p) for p in settings.sma_periods)
+    if settings.feature_ema_enabled:
+        windows.extend(int(p) for p in settings.ema_periods)
+    if settings.feature_macd_enabled:
+        # The signal line is an EMA of the MACD line, which is itself an EMA spread:
+        # slow + signal is the honest bound.
+        windows.append(
+            int(settings.features_macd_slow_period) + int(settings.features_macd_signal_period)
+        )
+    if settings.feature_rsi_enabled:
+        windows.append(int(settings.features_rsi_period) + 1)
+    if settings.feature_atr_enabled:
+        windows.append(int(settings.features_atr_period) + 1)
+    if settings.feature_bollinger_enabled:
+        windows.append(int(settings.features_bollinger_period))
+    if settings.feature_momentum_enabled:
+        windows.extend(int(p) + 1 for p in settings.momentum_periods)
+    if settings.feature_volatility_enabled:
+        windows.append(int(settings.features_volatility_period) + 1)
+    if settings.feature_vwap_enabled:
+        windows.append(int(settings.features_vwap_period))
+    if settings.feature_volume_enabled:
+        windows.append(int(settings.features_volume_period))
+    return max(windows) if windows else 0
+
+
 def active_feature_columns(settings: Settings) -> List[str]:
     """Ordered feature columns for the enabled indicators in the config."""
     cols: List[str] = []

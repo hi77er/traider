@@ -178,8 +178,35 @@ Track your progress through all 41 tasks across 9 phases.
 > different entries) before trusting a Gate result.
 
 ### Execution
+
+- [x] **strategy-shared-engine** (24c) — one implementation, two drivers  ✅ COMPLETE
+  - [x] `src/strategy/engine.py` — every trading rule (entry, exit, stop/take levels,
+        sizing, costs, breaker) as a pure state machine: `step(state, bar, act)` returns
+        `Intent`s and holds no I/O, no clock, no fetches
+  - [x] `src/strategy/state.py` — position + breaker + last-decided bar, serialised so a
+        restart cannot re-fire a decision
+  - [x] `src/strategy/broker.py` — the ONLY decide→act seam (`SimulatedBroker` fills at
+        the next open; `AlpacaBroker` to be written behind the same protocol)
+  - [x] `src/strategy/live.py` — the live driver: closed candles in, features evaluated,
+        engine walked from where it left off, intents submitted, fills booked
+  - [x] `src/backtest/risk_sim.py` rewritten as an adapter onto the same engine;
+        `simulate_frame` / `position_intervals` delegate to it too (raw mode)
+  - [x] Live data window DERIVED from the feature config (`required_bars`), not guessed —
+        a short window raises instead of silently emitting HOLD forever
+  - [x] `tests/test_strategy_parity.py` — both drivers over one fixture must agree on
+        every entry/exit index, price, reason, skipped trade, broker disagreement and
+        breaker halt, and a monkeypatched `step` proves BOTH paths use the shared machine
+  - [x] Two real bugs found by that test: a held position was never re-checked against
+        its stop; the live driver booked trades undated so its breaker could never trip
+  - [x] Verified on real data: NVDA 1h — 28 trades, signals 3386/88/41, Sharpe 0.709,
+        profit factor 1.761 — unchanged from before the extraction
+  - [ ] `AlpacaBroker` (the one piece still missing, deliberately written AFTER the
+        equivalence test so the seam is proven before it can spend money)
 - [ ] **execution-alpaca** (25) — Implement the Alpaca executor (execution only)
-  - [ ] src/execution/alpaca_executor.py
+  - [ ] src/execution/alpaca_executor.py — now a `Broker` implementation
+        (`src/strategy/broker.py`); the driver, the state machine and the parity test are
+        already in place, so this only has to translate an `Intent` into an order and
+        report the fill back
   - [ ] AlpacaExecutor class
   - [ ] place_order(instrument, side, quantity, stop_loss, take_profit)
   - [ ] Uses the Alpaca Trading API (bracket / OCO orders for the exits)

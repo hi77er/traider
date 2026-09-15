@@ -10,7 +10,8 @@ the executor knows *how much* to trade, and a ``checks`` map naming each test
 that ran — that is what makes "why was this rejected?" answerable afterwards.
 Every outcome (approve or veto) is logged.
 
-The same validator is used by the backtest (``src/backtest/risk_sim.py``), which
+The same validator is used by the backtest (through ``src/strategy/engine.py``,
+the single implementation both runs share), which
 is the point of task 24b: the Gate must measure the system that will trade.
 """
 

@@ -16,8 +16,9 @@ and reports Gate metrics. Design constraints:
 - **Costs**: slippage (price %) + commission (fraction of notional) are charged
   on each fill.
 - **Same risk layer as live**: entries are sized, stopped, and halted by the
-  same rules the live bot applies (``src/backtest/risk_sim.py``, setting
-  ``APPLY_RISK_LAYER``). Set it to False to get the raw strategy numbers.
+  same rules the live bot applies — one shared engine, ``src/strategy/engine.py``,
+  driven from here through the ``risk_sim`` adapter (setting ``APPLY_RISK_LAYER``).
+  Set it to False to get the raw strategy numbers.
 - Mid-day bars are marked open-to-open between fills; an open position at the
   end of the dataset is force-closed at the final close.
 - **Full fidelity**: the equity curve, the buy & hold benchmark and the trade
@@ -32,7 +33,7 @@ import hashlib
 import json
 import logging
 import re
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 import pandas as pd
 
@@ -83,82 +84,36 @@ def simulate_frame(
     if n < 2:
         return [], [], 0, []
 
-    cost = slippage + commission  # fraction charged per fill (both sides)
-    intervals = position_intervals(signals, n, allow_short=allow_short)
+    run = _raw_run(opens, closes, signals, n, allow_short=allow_short, slippage=slippage, commission=commission)
+    trades = [
+        {key: leg.get(key) for key in ("entry_price", "exit_price", "ret", "bars", "direction")}
+        for leg in run.trades
+    ]
+    return run.returns, trades, sum(run.active), run.active
 
-    entry_map: Dict[int, bool] = {}
-    exit_cost_map: Dict[int, bool] = {}
-    forced_map: Dict[int, bool] = {}
-    leg_dir: Dict[int, str] = {}
-    active = [False] * max(n - 1, 0)
-    for e, x, d in intervals:
-        hi = x if x < n else n - 1  # last leg index (exclusive bound)
-        for k in range(e, hi):
-            active[k] = True
-            leg_dir[k] = d
-            if k == e:
-                entry_map[k] = True
-            if k == hi - 1:
-                if x == n:
-                    forced_map[k] = True
-                else:
-                    exit_cost_map[k] = True
 
-    returns: List[float] = []
-    for k in range(n - 1):
-        if not active[k]:
-            returns.append(0.0)
-            continue
-        if leg_dir.get(k) == "short":
-            # Short leg: you sold at the (cost-reduced) entry price and buy
-            # back at the (cost-raised) exit price, so a falling price profits.
-            start = opens[k] * (1.0 - cost) if entry_map.get(k) else opens[k]
-            if forced_map.get(k):
-                end = closes[n - 1] * (1.0 + cost)
-            else:
-                end = opens[k + 1] * (1.0 + cost) if exit_cost_map.get(k) else opens[k + 1]
-            returns.append(start / end - 1.0)
-        else:
-            den = opens[k] * (1.0 + cost) if entry_map.get(k) else opens[k]
-            if forced_map.get(k):
-                num = closes[n - 1] * (1.0 - cost)
-            else:
-                num = opens[k + 1] * (1.0 - cost) if exit_cost_map.get(k) else opens[k + 1]
-            returns.append(num / den - 1.0)
+def _raw_run(opens, closes, signals, n: int, *, allow_short=False, slippage=0.0, commission=0.0):
+    """Drive the shared strategy machine with the risk layer OFF.
 
-    # Trade log (entry open -> exit open/close, after costs). A short's
-    # ``ret`` is entry_proceeds / exit_payment - 1, so winning shorts are > 0.
-    trades: List[dict] = []
-    for e, x, d in intervals:
-        if d == "short":
-            entry_px = opens[e] * (1.0 - cost)
-            if x == n:
-                exit_px = closes[n - 1] * (1.0 + cost)
-                bars = n - 1 - e
-            else:
-                exit_px = opens[x] * (1.0 + cost)
-                bars = x - e
-            ret = entry_px / exit_px - 1.0
-        else:
-            entry_px = opens[e] * (1.0 + cost)
-            if x == n:
-                exit_px = closes[n - 1] * (1.0 - cost)
-                bars = n - 1 - e
-            else:
-                exit_px = opens[x] * (1.0 - cost)
-                bars = x - e
-            ret = exit_px / entry_px - 1.0
-        trades.append(
-            {
-                "entry_price": round(float(entry_px), 4),
-                "exit_price": round(float(exit_px), 4),
-                "ret": float(ret),
-                "bars": int(bars),
-                "direction": d,
-            }
-        )
-
-    return returns, trades, int(sum(active)), active
+    ``APPLY_RISK_LAYER=False`` is exactly this path, so the raw replay that
+    :func:`simulate_frame` and :func:`position_intervals` describe is produced by
+    ``src/strategy`` rather than by a second copy of the rules living here. Callers
+    that only need the fill bars pass dummy prices (see ``position_intervals``).
+    """
+    config = risk_sim.RiskConfig(enabled=False, allow_short=allow_short)
+    return risk_sim.apply_risk_layer(
+        [str(s) for s in signals],
+        list(opens),
+        None,
+        None,
+        list(closes),
+        n,
+        config=config,
+        allow_short=allow_short,
+        slippage=slippage,
+        commission=commission,
+        days=None,
+    )
 
 
 # Keys that look like credentials are dropped from the settings snapshot so a
@@ -475,28 +430,29 @@ def position_intervals(sig, n: int, allow_short: bool = False) -> List[tuple]:
     dataset and is force-closed at the final close. A single position is open
     at any time: BUY opens a long when flat and closes a short; SELL closes a
     long when long and — only when ``allow_short`` — opens a short when flat.
+
+    Derived from the shared strategy machine (raw mode: no sizing, stops or
+    breaker), so the "what opens and closes a position" rule has one home. Dummy
+    prices are used because in raw mode nothing but the signals can open or close a
+    leg; only the fill bars are asked for here.
     """
-    intervals: List[tuple] = []
-    entry: Optional[int] = None
-    short: bool = False
-    for s in range(n - 1):
-        act = sig[s]
-        if entry is None:
-            if act == "BUY":
-                entry, short = s + 1, False
-            elif act == "SELL" and allow_short:
-                entry, short = s + 1, True
-        elif short:
-            if act == "BUY":  # buy-to-cover closes the short
-                intervals.append((entry, s + 1, "short"))
-                entry = None
-        else:  # long is open
-            if act == "SELL":  # sell closes the long
-                intervals.append((entry, s + 1, "long"))
-                entry = None
-    if entry is not None:
-        intervals.append((entry, n, "short" if short else "long"))
-    return intervals
+    if n < 2:
+        return []
+    flat = [1.0] * n
+    run = _raw_run(flat, flat, sig, n, allow_short=allow_short)
+    out: List[tuple] = []
+    for leg in run.legs:
+        if leg.get("skipped"):
+            continue
+        still_open = leg.get("reason") == "forced"
+        out.append(
+            (
+                int(leg["entry_idx"]),
+                n if still_open else int(leg["exit_idx"]),
+                "short" if leg.get("direction") == "short" else "long",
+            )
+        )
+    return out
 
 
 def intervals_for(sig, n: int, allow_short: bool = False) -> List[tuple]:

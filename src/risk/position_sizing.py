@@ -17,7 +17,8 @@ Two modes (``POSITION_SIZING_MODE``):
   gets a bigger position and a wild one a smaller position for the same risk.
 
 **The backtest calls this same code**, so a simulated trade is sized exactly like
-the live one (see ``src/backtest/risk_sim.py``).
+the live one (see ``src/strategy/engine.py``, the single implementation both
+runs share).
 """
 
 from __future__ import annotations

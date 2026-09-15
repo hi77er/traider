@@ -285,6 +285,67 @@ The Gate thresholds (`GATE_MIN_SHARPE`, `GATE_MAX_DRAWDOWN_PERCENT`,
 `GATE_MIN_WIN_RATE_PERCENT`, `GATE_MAX_WEEKLY_LOSS_PERCENT`) are part of the
 configuration, not the code - a strategy is judged against the bar you set.
 
+## One strategy, two drivers
+
+The rules that decide a trade live in exactly **one** place, whether the bar is
+being replayed from the past or arriving from the market:
+
+```mermaid
+flowchart LR
+    D["OpenBB candles"] --> F["FeatureEngineer<br/>+ rule set"]
+    F -->|Signal per bar| E["StrategyEngine<br/>src/strategy/engine.py"]
+    S["StrategyState<br/>position · breaker · last bar"] <-->|step(state, bar, act)| E
+    E -->|Intent| B{{"Broker seam<br/>src/strategy/broker.py"}}
+    B --> SB["SimulatedBroker<br/>backtest"]
+    B --> AB["AlpacaBroker<br/>paper / live (to be written)"]
+    SB --> L["Ledger<br/>returns · legs · stats"]
+    AB --> L
+```
+
+| Module | Role |
+| --- | --- |
+| `src/strategy/engine.py` | every trading rule: entry, exit, stop/take levels, sizing, costs, the circuit breaker. Pure — it reads bars and an action, and returns an `Intent`; it never fetches, sleeps or persists |
+| `src/strategy/state.py` | what a run must remember across bars (position, breaker, last decided bar) and how it survives a restart |
+| `src/strategy/broker.py` | the only seam between "decide" and "act": `SimulatedBroker` fills at the next open, `AlpacaBroker` will place real orders |
+| `src/strategy/live.py` | the live driver: feed it closed candles, it evaluates features, walks the engine from where it left off, submits intents and books the fills |
+| `src/backtest/risk_sim.py` | a translation layer only — it turns the backtest's arrays into `Bar`s and drives the same engine. It holds no decision of its own, and the raw replay (`simulate_frame`, `position_intervals`) now goes through it with the risk layer off |
+| `tests/test_strategy_parity.py` | the guarantee itself (below) |
+
+**Neither driver may contain a trading rule.** A driver's job is to supply bars
+and to carry out intents. If a rule ever appears in one of them, the backtest
+stops being evidence about the live run, which is the entire point of this
+layout.
+
+### How the guarantee is checked
+
+`tests/test_strategy_parity.py` runs both drivers over the same fixture and
+demands they agree bar by bar: the same entry and exit indices, the same fill
+prices, the same reasons, the same skipped trades, the same protected window, the
+same refusal when the broker disagrees with local state, the same breaker halt.
+It also asserts, by monkeypatching `StrategyEngine.step`, that **both** paths
+actually call the shared machine — a driver that quietly grew its own logic
+fails the test rather than drifting for a year. It found two real bugs when it
+was written: a held position was never checked against its stop (the entry path
+returned early), and the live driver booked trades without a date, so its
+circuit breaker could never trip.
+
+The one deliberate asymmetry is the **fill price**: a backtest fills at the next
+bar's open and can assume no slippage beyond the configured cost, while a live
+order fills where the market fills. That is why the data flows through a broker
+object rather than being hard-coded, and why the live driver *adopts* the real
+fill price and re-derives the stop levels from it, leaving the recorded
+"expected" price intact for comparison.
+
+### One consequence worth knowing
+
+A live run must be handed enough history to compute its features. The number of
+bars is **derived from the feature configuration** (`required_bars` in
+`src/data/live.py`: the configured `FEATURES_MIN_LOOKBACK` or the longest enabled
+indicator window, plus one bar of context for cross rules), never guessed — a run
+handed too few bars evaluates NaN indicators and would emit `HOLD` forever,
+which looks exactly like a quiet market. `LiveDriver.check_history` refuses to
+decide instead, loudly.
+
 ## Documentation
 
 | File | What it is |
