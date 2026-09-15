@@ -685,6 +685,39 @@ def test_the_account_payload_exposes_the_verdicts():
     assert set(schema) >= {"file", "file_exists", "groups", "credentials"}
 
 
+def test_a_saved_pair_is_marked_as_set_in_the_form_payload(tmp_path, monkeypatch):
+    """"Is a credential saved?" — the form's answer, and the one the reported bug was
+    about: the pair was on disk and the field still looked unset."""
+    from src.config import account as account_mod
+    from src.config.effective import invalidate
+    from src.web.services import config_service
+
+    monkeypatch.setattr(account_mod, "account_file_path", lambda s: tmp_path / "account.json")
+    monkeypatch.setattr(credentials, "state_path", lambda s: tmp_path / "credential_checks.json")
+    account_mod.save_account(Settings(_env_file=None), {"ALPACA_PAPER_API_KEY": "PK-paper", "ALPACA_PAPER_API_SECRET": "PS-paper"})
+    invalidate()
+
+    fields = {f["key"]: f for f in config_service.get_account_schema()["groups"][0]["fields"]}
+    assert fields["ALPACA_PAPER_API_KEY"]["set"] is True
+    assert fields["ALPACA_PAPER_API_KEY"]["value"] == config_service.MASK, "the mask is the value"
+    assert fields["ALPACA_LIVE_API_KEY"]["set"] is False
+    assert fields["ALPACA_LIVE_API_KEY"]["value"] == ""
+
+
+def test_a_pair_supplied_by_env_is_not_reported_as_unset(tmp_path):
+    """"Set" means a value is in force, not "this key is in the account file". A pair
+    from .env is a credential the bot really uses, and calling it unset told the
+    operator their configuration had gone missing."""
+    from src.web.services import config_service
+
+    groups = config_service.account_sections(_s(tmp_path, **PAPER))
+    fields = {f["key"]: f for f in groups[0]["fields"]}
+    assert fields["ALPACA_PAPER_API_KEY"]["set"] is True
+    assert fields["ALPACA_PAPER_API_KEY"]["value"] == config_service.MASK
+    assert fields["ALPACA_LIVE_API_KEY"]["set"] is False
+    assert "PK-paper" not in json.dumps(fields)
+
+
 def test_the_popup_reads_the_pair_the_bot_would_actually_use(tmp_path, monkeypatch):
     """The verdict must be about the STORED pair, not about ``.env`` alone.
 

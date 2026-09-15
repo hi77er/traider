@@ -257,6 +257,10 @@ copied from the wrong account page, revoked, or paired with the other environmen
 secret. Nothing local can tell, so the bot asks Alpaca (`GET /v2/account`) and
 remembers the answer:
 
+- A saved secret is shown as `********` **in the box itself**, so "is there a pair
+  here?" is visible at a glance on reload — an empty box with a faint grey hint read
+  as "nothing was saved" even for a pair that was in force. Submitting the mask back
+  means "unchanged".
 - **🏦 Account Settings** has a **Validate** button per pair. It checks **only what is
   in the boxes** - so a pair can be tested before it is saved - and reports one of
   three things: `No PAPER credentials found to validate — enter the API key and its

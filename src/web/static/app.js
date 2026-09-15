@@ -724,7 +724,14 @@ function fieldInput(f, prefix) {
   } else if (f.sensitive) {
     control = document.createElement("input");
     control.type = "password";
-    control.placeholder = f.set ? f.value : "(unset)";
+    // A stored secret shows the MASK as the field's value, not as a faint grey
+    // placeholder: "is a credential saved?" has to be answerable at a glance, and an
+    // empty box reads as "nothing was saved" even when the pair is on file and was
+    // just verified. The mask is exactly what the server sent, and submitting it back
+    // means "unchanged" (the save path treats MASK and "" identically), so having it
+    // in the field changes no behaviour — only what the operator can see.
+    control.value = f.set ? String(f.value == null ? "" : f.value) : "";
+    control.placeholder = "(unset)";
   } else {
     control = document.createElement("input");
     control.type = f.type === "int" || f.type === "float" ? "number" : "text";

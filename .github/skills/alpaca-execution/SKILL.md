@@ -72,7 +72,9 @@ cached, a failure is not (it may be the network). Verification is the Account
 popup's **Validate** button (`POST /api/v1/account/verify`), which checks the values
 submitted from the form — unsaved pairs included, and ONLY those: an empty box is
 answered as "nothing to validate" rather than falling back to the stored pair, so a
-verdict is never reported about a credential that is not on screen. (A blank field
+verdict is never reported about a credential that is not on screen. The mask is the
+field's VALUE (not a placeholder), so a saved pair is visibly saved on reload; it
+round-trips as "unchanged" on every write path. (A blank field
 still means "unchanged" on SAVE.) A pair that is being added or changed is checked
 as the form is saved — and if the broker REJECTS it (401/403) the pair is left out
 of the write, because the account file must not claim a credential Alpaca has

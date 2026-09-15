@@ -798,7 +798,11 @@ def account_sections(settings: Optional[Settings] = None) -> List[dict]:
                 # file; masking only the "stored" case left both of those open.
                 "value": _mask_secret(effective, sensitive),
                 "default_value": _mask_secret(shown_value, sensitive),
-                "set": raw is not None,
+                # "A secret is in force" — not merely "this key appears in the account
+                # file". A pair can arrive from .env as well, and calling that unset made
+                # the form say "(unset)" for a credential the bot was really using. The
+                # flag is a boolean, so it can never carry the secret itself.
+                "set": bool(effective),
                 "sensitive": sensitive,
                 "readonly": key in _DERIVED_ACCOUNT_KEYS,
                 "readonly_note": (

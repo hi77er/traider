@@ -126,7 +126,11 @@ The portal is the whole interface:
 - **Strategy Configuration / Rules / Risk Management** - three collapsible
   panels; the risk panel leads with the two master switches
 - **Account Settings** (🏦 header popup) - the Alpaca key pairs, the single data
-  folder, backtest defaults and cloud/state storage; shared by all strategies. Each
+  folder, backtest defaults and cloud/state storage; shared by all strategies. A
+  stored secret is shown as `********` **in the box**, not as a grey hint behind an
+  empty one, so "is a pair saved?" is answerable at a glance — an empty box with a
+  faint placeholder read as "nothing was saved" even for a pair that had just been
+  verified. Submitting the mask back means "unchanged", on every write path. Each
   key pair has a **Validate** button, which checks **only what the boxes contain**
   (untyped-but-unsaved included) - an empty form is answered with "no credentials
   found to validate" rather than quietly checking the stored pair, so the reply is
