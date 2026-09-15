@@ -59,16 +59,24 @@ config field, which meant one saved setting could arm real trading — wrong sha
 for a gate whose whole job is to make one action deliberate.
 
 **Keys must be VERIFIED, not merely present.** `src/execution/credentials.py` proves
-a pair works by calling `GET /v2/account` with it, and cache the verdict in
+a pair works by calling `GET /v2/account` with it, and caches the verdict in
 `data/credential_checks.json` (a hash of the key id, never the key).
 `trading_service.turn_on` refuses while the environment in play has no passing
 verdict, so the executor can rely on "trading ON" meaning the key actually
-authenticates. A verdict belongs to the key that earned it: swapping keys expires
-it. A pass is cached, a failure is not (it may be the network). Verification is the
-Account popup's **Validate** button (`POST /api/v1/account/verify`), and a newly
-saved pair is checked as the form is saved. If you change how credentials are read,
-keep `credentials.keys_for()` the single place that maps an environment to its key
-pair — the check and the executor must never disagree about which key is in play.
+authenticates. Where the check happens depends on what is at stake: **paper is
+verified inside `turn_on`** (nothing to do beforehand, and a pass on file is reused
+so it costs one call ever), while **live requires a verdict obtained BEFORE the
+click** — arming real orders must not be the moment a bad key is discovered. A
+verdict belongs to the key that earned it: swapping keys expires it. A pass is
+cached, a failure is not (it may be the network). Verification is the Account
+popup's **Validate** button (`POST /api/v1/account/verify`), which checks the values
+submitted from the form — unsaved pairs included, with blank/masked meaning
+"unchanged" like a save — and a newly saved pair is checked as the form is saved.
+`check_for()` reports `has_verdict` separately from `verified`, which is what the UI
+uses to decide whether to show anything at all. If you change how credentials are
+read, keep `credentials.keys_for()` the single place that maps an environment to its
+key pair — the check and the executor must never disagree about which key is in
+play.
 
 **The trading lock.** While `data/trading.json` says `on`, the server refuses
 every configuration write with HTTP 409 (`require_trading_off`): settings,

@@ -437,9 +437,10 @@ The unfinished Phase 2 & 3 work lives here so Risk & Execution can proceed first
 ### Go Live
 - [ ] **live-go-live** (39) — Switch to live trading
   - [ ] Add the Alpaca LIVE key pair in Account Settings (paper keys are not accepted for live)
-  - [ ] Press **Validate live credentials** — the badge must read `✓ verified · <account>`. Keys that were never checked block the switch
+  - [ ] Press **Validate live credentials** — the badge must read `✓ verified · <account>`. A live switch that was never verified refuses to arm, and says so
   - [ ] Switch the header dropdown to `LIVE — REAL ORDERS`: the label must carry no `— ⚠ no keys` / `⚠ not valid` marker, and its dot turns red and blinks
   - [ ] Confirm the config lock is OFF (the switch is still `▶ Turn trading on`)
+  - [ ] (Optional preflight) Switch back to `PAPER` and turn trading on once: paper is verified by the switch itself, so a pass here proves the path end to end without arming real orders
   - [ ] Turn trading ON from the header switch and accept the confirmation prompt (asked for paper too)
   - [ ] Confirm the switch label flips to `⏹ Turn trading off`, its dot blinks, the Trading panel appears under the chart and the config/backtest buttons are disabled
   - [ ] Start with 1% of capital

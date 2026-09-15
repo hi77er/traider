@@ -434,7 +434,9 @@ button.chip-ind.active { border-color: var(--accent); color: var(--accent); back
 }
 .cred-badge.ok { color: #7fd1c1; border-color: rgba(38, 166, 154, 0.5); background: rgba(38, 166, 154, 0.1); }
 .cred-badge.bad { color: #ff8a80; border-color: rgba(239, 83, 80, 0.55); background: rgba(239, 83, 80, 0.12); }
-.cred-badge.none { color: var(--muted); }
+
+/* The popup's message area reports the outcome of a save or a validation. */
+#account-errors.ok { color: #7fd1c1; }
 
 /* ---------- Collapsible settings ---------- */
 .settings-head { cursor: pointer; user-select: none; }

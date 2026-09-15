@@ -729,12 +729,21 @@ def _is_sensitive(key: str) -> bool:
 
 # A key pair can only be proved to WORK by asking Alpaca (see
 # ``src/execution/credentials.py``), so the popup gets a Validate button and a
-# verdict line next to each pair. Attached to the SECRET — the last field of the
-# pair — so the control lands under the pair it checks, not between its halves.
-_VERIFY_ENV_BY_KEY: Dict[str, str] = {
-    "ALPACA_PAPER_API_SECRET": "paper",
-    "ALPACA_LIVE_API_SECRET": "live",
+# verdict next to each pair. Attached to the SECRET — the last field of the pair — so
+# the control lands under the pair it checks, and the spec carries BOTH field keys so
+# neither the client nor this module has to guess which two inputs make a pair.
+_VERIFY_PAIRS: Dict[str, Tuple[str, str]] = {
+    "paper": ("ALPACA_PAPER_API_KEY", "ALPACA_PAPER_API_SECRET"),
+    "live": ("ALPACA_LIVE_API_KEY", "ALPACA_LIVE_API_SECRET"),
 }
+
+
+def _verify_spec(key: str) -> Optional[dict]:
+    """The credential pair this field closes, if it closes one."""
+    for env, (key_key, secret_key) in _VERIFY_PAIRS.items():
+        if key == secret_key:
+            return {"env": env, "key_key": key_key, "secret_key": secret_key}
+    return None
 
 
 def _section_for(key: str) -> str:
@@ -800,7 +809,7 @@ def account_sections(settings: Optional[Settings] = None) -> List[dict]:
                 "hints": _field_hints(key, info),
                 # Set on the last field of a credential pair: the popup renders a
                 # Validate button + verdict for that environment there.
-                "verify_env": _VERIFY_ENV_BY_KEY.get(key),
+                "verify": _verify_spec(key),
             }
             field.update(_field_bounds(info))
             fields.append(field)
@@ -825,15 +834,25 @@ def get_account_schema() -> dict:
     }
 
 
-def verify_credentials(env: str) -> dict:
+def verify_credentials(env: str, key_id: Optional[str] = None, secret: Optional[str] = None) -> dict:
     """Check one environment's credentials against Alpaca, on demand.
 
-    The effective settings are used (not the raw account file) because a key can
-    also come from ``.env`` — what matters is the pair the bot would actually
-    trade with.
+    ``key_id``/``secret`` are the values currently in the form, so the Validate
+    button checks what the operator is looking at rather than only what has been
+    saved. A blank or masked box falls back to the stored value — the same rule the
+    save path uses — so validating after a save still works, and pressing Validate
+    with an empty form says so instead of silently checking nothing.
     """
     settings = get_effective_settings()
-    result = credentials_mod.verify(settings, env, force=True)
+    result = credentials_mod.verify(
+        settings,
+        env,
+        force=True,
+        # The mask is this layer's convention, not the checker's: a box showing
+        # "********" holds no value to check, it means "unchanged".
+        key_id=None if key_id in (None, "", MASK) else key_id,
+        secret=None if secret in (None, "", MASK) else secret,
+    )
     return {
         "ok": bool(result["ok"]),
         "message": result["message"],

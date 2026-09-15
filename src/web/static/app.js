@@ -754,10 +754,10 @@ function fieldInput(f, prefix) {
     wrap.appendChild(hint);
   }
   // A credential pair gets its verdict and a Validate button, placed by the schema
-  // (f.verify_env) rather than by a hard-coded key list.
-  if (f.verify_env) {
+  // (f.verify) rather than by a hard-coded key list.
+  if (f.verify) {
     const creds = (state.account && state.account.credentials) || {};
-    wrap.appendChild(credentialRow(f.verify_env, creds[f.verify_env]));
+    wrap.appendChild(credentialRow(f.verify, creds[f.verify.env]));
   }
   return wrap;
 }
@@ -765,86 +765,119 @@ function fieldInput(f, prefix) {
 /* ---------- Alpaca credential verification ----------
    Having a key pair configured is not the same as having one that WORKS: keys get
    copied from the wrong account page, revoked, or paired with the other
-   environment's secret. Nothing local can tell, so the popup shows the verdict and
-   offers to ask Alpaca — and the master switch refuses to start trading on an
-   environment that has not passed. */
+   environment's secret. Nothing local can tell, so the popup offers to ask Alpaca
+   and reports what it said — and turning trading on is gated on the answer.
+
+   The badge reports a VERDICT and nothing else: no verdict about the pair in play
+   means no badge at all, because "not checked" is not news and a label sitting there
+   before anyone has asked is just noise. */
 function credWhen(iso) {
   if (!iso) return "";
   const d = new Date(iso);
   return isNaN(d.getTime()) ? "" : `${d.toISOString().slice(11, 16)} UTC`;
 }
 
-function credentialRow(env, cred) {
+function credentialRow(spec, cred) {
   const row = document.createElement("div");
   row.className = "cred-row";
-  row.dataset.env = env;
+  row.dataset.env = spec.env;
   const badge = document.createElement("span");
-  badge.id = "cred-badge-" + env;
+  badge.id = "cred-badge-" + spec.env;
   row.appendChild(badge);
   applyCredentialBadge(badge, cred || {});
   const btn = document.createElement("button");
   btn.type = "button";
-  btn.id = "cred-verify-" + env;
+  btn.id = "cred-verify-" + spec.env;
   btn.className = "ghost small";
-  btn.textContent = `Validate ${env} credentials`;
-  btn.title = `Ask Alpaca whether the ${env} key pair works`;
-  btn.onclick = () => validateCredentials(env, btn);
+  btn.textContent = `Validate ${spec.env} credentials`;
+  btn.title = `Ask Alpaca whether these ${spec.env} credentials work`;
+  btn.onclick = () => validateCredentials(spec, btn);
   row.appendChild(btn);
   return row;
 }
 
 function applyCredentialBadge(badge, cred) {
-  const ok = !!cred.verified;
-  const checked = !!cred.checked_at;
-  badge.className = "cred-badge " + (ok ? "ok" : checked ? "bad" : "none");
-  if (ok) {
+  if (!badge) return;
+  const c = cred || {};
+  // Only a verdict ABOUT the pair in play is worth showing.
+  badge.hidden = !c.has_verdict;
+  if (!c.has_verdict) {
+    badge.className = "cred-badge";
+    badge.textContent = "";
+    badge.title = "";
+    return;
+  }
+  if (c.verified) {
     const bits = ["✓ verified"];
-    if (cred.account_number) bits.push(cred.account_number);
-    const when = credWhen(cred.checked_at);
+    if (c.account_number) bits.push(c.account_number);
+    const when = credWhen(c.checked_at);
     if (when) bits.push(when);
+    badge.className = "cred-badge ok";
     badge.textContent = bits.join(" · ");
-    badge.title = cred.message || "These credentials were accepted by Alpaca.";
-  } else if (checked) {
-    // The reason matters more than the verdict, but it can be long: short label,
-    // full text on hover, and the popup's message area repeats it on a check.
-    badge.textContent = "⚠ not valid";
-    badge.title = cred.message || "Verification failed.";
+    badge.title = c.message || "These credentials were accepted by Alpaca.";
   } else {
-    badge.textContent = cred.keys_set ? "— not checked" : "— no key set";
-    badge.title = "Trading cannot be turned on until this pair is verified against Alpaca.";
+    // The reason matters more than the verdict, but it can be long: short label,
+    // full text on hover, and the popup's message area repeats it.
+    badge.className = "cred-badge bad";
+    badge.textContent = "⚠ not valid";
+    badge.title = c.message || "Verification failed.";
   }
 }
 
 // Updates the badges IN PLACE. The popup must never be re-rendered here: the
 // operator may have just typed new keys, and a re-render would discard them.
-function renderCredentialState(creds) {
+function renderCredentialState(creds, exceptEnv) {
   if (!creds) return;
   for (const env of Object.keys(creds)) {
-    const badge = document.getElementById("cred-badge-" + env);
-    if (badge) applyCredentialBadge(badge, creds[env] || {});
+    if (env === exceptEnv) continue; // its own verdict is applied separately
+    applyCredentialBadge(document.getElementById("cred-badge-" + env), creds[env]);
   }
 }
 
-async function validateCredentials(env, btn) {
+// Validates what is IN THE FORM, not only what has been saved: a pair is normally
+// typed and then validated, and checking the stored values instead would answer
+// "credentials are not supplied" about keys visibly sitting in the boxes. A blank
+// field falls back to the stored value, exactly like a save does.
+async function validateCredentials(spec, btn) {
+  const env = spec.env;
+  const keyEl = document.getElementById("acct-" + spec.key_key);
+  const secretEl = document.getElementById("acct-" + spec.secret_key);
+  const body = {
+    env: env,
+    key_id: keyEl ? keyEl.value : "",
+    secret: secretEl ? secretEl.value : "",
+  };
   if (btn) btn.disabled = true;
   try {
     const r = await api("/api/v1/account/verify", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ env: env }),
+      body: JSON.stringify(body),
     });
-    renderCredentialState(r.credentials);
-    flashToast(r.message || "", r.ok ? "ok" : "warn");
-    showAccountErrors(
-      r.ok ? "" : `${env.toUpperCase()} credentials are NOT valid: ${r.message}`,
-      "warn"
-    );
+    const res = r.result || r;
+    renderCredentialState(r.credentials, env); // the other pair, from stored state
+    applyCredentialBadge(document.getElementById("cred-badge-" + env), res);
+    showAccountErrors(credentialMessage(env, res), res.ok ? "ok" : "warn");
+    flashToast(res.message || "", res.ok ? "ok" : "warn");
     await loadTrading(); // a pass may just have opened the switch
   } catch (err) {
     showAccountErrors(`Could not verify ${env} credentials: ${err.message}`, "warn");
   } finally {
     if (btn) btn.disabled = false;
   }
+}
+
+// What to say after a validation attempt: nothing to check, rejected, or accepted
+// (with a nudge when the valid pair is not the saved one yet).
+function credentialMessage(env, res) {
+  const label = env.toUpperCase();
+  if (!res.checked) return res.message || `Nothing to verify for ${label}.`;
+  if (!res.ok) return `${label} credentials are NOT valid: ${res.message}`;
+  const where = res.account_number ? ` (account ${res.account_number})` : "";
+  const saved = res.saved === false
+    ? " — press 💾 Save to store them, they are not the saved pair yet."
+    : "";
+  return `${label} credentials are valid${where}.${saved}`;
 }
 
 function showSaveErrors(text, kind) {
@@ -1094,6 +1127,7 @@ function showAccountErrors(text, kind) {
   const el = $("account-errors");
   if (!el) return;
   el.classList.toggle("warn", kind === "warn");
+  el.classList.toggle("ok", kind === "ok");
   el.textContent = text || "";
   el.hidden = !text;
 }
@@ -1370,8 +1404,10 @@ function renderTradingControls(d) {
         ? `Trading cannot start — ${exec.message}`
         : !ver.verified
           // Configured keys are not verified keys: say so before the click, not
-          // only after the refusal.
-          ? `Trading cannot start — the ${env} credentials have not been verified yet (Account Settings → Validate)`
+          // only after the refusal — and when a check has already FAILED, quote it,
+          // because "not verified yet" would send the operator to press Validate
+          // when what they actually need is to fix the keys.
+          ? `Trading cannot start — ${ver.has_verdict && ver.message ? ver.message : `the ${env} credentials have not been verified yet (Account Settings → Validate)`}`
           : `Start sending orders for ${d.strategy || "the active strategy"}`;
     btn.disabled = false; // the off switch must always be reachable
   }

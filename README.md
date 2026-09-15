@@ -127,10 +127,13 @@ The portal is the whole interface:
   panels; the risk panel leads with the two master switches
 - **Account Settings** (🏦 header popup) - the Alpaca key pairs, the single data
   folder, backtest defaults and cloud/state storage; shared by all strategies. Each
-  key pair has a **Validate** button and a verdict next to it: having keys configured
-  is not the same as having keys that WORK, and only Alpaca can tell the difference.
-  A newly added pair is checked as the form is saved, and a pair that already passed
-  is not re-checked on every save.
+  key pair has a **Validate** button, which checks the values **in the form** (typed
+  but unsaved included; a blank or masked box means "unchanged"). A badge appears
+  only once there is a verdict about the pair in play - `✓ verified · <account> ·
+  <time>` or `⚠ not valid`, the reason on hover - because "nobody has checked this"
+  is not news and a label sitting there before anyone asked is just noise. A newly
+  added pair is also checked as the form is saved, and a pair that already passed is
+  not re-checked on every save.
 - **Global Settings** (⚙ header popup) - the data provider + keys in `.env`
 - **Backtest panel** - run the engine, read the Gate and the metrics
 - **Historical Delta** - gap-check the dataset against the provider and refill
@@ -262,15 +265,22 @@ configuration, not the code - a strategy is judged against the bar you set.
   hide a broken live setup or spend real money. The header pills say which account
   and whether trading is on, and each run's `inputs.execution` records which
   environment was in play.
-- **Keys must be verified, not just configured.** The Alpaca key pair for the
-  environment in play has to have passed a real check against the broker before
-  trading can start (`GET /v2/account`, one call). Presence proves nothing: keys get
-  copied from the wrong account page, revoked, or paired with the other
-  environment's secret, and every one of those would previously have shown as a
-  green "trading ON" while every order bounced off a rejected key. The verdict is
-  per environment and belongs to the KEY that earned it, so swapping keys expires it
+- **Keys must be verified, not just configured.** The environment in play has to
+  have passed a real check against the broker before trading can start
+  (`GET /v2/account`, one call). Presence proves nothing: keys get copied from the
+  wrong account page, revoked, or paired with the other environment's secret, and
+  every one of those would previously have shown as a green "trading ON" while
+  every order bounced off a rejected key. Where the check happens differs by what
+  is at stake: **paper is verified as part of turning trading on** (nothing to do
+  first - and it is not asked twice once it has passed), while **live must have
+  passed before the switch is armed**, because discovering a bad key in the same
+  click that starts real orders is not a discovery worth having. The verdict is per
+  environment and belongs to the KEY that earned it, so swapping keys expires it
   automatically. A pass is cached - editing an unrelated setting does not re-ask
   Alpaca - while a failure is not, since it may just be the network.
+- **Paper is always the default.** Credentials for a live account do not move the
+  switch, and neither does re-using an existing strategy: routing orders to a real
+  account is an explicit choice, made in the header dropdown, per strategy.
 - **No reconfiguration while trading is on.** With trading on, the server refuses
   every configuration write with HTTP 409 - settings, account, rules, strategy
   create/rename/delete/select, the backtest runner, the dataset rebuild/backfill

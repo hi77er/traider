@@ -242,12 +242,13 @@ not trading is on. The state is carried by the words:
 One clock drives both dots, so when both are red they blink together. With
 `prefers-reduced-motion` the red dot stops flashing but keeps its colour.
 
-Trading always starts OFF, and turning it on is refused while the selected Alpaca
-account has no API keys — so "trading on" can never be a lie. Turning it on **always
-asks first**, on paper as well as live: the live prompt is about real money, the
-paper one is about the strategy acting on the next signal. Turning it off never
-asks. While trading is on, a **Trading** panel under the chart shows the resolved
-target and spells out the lock.
+Trading always starts OFF, and turning it on checks the credentials for the account
+in play — so "trading on" can never be a lie. Turning it on **always asks first**,
+on paper as well as live: the live prompt is about real money, the paper one is
+about the strategy acting on the next signal. Turning it off never asks. While
+trading is on, a **Trading** panel under the chart shows the resolved target and
+spells out the lock. Orders route to **paper by default**: configuring live
+credentials never moves the switch, and neither does reusing a strategy.
 
 ### Verifying the Alpaca credentials
 
@@ -256,16 +257,23 @@ copied from the wrong account page, revoked, or paired with the other environmen
 secret. Nothing local can tell, so the bot asks Alpaca (`GET /v2/account`) and
 remembers the answer:
 
-- **🏦 Account Settings** shows a verdict next to each pair (`✓ verified · <account>
-  · <time>`, `⚠ not valid`, `— not checked`) with a **Validate** button that re-checks
-  on demand whatever the state.
-- A pair is checked **automatically when it is new** (as the form is saved). A pair
-  that already passed is not re-asked on every save; a pair that *failed* is retried,
-  because a failure may just be the network.
+- **🏦 Account Settings** has a **Validate** button per pair, which checks the values
+  **currently in the boxes** — so a pair can be tested before it is saved. A blank or
+  masked box means "unchanged" and falls back to what is stored, exactly like Save.
+- A badge appears next to a pair **only once there is a verdict about it**:
+  `✓ verified · <account> · <time>`, or `⚠ not valid` with the reason on hover. Before
+  anyone has asked, the row is clean — no label, no message.
+- Pressing Validate with nothing in the boxes says so; a rejection shows what Alpaca
+  answered; a pass shows the account that answered.
+- A pair is also checked **automatically when it is new** (as the form is saved). A
+  pair that already passed is not re-asked on every save; a pair that *failed* is
+  retried, because a failure may just be the network.
 - A verdict belongs to the key that earned it: change the key and it expires, so a
   swapped key cannot inherit an old pass.
-- Trading **cannot be turned on** until the pair for the environment in play has
-  passed. The switch says so on hover, and refuses with the reason if pressed.
+- Trading **cannot be turned on** unless the pair for the environment in play passes:
+  **paper** is verified as part of turning trading on, **live** must have been
+  verified before the switch is armed. The switch says so on hover, and refuses with
+  the reason if pressed.
 
 The verdicts live in `data/credential_checks.json`, beside `trading.json` — runtime
 state, not configuration, and it stores a hash of the key id rather than the key.

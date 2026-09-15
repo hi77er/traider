@@ -154,22 +154,27 @@ def check_for(settings, env: str) -> Dict[str, Any]:
 
     ``verified`` is True only when a passing check exists for the fingerprint of
     the key configured right now — so editing the key silently expires the verdict.
-    Never raises.
+    ``has_verdict`` says whether there is a verdict about THIS pair at all, which is
+    what the popup shows the badge for: a pair nobody has checked yet has nothing to
+    report, and reporting "not checked"/"no key set" against it was noise the
+    operator should not have to read past. Never raises.
     """
     keys = keys_for(settings, env)
     record = (_read(settings).get("environments") or {}).get(env) or {}
     fp = fingerprint(env, keys["key_id"]) if keys["key_id"] else ""
     recorded_fp = str(record.get("fingerprint") or "")
+    matches = bool(fp) and recorded_fp == fp
     return {
         "env": env,
         "keys_set": bool(keys["key_id"] and keys["secret"]),
-        "verified": bool(record.get("ok")) and bool(fp) and recorded_fp == fp,
-        "fingerprint_matches": bool(fp) and recorded_fp == fp,
+        "has_verdict": matches,
+        "verified": matches and bool(record.get("ok")),
+        "fingerprint_matches": matches,
         "ok": bool(record.get("ok")),
-        "checked_at": record.get("checked_at"),
-        "message": record.get("message") or "",
-        "account_number": record.get("account_number") or "",
-        "stale": bool(record) and recorded_fp != fp,
+        "checked_at": record.get("checked_at") if matches else None,
+        "message": record.get("message") if matches else "",
+        "account_number": record.get("account_number") if matches else "",
+        "stale": bool(record) and not matches,
     }
 
 
@@ -178,25 +183,58 @@ def all_checks(settings) -> Dict[str, Dict[str, Any]]:
     return {env: check_for(settings, env) for env in ENVIRONMENTS}
 
 
-def verify(settings, env: str, *, force: bool = False) -> Dict[str, Any]:
+def verify(
+    settings,
+    env: str,
+    *,
+    force: bool = False,
+    key_id: Optional[str] = None,
+    secret: Optional[str] = None,
+) -> Dict[str, Any]:
     """Verify one environment's credentials and record the verdict.
 
-    ``force=False`` (the save path) skips a pair that already has a PASSING record
-    for the current key: re-checking a known-good key on every save would be a
+    ``key_id``/``secret`` check the values someone is *looking at* — the ones typed
+    into the Account popup — instead of the stored pair. Without them the Validate
+    button would report "not set" for a key that is right there in the form, which is
+    exactly the bug this parameter exists to prevent. The verdict is recorded under
+    the fingerprint of whichever pair was actually checked, so saving those same
+    values afterwards opens the gate without a second call.
+
+    A field left ``None`` **or blank** means "unchanged", the same rule a save
+    follows: a re-opened form shows a mask instead of the secret, so the value in the
+    box is routinely not the value to check. Only a real value replaces the stored
+    one.
+
+    ``force=False`` (the save path, and turning trading on) skips a pair that already
+    has a PASSING record for the same key: re-checking a known-good pair would be a
     pointless call to Alpaca, and the operator asked for exactly that economy.
     ``force=True`` (the Validate button) always asks.
     """
-    keys = keys_for(settings, env)
+    stored = keys_for(settings, env)
+    typed_key, typed_secret = _text(key_id), _text(secret)
+    keys = {
+        "key_id": typed_key or stored["key_id"],
+        "secret": typed_secret or stored["secret"],
+        "base_url": stored["base_url"],
+    }
+    stored_match = keys["key_id"] == stored["key_id"] and keys["secret"] == stored["secret"]
     if not keys["key_id"] or not keys["secret"]:
         return {
             "env": env,
             "ok": False,
             "verified": False,
-            "message": f"The {env.upper()} API key and secret must both be set before verifying.",
+            "keys_set": False,
             "checked": False,
+            "saved": False,
+            "message": (
+                f"Both the {env.upper()} API key and its secret are needed before they can "
+                "be verified." if (keys["key_id"] or keys["secret"]) else
+                f"No {env.upper()} API key or secret to verify."
+            ),
         }
-    if not force and check_for(settings, env)["verified"]:
-        return {**check_for(settings, env), "checked": False, "message": "Already verified"}
+    # A check of what is already stored, and already passing, needs no call.
+    if not force and stored_match and check_for(settings, env)["verified"]:
+        return {**check_for(settings, env), "checked": False, "saved": True, "message": "Already verified"}
 
     result = probe(keys["key_id"], keys["secret"], keys["base_url"])
     record = {
@@ -217,7 +255,14 @@ def verify(settings, env: str, *, force: bool = False) -> Dict[str, Any]:
         "env": env,
         "ok": bool(result["ok"]),
         "verified": bool(result["ok"]),
+        "keys_set": True,
         "checked": True,
+        # Just checked, so there IS a verdict about this pair — the UI's cue to show
+        # the badge. Without it a fresh result would be reported and then hidden.
+        "has_verdict": True,
+        # False when the checked pair is NOT the stored one: it is valid, but it is
+        # not what the bot would trade with until the form is saved.
+        "saved": stored_match,
         "message": result["message"],
         "account_number": record["account_number"],
         "checked_at": record["checked_at"],

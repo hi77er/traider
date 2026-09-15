@@ -88,9 +88,22 @@ def turn_on(settings, *, confirm_live: bool = False) -> dict:
             "execution": status_info,
         }
 
-    # Configured ≠ working. The keys must have been checked against Alpaca for THIS
-    # environment (and the check must belong to the key that is configured now).
-    unverified = credentials.require_verified(settings, status_info["env"])
+    # Configured ≠ working. Which proof is required depends on what is at stake:
+    #
+    #   * PAPER — simulated orders, so there is nothing to lose by checking now
+    #     rather than demanding that the operator pressed Validate first. The pair is
+    #     verified at this moment (using a passing verdict if one is already on file,
+    #     so this costs no call after the first time).
+    #   * LIVE — real money, so the check must have happened BEFORE this click, and
+    #     must belong to the key that is configured now. Being asked to look at a
+    #     verdict is the point; discovering a bad key in the same click that arms the
+    #     bot is not.
+    env = status_info["env"]
+    if status_info["live"]:
+        unverified = credentials.require_verified(settings, env)
+    else:
+        check = credentials.verify(settings, env)
+        unverified = None if check["ok"] else check["message"]
     if unverified:
         return {
             "ok": False,
@@ -98,7 +111,7 @@ def turn_on(settings, *, confirm_live: bool = False) -> dict:
             "message": f"Trading cannot start — {unverified}",
             "state": get_state(settings),
             "execution": status_info,
-            "credentials": credentials.check_for(settings, status_info["env"]),
+            "credentials": credentials.check_for(settings, env),
         }
 
     if status_info["live"] and not confirm_live:

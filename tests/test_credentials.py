@@ -192,8 +192,14 @@ def test_check_for_reports_which_pair_is_missing(tmp_path):
 def test_verify_refuses_to_check_half_a_pair(tmp_path):
     got = credentials.verify(_s(tmp_path, alpaca_paper_api_key="PK-only"), "paper")
     assert got["ok"] is False and got["checked"] is False
-    assert "must both be set" in got["message"]
+    assert "key and its secret are needed" in got["message"]
     assert not credentials.state_path(_s(tmp_path)).exists(), "nothing to record"
+
+
+def test_verify_reports_when_there_is_nothing_at_all_to_check(tmp_path):
+    got = credentials.verify(_s(tmp_path), "live")
+    assert got["ok"] is False and got["checked"] is False
+    assert "No LIVE API key or secret to verify" in got["message"]
 
 
 def test_an_unknown_environment_is_rejected():
@@ -224,9 +230,33 @@ def test_the_account_schema_carries_the_verdict_and_a_verify_hook(tmp_path, monk
     schema = config_service.get_account_schema()
     assert set(schema["credentials"]) == {"paper", "live"}
     # Exactly one Validate affordance per pair, on the LAST field of the pair, so the
-    # control lands under the two boxes it checks.
-    hooks = [f["key"] for f in schema["groups"][0]["fields"] if f.get("verify_env")]
-    assert hooks == ["ALPACA_PAPER_API_SECRET", "ALPACA_LIVE_API_SECRET"]
+    # control lands under the two boxes it checks — and naming both of them, so no
+    # client has to guess which inputs make a pair.
+    hooks = [f for f in schema["groups"][0]["fields"] if f.get("verify")]
+    assert [h["key"] for h in hooks] == ["ALPACA_PAPER_API_SECRET", "ALPACA_LIVE_API_SECRET"]
+    assert [h["verify"] for h in hooks] == [
+        {"env": "paper", "key_key": "ALPACA_PAPER_API_KEY", "secret_key": "ALPACA_PAPER_API_SECRET"},
+        {"env": "live", "key_key": "ALPACA_LIVE_API_KEY", "secret_key": "ALPACA_LIVE_API_SECRET"},
+    ]
+
+
+def test_the_verdict_distinguishes_having_no_verdict_from_failing(tmp_path, monkeypatch):
+    """The popup shows a badge only for a verdict about the pair in play, so "nobody
+    has checked this yet" must be a different answer from "this failed"."""
+    settings = _s(tmp_path, **PAPER)
+    assert credentials.check_for(settings, "paper")["has_verdict"] is False
+
+    monkeypatch.setattr(credentials, "probe", lambda *a, **k: {"ok": False, "message": "401 nope"})
+    credentials.verify(settings, "paper", force=True)
+    state = credentials.check_for(settings, "paper")
+    assert state["has_verdict"] is True and state["verified"] is False
+    assert state["checked_at"] and state["message"] == "401 nope"
+
+    # A different key has no verdict of its own — the old failure is not about it.
+    other = _s(tmp_path, alpaca_paper_api_key="PK-other", alpaca_paper_api_secret="PS-other")
+    fresh = credentials.check_for(other, "paper")
+    assert fresh["has_verdict"] is False and fresh["message"] == ""
+    assert fresh["stale"] is True, "but we know a verdict exists for something else"
 
 
 def test_the_verify_endpoint_reports_a_pass_and_a_failure(tmp_path, monkeypatch):
@@ -254,6 +284,120 @@ def test_the_verify_endpoint_rejects_an_unknown_environment(tmp_path):
         assert body["ok"] is False and "paper" in body["message"]
     finally:
         app.dependency_overrides.clear()
+
+
+def test_the_verify_endpoint_checks_the_values_in_the_boxes(tmp_path, monkeypatch):
+    """The reported bug: keys typed into the popup were answered with "credentials
+    are not supplied", because the endpoint looked only at the SAVED pair. A pair is
+    normally typed first and stored afterwards."""
+    seen = []
+
+    def fake_probe(key_id, secret, base_url, **kw):
+        seen.append((key_id, secret, base_url))
+        return {"ok": True, "message": "Credentials accepted", "account_number": "A9", "status": "ACTIVE"}
+
+    settings = _s(tmp_path)  # nothing saved at all
+    monkeypatch.setattr(credentials, "probe", fake_probe)
+    app.dependency_overrides[get_effective_settings_dep] = lambda: settings
+    try:
+        body = client.post(
+            "/api/v1/account/verify",
+            json={"env": "live", "key_id": "LK-typed", "secret": "LS-typed"},
+        ).json()
+    finally:
+        app.dependency_overrides.clear()
+
+    assert body["ok"] is True, body["message"]
+    assert seen == [("LK-typed", "LS-typed", credentials.keys_for(settings, "live")["base_url"])]
+    result = body["result"]
+    assert result["checked"] is True and result["has_verdict"] is True
+    assert result["saved"] is False, "valid, but not what the bot would trade with yet"
+    # And the verdict belongs to what was checked, so it is already usable if the
+    # popup is saved with these very values.
+    assert credentials.check_for(settings, "live")["message"] == ""
+
+
+def test_a_pass_on_unsaved_values_survives_saving_them(tmp_path, monkeypatch):
+    """Typing a pair, validating it, and then saving must not cost a second call to
+    Alpaca — the fingerprint of the checked pair is the same one."""
+    from src.web.services import config_service
+
+    calls = []
+
+    def fake_probe(key_id, secret, base_url, **kw):
+        calls.append(key_id)
+        return {"ok": True, "message": "Credentials accepted", "account_number": "A9", "status": "ACTIVE"}
+
+    settings = _s(tmp_path)
+    monkeypatch.setattr(credentials, "probe", fake_probe)
+    monkeypatch.setattr(credentials, "state_path", lambda s: tmp_path / "credential_checks.json")
+    assert config_service.verify_credentials("live", "LK-typed", "LS-typed")["ok"] is True
+    assert len(calls) == 1
+
+    # Saving a pair that was already proved does not ask again.
+    saved = _s(tmp_path, alpaca_live_api_key="LK-typed", alpaca_live_api_secret="LS-typed")
+    out = credentials.verify_new(saved)
+    assert out["live"]["verified"] is True and out["live"]["checked"] is False
+    assert len(calls) == 1
+
+
+def test_a_half_filled_form_says_which_half_is_missing(tmp_path, monkeypatch):
+    """One box filled and the other blank is the common paste mistake, so it gets an
+    answer that names what is missing rather than a generic refusal."""
+    monkeypatch.setattr(credentials, "probe", lambda *a, **k: pytest.fail("nothing to check"))
+    empty = _s(tmp_path)
+    app.dependency_overrides[get_effective_settings_dep] = lambda: empty
+    try:
+        body = client.post(
+            "/api/v1/account/verify",
+            json={"env": "live", "key_id": "LK-typed", "secret": ""},
+        ).json()
+    finally:
+        app.dependency_overrides.clear()
+
+    assert body["ok"] is False and body["result"]["checked"] is False
+    assert "key and its secret are needed" in body["message"]
+    assert "LK-typed" not in body["message"], "no credential comes back out"
+
+
+def test_a_masked_box_validates_the_stored_pair_not_the_mask(tmp_path, monkeypatch):
+    """A re-opened popup shows "********" instead of the secret, so pressing Validate
+    without touching the form must check what is stored — not the asterisks."""
+    from src.web.services import config_service
+
+    settings = _s(tmp_path, alpaca_live_api_key="LK-saved", alpaca_live_api_secret="LS-saved")
+    monkeypatch.setattr(credentials, "state_path", lambda s: tmp_path / "credential_checks.json")
+    monkeypatch.setattr(config_service, "get_effective_settings", lambda: settings)
+    seen = []
+
+    def fake_probe(key_id, secret, url, **kw):
+        seen.append((key_id, secret))
+        return {"ok": True, "message": "ok", "account_number": "A1", "status": "ACTIVE"}
+
+    monkeypatch.setattr(credentials, "probe", fake_probe)
+    got = config_service.verify_credentials("live", "********", "********")
+    assert got["ok"] is True
+    assert seen == [("LK-saved", "LS-saved")], "the mask is not a credential"
+
+
+def test_a_blank_field_falls_back_to_the_stored_value(tmp_path, monkeypatch):
+    """Blank means "unchanged", exactly like a save — so validating a form where only
+    the key was retyped must check the retyped key against the stored secret."""
+    settings = _s(tmp_path, alpaca_live_api_key="LK-saved", alpaca_live_api_secret="LS-saved")
+
+    def fake_probe(key_id, secret, url, **kw):
+        assert (key_id, secret) == ("LK-new", "LS-saved"), "the form's key, the stored secret"
+        return {"ok": True, "message": "ok", "account_number": "A1", "status": "ACTIVE"}
+
+    monkeypatch.setattr(credentials, "probe", fake_probe)
+    got = credentials.verify(settings, "live", force=True, key_id="LK-new", secret="")
+    assert got["ok"] is True and got["saved"] is False
+
+    monkeypatch.setattr(
+        credentials, "probe",
+        lambda key_id, secret, url, **k: {"ok": True, "message": "ok", "account_number": "A1"},
+    )
+    assert credentials.verify(settings, "live", force=True, key_id="", secret="")["ok"] is True
 
 
 def test_the_verify_endpoint_works_even_while_trading_is_on(tmp_path, monkeypatch):
@@ -364,10 +508,16 @@ def test_the_popup_reads_the_pair_the_bot_would_actually_use(tmp_path, monkeypat
 def test_the_popup_renders_a_validate_button_and_a_verdict():
     js = (ROOT / "src" / "web" / "static" / "app.js").read_text(encoding="utf-8")
     assert "function credentialRow(" in js
-    assert "f.verify_env" in js, "the row is placed from the schema, not a hard-coded key"
+    assert "f.verify" in js, "the row is placed from the schema, not a hard-coded key"
+    # Validate checks the values IN THE FORM: answering "credentials not supplied"
+    # about keys visibly sitting in the boxes was the bug.
+    assert "spec.key_key" in js and "spec.secret_key" in js
     assert "/api/v1/account/verify" in js
-    # A verdict must be re-read after a check, and the switch's own state with it.
     assert "async function validateCredentials(" in js
     assert "renderCredentialState(" in js
+    # No verdict about the pair in play => no badge at all (not "not checked").
+    assert "badge.hidden = !c.has_verdict" in js
+    assert "function credentialMessage(" in js
     css = (ROOT / "src" / "web" / "static" / "style.css").read_text(encoding="utf-8")
     assert ".cred-row" in css and ".cred-badge" in css
+    assert ".cred-badge.ok" in css and ".cred-badge.bad" in css

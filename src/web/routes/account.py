@@ -9,7 +9,7 @@ values can still override them.
 
 from __future__ import annotations
 
-from typing import Dict
+from typing import Dict, Optional
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
@@ -32,9 +32,16 @@ class AccountUpdate(BaseModel):
 
 
 class VerifyRequest(BaseModel):
-    """Which environment's credentials to check against Alpaca."""
+    """Which environment's credentials to check against Alpaca.
+
+    ``key_id``/``secret`` carry what is currently typed in the form, so Validate
+    checks the values on screen rather than only the saved ones; blank or masked
+    fields fall back to the stored pair, exactly like a save.
+    """
 
     env: str
+    key_id: Optional[str] = None
+    secret: Optional[str] = None
 
 
 @router.get("")
@@ -55,7 +62,7 @@ def verify_credentials(body: VerifyRequest) -> dict:
     env = (body.env or "").strip().lower()
     if env not in ("paper", "live"):
         return {"ok": False, "message": "env must be 'paper' or 'live'", "errors": ["unknown environment"]}
-    return config_service.verify_credentials(env)
+    return config_service.verify_credentials(env, body.key_id, body.secret)
 
 
 @router.post("", dependencies=[Depends(require_trading_off)])

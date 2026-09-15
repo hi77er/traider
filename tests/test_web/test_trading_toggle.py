@@ -158,3 +158,92 @@ def test_stopping_never_asks(toggle_results):
     assert got["dialogs"] == 0
     # No acknowledgement either: stopping is not something to consent to.
     assert got["api"] == [{"path": "/api/v1/trading/off", "body": {}}]
+
+
+# ---------------------------------------------------------------------------
+# what the switch says BEFORE the click
+# ---------------------------------------------------------------------------
+TOOLTIP_HARNESS = r"""
+const btn = { className: "", title: "", disabled: true };
+function $(id) { return id === "trading-toggle" ? btn : null; }
+function renderStatusDots() {}
+
+const failed = {
+  env: "paper", ok: true, message: "ok", broker: "alpaca",
+};
+const codes = {};
+
+// A check that FAILED must be quoted: "not verified yet" would send the operator
+// to press Validate when the fix is to replace the keys.
+renderTradingControls({
+  execution: failed, trading: { on: false }, strategy: "s1",
+  verification: { has_verdict: true, verified: false, message: "Alpaca rejected these credentials (401)" },
+});
+codes.failed = btn.title;
+
+// Never checked: no verdict, no reason to quote — say what to do.
+renderTradingControls({
+  execution: failed, trading: { on: false }, strategy: "s1",
+  verification: { has_verdict: false, verified: false, message: "" },
+});
+codes.unchecked = btn.title;
+
+// Verified: an invitation, not a warning.
+renderTradingControls({
+  execution: failed, trading: { on: false }, strategy: "s1",
+  verification: { has_verdict: true, verified: true, message: "Credentials accepted" },
+});
+codes.verified = btn.title;
+
+// A broken execution target outranks everything: the keys are not even in play.
+renderTradingControls({
+  execution: { env: "live", ok: false, message: "LIVE API key/secret are missing" },
+  trading: { on: false }, strategy: "s1",
+  verification: { has_verdict: false, verified: false, message: "" },
+});
+codes.no_target = btn.title;
+
+// Anything wrong leaves the switch clickable: stopping or trying must stay possible.
+codes.disabled_when_wrong = btn.disabled;
+process.stdout.write(JSON.stringify(codes));
+"""
+
+
+@pytest.fixture(scope="module")
+def tooltips(tmp_path_factory) -> dict:
+    src = APP_JS.read_text(encoding="utf-8")
+    start = src.index("function renderTradingControls(")
+    block = src[start:src.index("\nfunction renderTradingPanel(", start)]
+    script = tmp_path_factory.mktemp("tooltip") / "tooltip.js"
+    script.write_text(block + TOOLTIP_HARNESS, encoding="utf-8")
+    proc = subprocess.run(
+        ["node", str(script)], capture_output=True, text=True, timeout=60, check=False
+    )
+    if proc.returncode != 0 or not proc.stdout.strip():
+        raise AssertionError(
+            "tooltip harness failed\n"
+            f"exit={proc.returncode}\nstdout={proc.stdout}\nstderr={proc.stderr}"
+        )
+    return json.loads(proc.stdout)
+
+
+def test_a_failed_check_is_quoted_rather_than_called_unverified(tooltips):
+    assert "401" in tooltips["failed"]
+    assert "not been verified yet" not in tooltips["failed"]
+
+
+def test_an_unchecked_pair_says_where_to_validate_it(tooltips):
+    assert "not been verified yet" in tooltips["unchecked"]
+    assert "Account Settings" in tooltips["unchecked"]
+
+
+def test_a_verified_pair_is_only_an_invitation(tooltips):
+    assert "cannot start" not in tooltips["verified"]
+
+
+def test_a_broken_target_outranks_the_credential_verdict(tooltips):
+    assert "LIVE API key/secret are missing" in tooltips["no_target"]
+
+
+def test_the_switch_is_never_disabled_by_a_bad_state(tooltips):
+    assert tooltips["disabled_when_wrong"] is False
