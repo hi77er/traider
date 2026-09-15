@@ -3,7 +3,7 @@
 ## TL;DR: The Plan
 
 Build a modular Python trading bot for AAPL (Apple) stock that:
-1. Checks price once a day (during market hours)
+1. Checks the latest completed bar during market hours (no websocket, no polling cadence)
 2. Uses AI/ML to decide buy/sell/hold
 3. Runs on AWS Lightsail with Docker
 4. Never loses more than you allow (risk management)
@@ -137,8 +137,10 @@ traider/
 
 ## Critical Decisions (Already Made)
 
-✅ **Polling (once a day)** not Websocket  
-→ Daily decision cadence (DECISION_INTERVAL_HOURS=24), trades once a day after market close
+✅ **Bar-by-bar decisions**, not a scheduled cadence
+→ A decision is made on every newly generated bar: the signal is computed at that
+bar's close and filled at the next bar's open. What limits the rate is the bar size
+and the trading window — there is no DECISION_INTERVAL_HOURS / DECISION_TIME setting.
 
 ✅ **DynamoDB (managed)** not PostgreSQL  
 → DynamoDB is managed, durable, scales without operations; supports PITR and export to S3
@@ -303,8 +305,10 @@ The **Daily Delta** panel (left, shown once a dataset exists) checks the Parquet
 completed days. When synced it shows "All data synced" + the last 5 bars; when days are missing
 it lists them and offers **Fetch missing days** (writes them into the dataset).
 
-Daily schedule (all HH:MM in `MARKET_TIMEZONE`): `DECISION_TIME` (signal/decision) and
-`DATA_DELTA_PULL_TIME` (pull the completed bar into the dataset, shortly after close).
+Daily schedule (all HH:MM in `MARKET_TIMEZONE`): `DATA_DELTA_PULL_TIME` pulls the
+completed bar into the dataset, shortly after the close. Decisions are not on a
+clock: one is made on every newly generated bar (signal at its close, fill at the
+next bar's open).
 
 Auth: set `WEB_PORTAL_AUTH_ENABLED=true` (plus `WEB_PORTAL_USERNAME`/`WEB_PORTAL_PASSWORD`) to require login. Default (empty password) is open for local dev.
 
@@ -402,7 +406,6 @@ touch traider/main.py
 
 # Instrument & trading period
 INSTRUMENT=AAPL
-DECISION_INTERVAL_HOURS=24
 TRADING_START_HOUR=09:30
 TRADING_END_HOUR=16:00
 MARKET_TIMEZONE=America/New_York

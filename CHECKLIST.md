@@ -48,7 +48,7 @@ Track your progress through all 41 tasks across 9 phases.
   - [x] src/config/settings.py with Pydantic BaseSettings
   - [x] Required vars: OPENBB_PROVIDER (+ optional OPENBB_API_KEY)
   - [x] Required vars (execution): ALPACA_PAPER_API_KEY, ALPACA_PAPER_API_SECRET (plus ALPACA_LIVE_* for live)
-  - [x] Instrument & period: INSTRUMENT (AAPL), DECISION_INTERVAL_HOURS, TRADING_START_HOUR, TRADING_END_HOUR, MARKET_TIMEZONE
+  - [x] Instrument & period: INSTRUMENT (AAPL), TRADING_START_HOUR, TRADING_END_HOUR, MARKET_TIMEZONE (no decision cadence — every newly generated bar)
   - [x] Historical period: HISTORICAL_BAR_SIZE, HISTORICAL_LOOKBACK (period with its unit), HISTORICAL_START_DATE, HISTORICAL_END_DATE, BACKTEST_START_DATE, BACKTEST_END_DATE, TRAIN_TEST_SPLIT
   - [x] Features: FEATURES_SMA_PERIODS, FEATURES_EMA_PERIODS, FEATURES_MACD_FAST_PERIOD, FEATURES_MACD_SLOW_PERIOD, FEATURES_MACD_SIGNAL_PERIOD, FEATURES_RSI_PERIOD, FEATURES_ATR_PERIOD, FEATURES_BOLLINGER_PERIOD, FEATURES_BOLLINGER_STD, FEATURES_MOMENTUM_PERIODS, FEATURES_VOLATILITY_PERIOD, FEATURES_MIN_LOOKBACK
   - [x] Model: MODEL_TYPE, MODEL_BUY_THRESHOLD, MODEL_SELL_THRESHOLD, MODEL_RETRAIN_INTERVAL_DAYS (settings only — the Model section is not in the strategy panel: rule-based is the only model)
@@ -73,7 +73,7 @@ Track your progress through all 41 tasks across 9 phases.
 - [x] **data-live** (8) — Poll current price via OpenBB
   - [x] src/data/live.py
   - [x] Function: get_latest_candle(instrument)
-  - [x] Polling at DECISION_INTERVAL_HOURS
+  - [x] Decision on every newly generated bar (no cadence setting)
   - [x] Error handling with retry + provider failover
   - [x] Cache to avoid excessive API calls
   - [x] Skip polls outside US market hours (weekdays 9:30-16:00 ET)

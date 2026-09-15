@@ -23,7 +23,7 @@ Transforms raw OpenBB OHLCV candles into the numeric feature vector consumed by 
 ## Procedure
 
 1. **Compute on rolling windows only** — each feature at bar `t` uses data up to `t` exclusively.
-2. **Align features to the decision cadence** (`DECISION_INTERVAL_HOURS`/`HISTORICAL_BAR_SIZE`) so backtest and live produce the same feature vector for the same timestamp.
+2. **Align features to the decision cadence** — there is no cadence setting: a decision is made on every newly generated bar, so the features are simply computed per bar of `HISTORICAL_BAR_SIZE` and backtest and live produce the same feature vector for the same timestamp.
 3. **Handle warmup**: require a minimum lookback (e.g. max window) before emitting features; drop or NaN the warmup period consistently in both modes.
 4. **Write the shared compute in one function** used by both the backtester and the live orchestrator — never two copies.
 5. **Validate with fixtures**: known candles → expected feature values; compare backtest vs live vectors on the same data (`feature-validation`).

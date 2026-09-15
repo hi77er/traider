@@ -105,11 +105,9 @@ _LABELS: Dict[str, str] = {
     "CACHE_DIR": "Cache folder",
     "LIVE_LOOKBACK_DAYS": "Live poll lookback (days)",
     # ── Strategy settings that moved out of the global form ───────
-    "DECISION_INTERVAL_HOURS": "Decision interval (hours)",
+    "MARKET_TIMEZONE": "Market timezone",
     "TRADING_START_HOUR": "Trading window start",
     "TRADING_END_HOUR": "Trading window end",
-    "MARKET_TIMEZONE": "Market timezone",
-    "DECISION_TIME": "Daily decision time",
     "DATA_DELTA_PULL_TIME": "Daily delta pull time",
     "GATE_MIN_SHARPE": "Gate: min Sharpe",
     "GATE_MAX_DRAWDOWN_PERCENT": "Gate: max drawdown (%)",
@@ -238,10 +236,13 @@ _STRATEGY_SCOPE: List[Tuple[str, Tuple[str, ...]]] = [
     (
         "Trading",
         (
-            # The trading window + decision cadence belong to the strategy: two
-            # strategies on the same instrument can trade different sessions.
-            "DECISION_INTERVAL_HOURS", "MARKET_TIMEZONE", "TRADING_START_HOUR",
-            "TRADING_END_HOUR", "DECISION_TIME", "DATA_DELTA_PULL_TIME",
+            # The trading window belongs to the strategy: two strategies on the same
+            # instrument can trade different sessions. There is no decision CADENCE
+            # setting: a decision is made on every newly generated bar (signal at the
+            # bar's close, fill at the next bar's open), so the bar size and the
+            # window are what limit it.
+            "MARKET_TIMEZONE", "TRADING_START_HOUR",
+            "TRADING_END_HOUR", "DATA_DELTA_PULL_TIME",
         ),
     ),
     (
@@ -304,6 +305,13 @@ PANEL_HIDDEN_STRATEGY_KEYS = frozenset({"EXECUTION_ENV"})
 RETIRED_STRATEGY_KEYS = frozenset(
     {
         "EXECUTION_LIVE_ACK",
+        # The decision CADENCE is gone as a setting, not just from the panel: a
+        # decision is made on every newly generated bar, so "every N hours" and "at
+        # HH:MM daily" were describing a schedule the bot does not keep. Neither was
+        # read by any code — they were documented (and offered) and nothing else — so
+        # they are deleted from ``Settings`` as well as retired here.
+        "DECISION_INTERVAL_HOURS",
+        "DECISION_TIME",
         # The Model group is gone from the panel. MODEL_TYPE was a switch between the
         # one model that exists and one that does not (the backtester and the signal
         # service both refuse to run under anything else), and a retrain cadence has

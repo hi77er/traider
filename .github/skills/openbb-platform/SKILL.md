@@ -11,7 +11,7 @@ The TRAIDER bot gets ALL price data from the **OpenBB Platform SDK** (`from open
 - Implementing `src/data/openbb_client.py`, `historical.py`, `live.py`
 - Choosing/validating a provider for AAPL (`INSTRUMENT` from config)
 - Fetching historical candles for backtesting/training
-- Polling the live price once a day (during market hours)
+- Reacting to the latest completed bar during market hours (a decision per newly generated bar; no polling cadence to configure)
 - Mocking OpenBB responses in unit tests
 - Troubleshooting "data mismatch between backtest and live"
 

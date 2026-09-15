@@ -49,7 +49,7 @@
 │                                                               │
 │  ┌────────────────────────────────────────────┐             │
 │  │     Scheduler/Orchestrator (APScheduler)   │             │
-│  │     Main Loop @ DECISION_INTERVAL_HOURS    │             │
+│  │     Main Loop (one decision per new bar)   │             │
 │  └────────────────────────────────────────────┘             │
 │                                                               │
 │  ┌────────────────────────────────────────────┐             │
@@ -156,7 +156,7 @@ traider/
 **Responsibility:** Central configuration store for credentials, instruments, intervals, limits, and every strategy parameter. **Everything is configurable via `.env` — no hardcoded values anywhere.**
 
 **Config categories (full reference in `.env.example`):**
-- **Trading instrument & period:** `INSTRUMENT`, `DECISION_INTERVAL_HOURS`, `TRADING_START_HOUR`, `TRADING_END_HOUR`, `MARKET_TIMEZONE`, `DECISION_TIME`, `DATA_DELTA_PULL_TIME`
+- **Trading instrument & period:** `INSTRUMENT`, `TRADING_START_HOUR`, `TRADING_END_HOUR`, `MARKET_TIMEZONE`, `DATA_DELTA_PULL_TIME`
 - **Market data:** `OPENBB_PROVIDER`, `OPENBB_API_KEY`
 - **Historical data period:** `HISTORICAL_BAR_SIZE`, `HISTORICAL_LOOKBACK`, `HISTORICAL_START_DATE`, `HISTORICAL_END_DATE`, `BACKTEST_START_DATE`, `BACKTEST_END_DATE`, `TRAIN_TEST_SPLIT`
 - **Features (signal evaluation):** `FEATURES_SMA_PERIODS`, `FEATURES_EMA_PERIODS`, `FEATURES_MACD_FAST_PERIOD`, `FEATURES_MACD_SLOW_PERIOD`, `FEATURES_MACD_SIGNAL_PERIOD`, `FEATURES_RSI_PERIOD`, `FEATURES_ATR_PERIOD`, `FEATURES_BOLLINGER_PERIOD`, `FEATURES_BOLLINGER_STD`, `FEATURES_MOMENTUM_PERIODS`, `FEATURES_VOLATILITY_PERIOD`, `FEATURES_MIN_LOOKBACK`
@@ -196,7 +196,7 @@ traider/
   - Support multiple timeframes
 
 #### 2b. Live Fetcher (`live.py`)
-- **Purpose:** Poll current price at `DECISION_INTERVAL_HOURS`
+- **Purpose:** React to the latest completed bar (every bar, no polling cadence)
 - **Inputs:** instrument, lookback_periods (for computing candle)
 - **Output:** Single OHLCV candle
 - **Implementation:** same OpenBB client as 2a (identical code path for backtest & live)
@@ -379,7 +379,7 @@ class PortfolioTracker:
 ---
 
 ### 8. **Scheduler/Orchestrator** (`src/scheduler/orchestrator.py`)
-**Responsibility:** Main loop tying everything together at DECISION_INTERVAL_HOURS.
+**Responsibility:** Main loop tying everything together — one decision per newly generated bar.
 
 ```python
 class MainOrchestrator:
@@ -412,7 +412,11 @@ class MainOrchestrator:
         logger.info(f"Executed: {signal} | Confidence: {signal.confidence}")
     
     def start(self):
-        self.scheduler.add_job(self.decision_loop, 'interval', hours=DECISION_INTERVAL_HOURS)
+        # The TICK is not the cadence: it only has to be frequent enough to notice a
+        # new bar. Each run looks at the latest bar's timestamp and decides only if
+        # that bar has not been decided on yet, so a slow or restarted process
+        # catches up by acting on what is current rather than by replaying.
+        self.scheduler.add_job(self.decision_loop, 'interval', minutes=5)
         self.scheduler.start()
 ```
 

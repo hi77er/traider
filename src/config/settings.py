@@ -42,11 +42,14 @@ class Settings(BaseSettings):
 
     # ── Trading instrument & trading period ──────────────────────────
     instrument: str = Field(default="AAPL", description="Stock ticker the strategy operates on")
-    decision_interval_hours: int = Field(default=24, ge=1, description="Trading decision period (hours)")
     trading_start_hour: str = Field(default="09:30", description="Start of trading window (HH:MM, exchange-local)")
     trading_end_hour: str = Field(default="16:00", description="End of trading window (HH:MM, exchange-local)")
     market_timezone: str = Field(default="America/New_York", description="Timezone of the exchange where the symbol trades")
-    decision_time: str = Field(default="09:45", description="Daily time (HH:MM, exchange-local) the signal is computed / decision made")
+    # There is deliberately NO decision cadence here. A decision is made on every
+    # newly generated bar: the signal for a bar is computed at that bar's close and
+    # filled at the NEXT bar's open, so a "how often" setting would only be able to
+    # skip bars the strategy was built to see. What limits the cadence is the bar
+    # size (HISTORICAL_BAR_SIZE) and the trading window.
     data_delta_pull_time: str = Field(default="16:30", description="Daily time (HH:MM, exchange-local) the delta is pulled into the dataset")
 
     # ── Market data (OpenBB Platform) ────────────────────────────────
@@ -356,7 +359,7 @@ class Settings(BaseSettings):
             raise ValueError(f"EXECUTION_ENV must be 'paper' or 'live', got {v!r}")
         return val
 
-    @field_validator("decision_time", "data_delta_pull_time")
+    @field_validator("data_delta_pull_time")
     @classmethod
     def _validate_hhmm(cls, v: str) -> str:
         """Schedule times are HH:MM (24h) in MARKET_TIMEZONE."""

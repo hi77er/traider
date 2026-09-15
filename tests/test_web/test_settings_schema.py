@@ -129,8 +129,8 @@ def test_strategy_scope_carries_trading_gates_scheduler():
     """Everything a strategy needs is editable per strategy."""
     by_key = {f["key"]: f for g in config_service.strategy_config_groups(S(_env_file=None))
               for f in g["fields"]}
-    for key in ("DECISION_INTERVAL_HOURS", "MARKET_TIMEZONE", "TRADING_START_HOUR",
-                "TRADING_END_HOUR", "DECISION_TIME", "DATA_DELTA_PULL_TIME",
+    for key in ("MARKET_TIMEZONE", "TRADING_START_HOUR",
+                "TRADING_END_HOUR", "DATA_DELTA_PULL_TIME",
                 "GATE_MIN_SHARPE", "GATE_MAX_DRAWDOWN_PERCENT",
                 "GATE_MIN_WIN_RATE_PERCENT", "GATE_MAX_WEEKLY_LOSS_PERCENT",
                 "SCHEDULER_ENABLED", "SCHEDULER_TIMEZONE"):
