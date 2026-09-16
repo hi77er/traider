@@ -266,7 +266,15 @@ def test_get_trading_reports_the_state_the_lock_and_the_options(wired):
     assert set(body) == {
         "trading", "locked", "execution", "env_options", "strategy", "instrument",
         "bar_size", "verification", "freshness",
+        # What the ACCOUNTS hold, which is not the same question as whether trading is
+        # armed — the panel stays on screen while something is open precisely because
+        # "off" is not "flat". Cached, so polling this is not a broker call per poll.
+        "positions", "open_count", "unknown_count",
     }
+    # No keys in this fixture, so each account is provably empty rather than assumed so.
+    assert body["open_count"] == 0 and body["unknown_count"] == 0
+    assert [p["env"] for p in body["positions"]] == ["paper", "live"]
+    assert all(p["by_construction"] for p in body["positions"])
     # The payload says whether the process is still the gate the files describe.
     assert body["freshness"]["stale"] is False, "the test process just imported it"
     assert any(p.endswith("trading_service.py") for p in body["freshness"]["watched"])

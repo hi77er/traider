@@ -1308,6 +1308,39 @@ async function toggleTrading() {
   if (state.rulesPayload && typeof renderStrategyBar === "function") renderStrategyBar();
 }
 
+async function stopAndFlatten() {
+  const exec = state.executionStatus || {};
+  const open = Number((state.tradingPayload || {}).open_count || 0);
+  const ok = await confirmDialog({
+    title: exec.live ? "Stop trading and close the position?" : "Stop trading and close the position?",
+    messageHtml:
+      (open ? `${open} position(s) will be closed at market, ` : "Trading will stop, ") +
+      (exec.live
+        ? "and the orders go to your <b>LIVE</b> account — this is real money."
+        : "and the orders go to the paper account.") +
+      " Trading goes off first, so a failed close still leaves the bot stopped.",
+    confirmText: "Stop &amp; flatten",
+  });
+  if (!ok) return;
+  let r = null;
+  try {
+    r = await api("/api/v1/trading/off-flatten", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      // The acknowledgement is required for the LIVE flatten, and only for it: closing a
+      // real position costs real money, while stopping must never need anything.
+      body: JSON.stringify({ confirm_live: !!exec.live }),
+    });
+  } catch (err) {
+    flashToast(`Stop & flatten failed: ${err.message}`, "warn");
+    return;
+  }
+  if (r && r.ok === false) flashToast(r.message || "Stop & flatten did not finish", "warn");
+  else flashToast(r && r.message ? r.message : "Trading is OFF", "ok");
+  await loadTrading();
+  if (state.rulesPayload && typeof renderStrategyBar === "function") renderStrategyBar();
+}
+
 // The two header controls. They are ONE pill: identical border, tint, background,
 // font and geometry, in every state — only the words (and the status dot that ends
 // them) differ. The label always names the ACTION; nothing is styled per state.
@@ -1346,21 +1379,54 @@ function renderTradingPanel(d) {
   if (!panel) return;
   const tr = d.trading || {};
   const exec = d.execution || {};
-  panel.hidden = !tr.on;
-  if (!tr.on) return;
+  const open = Number(d.open_count || 0);
+  // Visible while ARMED **or** while something is open. Those are different questions and
+  // only the first one is about the switch: a position held with trading OFF is exactly
+  // the case that needs a flatten button and a sentence saying so, and hiding the panel
+  // there would be the screen quietly agreeing with a wrong assumption.
+  panel.hidden = !tr.on && open === 0;
+
+  const offBtn = $("trading-off-btn");
+  const flatBtn = $("trading-flatten-btn");
+  if (offBtn) offBtn.hidden = !tr.on;
+  if (flatBtn) flatBtn.hidden = !open;
+  const liveNote = $("trading-live-note");
+  const offNote = $("trading-off-note");
+  if (liveNote) liveNote.hidden = !tr.on;
+  if (offNote) offNote.hidden = !!tr.on;
+
   const msg = $("trading-msg");
   if (msg) {
-    msg.textContent = `${String(tr.env || "").toUpperCase()} account · ${exec.broker || "—"} · live since ${shortWhen(tr.since)}`;
+    msg.textContent = tr.on
+      ? `${String(tr.env || "").toUpperCase()} account · ${exec.broker || "—"} · live since ${shortWhen(tr.since)}`
+      : `${open} position(s) still open · trading is OFF`;
   }
+
   const facts = $("trading-facts");
-  if (facts) {
-    facts.innerHTML = [
+  if (!facts) return;
+  const rows = [];
+  if (tr.on) {
+    rows.push(
       execRow("Strategy", escapeHtml(d.strategy || "—")),
       execRow("Instrument", escapeHtml(d.instrument || "—")),
       execRow("Bar size", escapeHtml(d.bar_size || "—")),
-      execRow("Endpoint", `<code>${escapeHtml(exec.base_url || "—")}</code>`),
-    ].join("");
+      execRow("Endpoint", `<code>${escapeHtml(exec.base_url || "—")}</code>`)
+    );
   }
+  // What is held, per account — the reason the panel is on screen at all when OFF.
+  for (const account of d.positions || []) {
+    for (const p of account.positions || []) {
+      const qty = p.qty === undefined || p.qty === null ? "" : `${p.qty} `;
+      rows.push(execRow(
+        String(account.env || "").toUpperCase(),
+        `${escapeHtml(p.symbol || "—")} · ${escapeHtml(qty + (p.side || ""))} · entry ${escapeHtml(p.avg_entry_price || "—")}`
+      ));
+    }
+    if (account.known === false) {
+      rows.push(execRow(String(account.env || "").toUpperCase(), `<b>could not be read</b> — ${escapeHtml(account.reason || "")}`));
+    }
+  }
+  facts.innerHTML = rows.join("");
 }
 
 function execRow(label, html) {

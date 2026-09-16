@@ -18,6 +18,7 @@ from src.config.effective import get_effective_settings_dep
 from src.config.settings import Settings
 from src.web.auth import require_auth
 from src.web.services import rules_service
+from src.web.services import trading_service
 from src.web.services.trading_service import require_trading_off
 
 router = APIRouter(
@@ -68,13 +69,31 @@ def create_strategy(body: StrategyCreate, settings: Settings = Depends(get_effec
     return rules_service.create_strategy(settings, body.name)
 
 
-@router.post("/select", dependencies=[Depends(require_trading_off)])
+@router.post(
+    "/select",
+    dependencies=[
+        Depends(require_trading_off),
+        # Selecting a DIFFERENT strategy while a position is open is refused because the
+        # flatten that follows would run against the NEW strategy's instrument and
+        # environment, and miss the position entirely. Blocking the switch is what keeps
+        # "flatten first" reachable from the screen where the position is actually visible.
+        Depends(trading_service.require_flat("The active strategy cannot be changed while a position is open")),
+    ],
+)
 def select_strategy(body: StrategyCreate, settings: Settings = Depends(get_effective_settings_dep)) -> dict:
     """Switch the active strategy to an existing one (same as create-if-exists)."""
     return rules_service.create_strategy(settings, body.name)
 
 
-@router.post("/delete", dependencies=[Depends(require_trading_off)])
+@router.post(
+    "/delete",
+    dependencies=[
+        Depends(require_trading_off),
+        # Deleting the strategy that owns a position would leave nothing that knows how to
+        # close it — the instrument and the environment go with the strategy.
+        Depends(trading_service.require_flat("A strategy cannot be deleted while a position is open")),
+    ],
+)
 def delete_strategy(body: StrategyDelete, settings: Settings = Depends(get_effective_settings_dep)) -> dict:
     """Soft-delete a named strategy (kept in the file, hidden from the panel).
     When ``delete_data`` is set the instrument's dataset file(s) are removed too

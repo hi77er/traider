@@ -19,6 +19,7 @@ from src.config.effective import get_effective_settings_dep
 from src.execution.config import execution_status
 from src.web.auth import require_auth
 from src.web.services import rules_service
+from src.web.services import trading_service
 from src.web.services.trading_service import require_trading_off
 
 router = APIRouter(
@@ -45,7 +46,17 @@ def get_status(settings=Depends(get_effective_settings_dep)) -> dict:
     return execution_status(settings)
 
 
-@router.post("/env", dependencies=[Depends(require_trading_off)])
+@router.post(
+    "/env",
+    dependencies=[
+        Depends(require_trading_off),
+        # Switching accounts while one of them holds a position puts that position beyond
+        # this UI's reach: the screen would be pointed at the other account, and the
+        # flatten button would be looking somewhere else. So the switch is what has to
+        # wait — not the position.
+        Depends(trading_service.require_flat("The environment cannot be switched while a position is open")),
+    ],
+)
 def set_env(body: EnvRequest, settings=Depends(get_effective_settings_dep)) -> dict:
     """Point the active strategy's orders at ``paper`` (safe) or ``live`` (real money)."""
     return rules_service.set_execution_env(settings, body.env)

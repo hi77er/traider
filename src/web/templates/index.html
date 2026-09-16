@@ -83,22 +83,32 @@
             <div id="indicator-panes"></div>
           </div>
 
-          <!-- Trading: appears only while trading is ON, right under the chart so the
-               armed state is impossible to miss, and above the backtest it freezes. -->
+          <!-- Trading: appears while trading is ON, right under the chart so the
+               armed state is impossible to miss, and above the backtest it freezes.
+               It ALSO appears when trading is OFF and something is still open, because
+               those are different questions and only the first is about the switch —
+               "off" is not "flat", and that is the case that needs a way out. -->
           <div id="trading-panel" class="card trading-card" hidden>
             <div class="card-head">
               <h2>Trading</h2>
               <div class="settings-actions">
                 <button id="trading-off-btn" class="ghost small danger" onclick="toggleTrading()">⏹ Turn trading off</button>
+                <button id="trading-flatten-btn" class="ghost small danger" onclick="stopAndFlatten()"
+                        title="Turn trading off and close whatever is open — the stop button does not close anything">✂ Stop trading &amp; flatten</button>
               </div>
             </div>
             <p id="trading-msg" class="muted"></p>
             <div id="trading-facts" class="rp-kv-grid"></div>
-            <p class="muted note">
+            <p id="trading-live-note" class="muted note">
               This strategy is armed. While trading is ON every configuration panel is locked —
               turn trading off to change anything. <b>No orders are sent yet</b>: the Alpaca
               executor is still to be implemented, so this panel shows the target the orders
               <em>will</em> go to, and live activity will be reported here once it exists.
+            </p>
+            <p id="trading-off-note" class="muted note" hidden>
+              Trading is <b>off</b>, which does not close anything. Anything listed above is
+              still open at the broker: it keeps its price risk until a stop, a target, or
+              <b>Stop trading &amp; flatten</b> ends it.
             </p>
           </div>
 

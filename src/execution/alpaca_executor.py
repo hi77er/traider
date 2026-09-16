@@ -347,8 +347,28 @@ class AlpacaExecutor:
     def position(self, instrument: str) -> Optional[Dict[str, Any]]:
         return self.client.position(instrument)
 
+    def positions(self) -> list:
+        """EVERY position in the account, not just this strategy's instrument.
+
+        Asked before an action that could strand one — arming the bot, switching the
+        environment, changing or deleting the active strategy — because the account is
+        shared and a position the strategy does not know about is still a position nobody
+        is managing (see ``src/execution/positions.py``).
+        """
+        return self.client.positions()
+
     def open_orders(self, instrument: Optional[str] = None) -> list:
         return self.client.open_orders(instrument)
+
+    def resting_exits(self, instrument: Optional[str] = None) -> list:
+        """The resting exit legs among the open orders for ``instrument``.
+
+        Separate from ``open_orders`` because the question "is this position protected?"
+        is not answered by "are there orders": an entry that has not filled yet is an open
+        order, and a bracket parent is an open order, while neither is an exit. Only a stop
+        or limit leg protects anything.
+        """
+        return _exit_legs(self.client.open_orders(instrument))
 
     def closed_orders(self, instrument: Optional[str] = None, limit: int = 20) -> list:
         """Recently finished orders, newest first — where a resting exit's fill is read."""
