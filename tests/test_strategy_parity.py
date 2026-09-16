@@ -28,9 +28,9 @@ from src.config.settings import Settings
 from src.data import live as live_data
 from src.model import rules as rules_mod
 from src.model.simple_model import RuleBasedSignalGenerator
-from src.strategy.broker import BrokerPosition, Fill, SimulatedBroker
+from src.strategy.broker import BrokerPosition, ClosingFill, Fill, SimulatedBroker
 from src.strategy.config import StrategyConfig
-from src.strategy.engine import Bar, StrategyEngine, bar_from_row
+from src.strategy.engine import STOP, TAKE, Bar, StrategyEngine, bar_from_row
 from src.strategy.live import LiveDriver, NotEnoughHistory
 from src.strategy.state import StrategyState
 
@@ -439,6 +439,156 @@ def test_a_broker_that_fills_elsewhere_moves_the_stop_with_it(tmp_path):
     expected = _engine(settings).levels(pos.entry_price, pos.short)
     assert (pos.stop, pos.take) == expected, "levels must follow the real fill"
     assert pos.entry_price < _bars(df)[5].open, "the worse price was adopted"
+
+
+def test_the_resting_exits_are_moved_to_the_levels_the_real_fill_implies(tmp_path):
+    """Deriving the exit locally is only half the fix.
+
+    The bracket is SENT with the exits measured from the expected price — waiting for the
+    fill before sending anything would leave the entry naked. So after a fill that landed
+    elsewhere the broker's resting legs have to be moved onto the levels the real price
+    implies, or a long filled above expectation carries more risk than was sized for while
+    the backtest reports it did not.
+    """
+
+    class OffPrice(SimulatedBroker):
+        """Fills above expectation and remembers what it was asked to amend."""
+
+        def __init__(self):
+            super().__init__()
+            self.asked = None
+
+        def submit(self, intent):
+            fill = super().submit(intent)
+            if fill.filled and intent.action == "open":
+                return Fill(status="filled", price=float(fill.price) * 1.01, quantity=1.0)
+            return fill
+
+        def reprice_exits(self, stop, take):
+            self.asked = (stop, take)
+            return {"amended": [{"leg": "stop"}, {"leg": "limit"}]}
+
+    df = _zigzag(40)
+    settings = _settings(tmp_path)
+    gen = _generator(settings, _always_buy())
+    broker = OffPrice()
+    driver = LiveDriver(settings=settings, engine=_engine(settings), generator=gen,
+                        broker=broker, state_path=tmp_path / "state.json")
+    result = driver.on_bar_closed(df.iloc[:8], next_bar=_bars(df)[8])
+
+    pos = driver.state.position
+    assert pos is not None
+    expected = _engine(settings).levels(pos.entry_price, pos.short)
+    assert broker.asked == expected, "the broker must be told to move onto the real levels"
+    assert result["intents"][0]["exits"]["amended"], "and the tick reports that it did"
+
+
+def test_a_simulated_broker_has_nothing_to_adopt_and_nothing_to_move():
+    """Both live-only methods are deliberate no-ops here, which is what keeps the parity
+    test on the same code path as a real run."""
+    broker = SimulatedBroker()
+    assert broker.closing_fill(False) is None
+    assert broker.reprice_exits(100.0, 200.0) is None
+
+
+def test_an_exit_the_broker_made_is_adopted_rather_than_refused(tmp_path):
+    """A resting bracket stop firing between two ticks used to wedge the bot for ever.
+
+    The driver is asleep, the market is not: by the next tick the broker is flat and the
+    local state still holds a position. Refusing is right for "we disagree"; it is wrong
+    for "my exit already happened and I can prove it at what price".
+    """
+
+    class BracketFired(SimulatedBroker):
+        """Flat at the broker, with the closing fill on record."""
+
+        def __init__(self, *, price=97.25, reason=STOP, proof=True):
+            super().__init__()
+            self._price, self._reason, self._proof = price, reason, proof
+
+        def position(self):
+            return BrokerPosition()          # the stop took us out
+
+        def closing_fill(self, short):
+            if not self._proof:
+                return None
+            return ClosingFill(price=self._price, reason=self._reason, order_id="leg-stop")
+
+    df = _zigzag(40)
+    settings = _settings(tmp_path)
+    gen = _generator(settings, _always_buy())
+    broker = BracketFired()
+    driver = LiveDriver(settings=settings, engine=_engine(settings), generator=gen,
+                        broker=broker, state_path=tmp_path / "state.json")
+    driver.on_bar_closed(df.iloc[:8], next_bar=_bars(df)[8])
+    assert driver.state.position is not None, "a position to be closed out of band"
+    trades = len(driver.ledger.legs)
+
+    result = driver.on_bar_closed(df.iloc[:9], next_bar=_bars(df)[9])
+
+    assert result["action"] == "decided", "an adoption is not a refusal"
+    assert result["adopted"]["price"] == 97.25
+    assert result["adopted"]["reason"] == STOP
+    assert len(driver.ledger.legs) == trades + 1, "the adopted exit is one closed trade"
+    booked = driver.ledger.legs[-1]
+    assert booked["exit_price"] == 97.25, "at the broker's price, not a local guess"
+    assert booked["reason"] == STOP, "and with the reason read off the broker's order"
+
+
+def test_an_exit_that_cannot_be_priced_is_still_refused(tmp_path):
+    """The other half of the distinction: no proof means no booking.
+
+    Either the position was closed by something the history does not explain, or it was
+    closed and Alpaca did not say at what price. Both are conditions to stop on, because
+    the alternative is inventing the price of a trade.
+    """
+
+    class Unexplained(SimulatedBroker):
+        def position(self):
+            return BrokerPosition()
+
+        def closing_fill(self, short):
+            return None
+
+    df = _zigzag(40)
+    settings = _settings(tmp_path)
+    gen = _generator(settings, _always_buy())
+    driver = LiveDriver(settings=settings, engine=_engine(settings), generator=gen,
+                        broker=Unexplained(), state_path=tmp_path / "state.json")
+    driver.on_bar_closed(df.iloc[:8], next_bar=_bars(df)[8])
+    trades = len(driver.ledger.legs)
+
+    result = driver.on_bar_closed(df.iloc[:9], next_bar=_bars(df)[9])
+
+    assert result["action"] == "refused"
+    assert "does not show what closed it" in result["reason"]
+    assert len(driver.ledger.legs) == trades, "nothing was booked on a guess"
+
+
+def test_a_direction_the_two_sides_disagree_on_is_refused(tmp_path):
+    """Both hold something, but not the same something: a second opinion about reality,
+    which no price can settle."""
+
+    class Opposite(SimulatedBroker):
+        """Reports a SHORT while the local state holds a LONG."""
+
+        def position(self):
+            return BrokerPosition(quantity=-5.0, short=True)
+
+    df = _zigzag(40)
+    settings = _settings(tmp_path)
+    gen = _generator(settings, _always_buy())
+    driver = LiveDriver(settings=settings, engine=_engine(settings), generator=gen,
+                        broker=SimulatedBroker(), state_path=tmp_path / "state.json")
+    first = driver.on_bar_closed(df.iloc[:8], next_bar=_bars(df)[8])
+    assert first["action"] == "decided"
+    assert driver.state.position is not None and driver.state.position.short is False
+
+    # The broker's story changes underneath us — the case that must never be traded on.
+    driver.broker = Opposite()
+    second = driver.on_bar_closed(df.iloc[:9], next_bar=_bars(df)[9])
+    assert second["action"] == "refused"
+    assert "the broker says short" in second["reason"]
 
 
 # ---------------------------------------------------------------------------

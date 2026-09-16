@@ -40,15 +40,20 @@ from typing import Any, Callable, Optional
 
 from src.execution.alpaca_client import AlpacaError
 from src.execution.alpaca_executor import AlpacaExecutor, OrderRefused
-from src.strategy.broker import FILLED, NO_FILL, REJECTED, BrokerPosition, Fill
-from src.strategy.engine import CLOSE, NONE, OPEN, SKIP, Intent
+from src.strategy.broker import FILLED, NO_FILL, REJECTED, BrokerPosition, ClosingFill, Fill
+from src.strategy.engine import CLOSE, FORCED, NONE, OPEN, SKIP, STOP, TAKE, Intent
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["AlpacaBroker"]
+__all__ = ["AlpacaBroker", "broker_position", "closing_fill_from_history", "shares_for"]
 
 # Alpaca says "this order is over and did not fill".
 DEAD_STATUSES = frozenset({"rejected", "canceled", "cancelled", "expired", "stopped"})
+
+# The order types that can only be an EXIT: an entry is a market order and, in this
+# project, always a bracket parent. Reading the reason off the type is what lets the
+# adopted exit land in the trade log as a stop or a take rather than as "something".
+_STOP_TYPES = frozenset({"stop", "stop_limit", "trailing_stop"})
 
 
 def broker_position(payload: Optional[dict]) -> BrokerPosition:
@@ -83,6 +88,61 @@ def shares_for(weight: float, price: float, equity: float) -> int:
         return 0
     weight = min(max(float(weight or 0.0), 0.0), 1.0)
     return int(math.floor(equity * weight / price))
+
+
+def closing_fill_from_history(orders, *, symbol: str, short: bool) -> Optional[ClosingFill]:
+    """Find the order that closed our position, if the history proves one did.
+
+    Two shapes are searched, because Alpaca uses both: a plain exit order listed on its
+    own, and the ``legs`` of a bracket parent (the usual case — the parent is the entry,
+    and its stop and take-profit hang off it). Only FILLED orders with a price count; a
+    cancelled leg is not an exit.
+
+    ``short`` is how the closing side is derived — a long is closed by a SELL and a short
+    by a BUY — and it comes from the local position rather than the broker, because by the
+    time this is asked the broker is flat and no longer remembers which way round it was.
+
+    Returns ``None`` when nothing in the history proves a close. That is the case the
+    driver must keep refusing on: an exit with no price is not something to book.
+    """
+    closing_side = "buy" if short else "sell"
+    best = None
+    best_at = ""
+
+    candidates: list = []
+    for order in orders or []:
+        if not isinstance(order, dict):
+            continue
+        candidates.append(order)
+        candidates.extend(leg for leg in (order.get("legs") or []) if isinstance(leg, dict))
+
+    for order in candidates:
+        if str(order.get("status") or "").lower() != "filled":
+            continue
+        if str(order.get("side") or "").strip().lower() != closing_side:
+            continue
+        price = _to_float(order.get("filled_avg_price"))
+        if not price:
+            continue
+        filled_at = str(order.get("filled_at") or "")
+        # Newest wins. The list is newest-first, but legs arrive nested and unordered
+        # relative to each other, so the timestamp is what actually decides.
+        if best is None or filled_at > best_at:
+            best, best_at = order, filled_at
+
+    if best is None:
+        return None
+
+    kind = str(best.get("type") or "").lower()
+    reason = STOP if kind in _STOP_TYPES else (TAKE if kind == "limit" else FORCED)
+    return ClosingFill(
+        price=float(_to_float(best.get("filled_avg_price"))),
+        reason=reason,
+        order_id=str(best.get("id") or "") or None,
+        quantity=float(_to_float(best.get("filled_qty")) or 0.0),
+        filled_at=best_at or None,
+        detail=f"closed by a resting {kind or 'order'}",
+    )
 
 
 def _to_float(value: Any) -> Optional[float]:
@@ -165,6 +225,48 @@ class AlpacaBroker:
         except Exception as exc:  # noqa: BLE001
             logger.exception("%s unexpected failure flattening %s", self.label, self.symbol)
             return Fill(status=REJECTED, detail=f"unexpected broker failure: {exc}")
+
+    def closing_fill(self, short: bool) -> Optional[ClosingFill]:
+        """What closed our position, if a resting exit did it while we were not looking.
+
+        Asked only in the case that used to deadlock the driver: local state holds a
+        position and the broker is flat. A bracket's stop or take-profit firing between two
+        ticks is the ordinary way a live position ends, and re-deriving the price locally
+        would be a guess about the broker's behaviour rather than a record of it — so the
+        answer comes from the order history, and the REASON comes from the leg's own type.
+
+        Returns ``None`` when it cannot be proved, which is the honest answer: the driver
+        refuses in that case rather than inventing an exit price.
+        """
+        try:
+            orders = self.executor.closed_orders(self.symbol, limit=10)
+        except (AlpacaError, OrderRefused) as exc:
+            logger.warning("%s could not read order history: %s", self.label, exc)
+            return None
+        return closing_fill_from_history(orders, symbol=self.symbol, short=short)
+
+    def reprice_exits(self, stop: Optional[float], take: Optional[float]) -> Optional[dict]:
+        """Move the resting exits to the levels derived from the REAL fill price.
+
+        Only the broker can do this: the levels are the driver's (they come from
+        ``StrategyEngine.levels``, measured from what was actually paid), but the orders
+        that have to move are the broker's. Never raises — a leg that keeps its old level
+        is still protection, and failing an entry because an amendment did not land would
+        be trading nothing at all instead of trading something slightly wider.
+        """
+        if stop is None and take is None:
+            return None
+        try:
+            report = self.executor.amend_exits(self.symbol, stop=stop, take=take)
+        except Exception as exc:  # noqa: BLE001 - an amendment must never break a tick
+            logger.exception("%s unexpected failure amending exits", self.label)
+            return {"amended": [], "failed": [{"reason": str(exc)}], "left": []}
+        if report.get("failed"):
+            logger.error(
+                "%s left %d exit leg(s) at their old level: %s",
+                self.label, len(report["failed"]), report["failed"],
+            )
+        return report
 
     # -- entries and exits -------------------------------------------------
     def _open(self, intent: Intent) -> Fill:

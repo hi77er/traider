@@ -15,10 +15,12 @@ Three things this driver owns, because they are genuinely live-only:
   instead of trading nothing.
 * **idempotency.** ``state.last_decided_bar`` is the bar whose signal has been acted on.
   A repeated tick for the same bar does nothing, and a restart cannot re-fire it.
-* **reconciliation.** The broker is the truth about what is held. If it disagrees with
-  the local state the driver refuses to submit until they agree, because trading on a
-  position you are wrong about is how a bot doubles up or sells something it does not
-  own.
+* **reconciliation.** The broker is the truth about what is held. An exit the broker made
+  on its own is BOOKED first (a resting bracket closing between two ticks is the ordinary
+  way a live position ends, and refusing on it would wedge the bot for ever); anything left
+  after that is genuine drift, and the driver refuses to submit until the two agree,
+  because trading on a position you are wrong about is how a bot doubles up or sells
+  something it does not own.
 """
 
 from __future__ import annotations
@@ -33,6 +35,7 @@ from src.config import state_files
 from src.strategy.broker import Broker, BrokerPosition, Fill
 from src.strategy.engine import (
     CLOSE,
+    FORCED,
     OPEN,
     SKIP,
     Bar,
@@ -117,11 +120,68 @@ class LiveDriver:
         state_files.write_json(self.state_path, self.state.as_dict())
 
     # -- reconciliation ----------------------------------------------------
+    def adopt_broker_exit(self, bar: Bar) -> Optional[Dict[str, Any]]:
+        """Book an exit the BROKER made, so the local state stops disagreeing.
+
+        The case this exists for: a resting bracket's stop or take-profit fires between two
+        ticks. The strategy is asleep, the market is not — by the next tick the broker is
+        flat and the local state still holds a position. Refusing is right for "we disagree
+        about reality" and wrong for "my exit already happened and I can prove it at what
+        price", so the provable case is booked here instead of blocking for ever.
+
+        Returns what it adopted, or ``None`` when there was nothing to adopt. ``None`` is
+        the honest answer when the broker's history cannot say what closed the position:
+        the driver then refuses, because an exit with no price is not something to book.
+        """
+        if self.broker is None:
+            return None
+        pos = self.state.position
+        if pos is None:
+            return None
+        if not self.broker.position().is_flat:
+            # Something IS held. That is drift, not an exit, and reconcile() decides.
+            return None
+
+        closing = self.broker.closing_fill(pos.short)
+        if closing is None:
+            return None
+
+        intent = Intent(
+            action=CLOSE,
+            reason=closing.reason or FORCED,
+            short=pos.short,
+            expected_price=closing.price,
+            level=closing.price,
+        )
+        # Through settle(), not book(): the adopted exit must land in the ledger, the
+        # trade log and the stats by exactly the same path a stop the driver saw it make
+        # would have used, or the two would disagree about the same trade.
+        self.engine.settle(self.ledger, self.state, bar, intent, exit_price=closing.price)
+        self.save_state()
+        report = {
+            "action": "adopted",
+            "reason": intent.reason,
+            "price": closing.price,
+            "bar": str(bar.time),
+            "order_id": closing.order_id,
+            "detail": closing.detail or "the position was closed at the broker",
+        }
+        logger.warning(
+            "%s: adopted an exit that happened at the broker — %s at %.4f (order %s)",
+            self.name, intent.reason, closing.price, closing.order_id,
+        )
+        return report
+
     def reconcile(self) -> Optional[str]:
         """``None`` when local state and the broker agree, else why they do not.
 
         Returns a message rather than raising: a mismatch is a condition to report and
         stop on, not a crash — the dashboard shows it and the operator fixes it.
+
+        An exit the broker made on its own is not a mismatch by the time this runs —
+        :meth:`adopt_broker_exit` books it first. So what reaches here is genuine drift:
+        a position only one side knows about, or a direction they disagree on. Refusing is
+        right for all of it.
         """
         if self.broker is None:
             return None
@@ -133,9 +193,18 @@ class LiveDriver:
                 "refusing to trade until they agree"
             )
         if local is not None and actual.is_flat:
+            # The adoption step already ran, so the broker closed this position without
+            # leaving a record we could price. Book nothing and stop.
             return (
-                f"local state holds a {local.direction if hasattr(local, 'direction') else 'position'} "
-                f"in {self.name} but the broker is flat — refusing to trade until they agree"
+                f"local state holds a position in {self.name} but the broker is flat, and "
+                "its order history does not show what closed it — refusing to trade until "
+                "they agree"
+            )
+        if local is not None and local.short != bool(actual.short):
+            return (
+                f"local state says {'short' if local.short else 'long'} in {self.name} but "
+                f"the broker says {'short' if actual.short else 'long'} — refusing to trade "
+                "until they agree"
             )
         return None
 
@@ -170,6 +239,11 @@ class LiveDriver:
         )
         self.engine.observe_close(float(candles["close"].iloc[-1]))
 
+        # A resting exit can have closed the position while this driver slept between
+        # bars. Adopt it BEFORE reconciling: the mismatch it creates is not drift, and
+        # leaving it unbooked would refuse every future tick for ever.
+        adopted = self.adopt_broker_exit(fill_bar)
+
         mismatch = self.reconcile()
         if mismatch:
             logger.warning(mismatch)
@@ -184,7 +258,10 @@ class LiveDriver:
         self.state.last_decided_bar = bar_key
         self.save_state()
         self.log.extend(done)
-        return {"action": "decided", "bar": bar_key, "signal": act, "intents": done}
+        report = {"action": "decided", "bar": bar_key, "signal": act, "intents": done}
+        if adopted is not None:
+            report["adopted"] = adopted
+        return report
 
     def _act(self, bar: Bar, intent: Intent) -> Dict[str, Any]:
         """Submit one intent and book what came back."""
@@ -198,15 +275,19 @@ class LiveDriver:
         # that difference is the honest cost of trading rather than a modelling choice.
         real = fill.price if fill.filled else None
         if intent.action == OPEN:
-            if real is not None:
-                self._reprice_entry(real)
-            return {
+            report = {
                 "intent": intent.action,
                 "reason": intent.reason,
                 "price": real if real is not None else intent.expected_price,
                 "expected": intent.expected_price,
                 "status": fill.status,
             }
+            if real is not None:
+                self._reprice_entry(real)
+                exits = self._reprice_exits()
+                if exits is not None:
+                    report["exits"] = exits
+            return report
         if intent.action == CLOSE:
             self.engine.settle(self.ledger, self.state, bar, intent, exit_price=real)
             return {
@@ -240,6 +321,29 @@ class LiveDriver:
             return
         pos.entry_price = float(price)
         pos.stop, pos.take = self.engine.levels(pos.entry_price, pos.short)
+
+    def _reprice_exits(self) -> Optional[Dict[str, Any]]:
+        """Move the broker's resting exits to the levels the REAL fill implies.
+
+        The bracket goes out with the exits derived from the price the strategy EXPECTED,
+        because waiting for the fill before sending anything would leave the entry naked
+        for however long the round trip takes. Once it fills elsewhere, the levels have to
+        follow the money that was actually spent: a long filled above expectation would
+        otherwise rest its stop further away than the position was sized for, so the real
+        risk per trade would exceed ``RISK_LIMIT_PERCENT`` while the backtest said it did
+        not.
+
+        The levels come from :meth:`StrategyEngine.levels` — the same call the bracket was
+        built from — so this is one derivation applied twice, not a second opinion. A
+        broker with no resting orders (the simulated one) does nothing; see
+        ``src/strategy/broker.py``.
+        """
+        if self.broker is None:
+            return None
+        pos = self.state.position
+        if pos is None:
+            return None
+        return self.broker.reprice_exits(pos.stop, pos.take)
 
 
 def _safe(name: str) -> str:

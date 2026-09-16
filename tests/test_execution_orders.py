@@ -737,3 +737,196 @@ def test_a_live_tick_places_a_bracketed_order_through_the_shared_engine(tmp_path
     assert driver.state.position.entry_price == 110.50
     assert (tmp_path / "state.json").exists(), "the tick is remembered, so a restart cannot re-fire it"
     assert driver.on_bar_closed(frame.iloc[: need + 1], next_bar=candles[need + 1])["action"] == "noop"
+
+
+# ---------------------------------------------------------------------------
+# moving the exits after the fill (defect 2)
+# ---------------------------------------------------------------------------
+def _executor_on(session, settings=None):
+    """An executor whose HTTP is the stub, with the switch forced open.
+
+    The switch has its own tests; here it would only be a second thing that can make an
+    order refuse.
+    """
+    settings = settings or _settings()
+    client = AlpacaClient(resolve_execution_target(settings), session=session, timeout=1)
+    return AlpacaExecutor(settings, client=client, sleep=lambda _s: None, guard=lambda: None)
+
+
+def _open_bracket(stop="96.00", take="104.00", *, parent_type="market", legs=True):
+    """A filled bracket entry with its two exits still resting — Alpaca's own shape."""
+    order = {
+        "id": "ord-1", "symbol": "AAPL", "side": "buy", "type": parent_type,
+        "status": "filled", "order_class": "bracket", "filled_avg_price": "100.00",
+    }
+    if legs:
+        order["legs"] = [
+            {"id": "leg-stop", "symbol": "AAPL", "side": "sell", "type": "stop",
+             "status": "new", "stop_price": stop},
+            {"id": "leg-take", "symbol": "AAPL", "side": "sell", "type": "limit",
+             "status": "new", "limit_price": take},
+        ]
+    return [order]
+
+
+def test_the_resting_exits_are_patched_to_the_levels_the_fill_implies():
+    """The money case: a long filled above expectation used to keep a stop measured from
+    the price it never got, so the real risk per trade exceeded what was sized for."""
+    session = StubSession()
+    session.queue("GET", "/v2/orders", StubResponse(200, _open_bracket()))
+    session.queue("PATCH", "/v2/orders/leg-stop", StubResponse(200, {"id": "leg-stop"}))
+    session.queue("PATCH", "/v2/orders/leg-take", StubResponse(200, {"id": "leg-take"}))
+
+    report = _executor_on(session).amend_exits("AAPL", stop=98.0, take=106.0)
+
+    patches = [r for r in session.requests if r["method"] == "PATCH"]
+    assert [p["path"] for p in patches] == ["/v2/orders/leg-stop", "/v2/orders/leg-take"]
+    assert [p["json"] for p in patches] == [{"stop_price": "98.00"}, {"limit_price": "106.00"}]
+    assert len(report["amended"]) == 2 and report["failed"] == []
+
+
+def test_an_amendment_the_broker_rejects_leaves_the_leg_working():
+    """Alpaca keeps the original order when a replace is refused, which is why a failed
+    amendment is reported and never escalated: the position still has its exit."""
+    session = StubSession()
+    session.queue("GET", "/v2/orders", StubResponse(200, _open_bracket()))
+    session.queue("PATCH", "/v2/orders/leg-stop", StubResponse(422, {"message": "stop too close"}))
+    session.queue("PATCH", "/v2/orders/leg-take", StubResponse(200, {"id": "leg-take"}))
+
+    report = _executor_on(session).amend_exits("AAPL", stop=99.99, take=106.0)
+
+    assert len(report["failed"]) == 1 and report["failed"][0]["leg"] == "stop"
+    assert len(report["amended"]) == 1, "the leg that could move still moved"
+    assert not [r for r in session.requests if r["method"] == "DELETE"], (
+        "an amendment must never cancel the protection it is trying to improve"
+    )
+
+
+def test_an_exit_already_at_the_right_level_is_not_replaced():
+    """A replace that changes nothing is churn, and Alpaca rejects it anyway. Nothing is
+    queued for a PATCH, so the stub would fail the test if one were sent."""
+    session = StubSession()
+    session.queue("GET", "/v2/orders", StubResponse(200, _open_bracket(stop="96.00", take="104.00")))
+
+    report = _executor_on(session).amend_exits("AAPL", stop=96.0, take=104.0)
+
+    assert report["amended"] == []
+    assert not [r for r in session.requests if r["method"] == "PATCH"]
+
+
+def test_a_level_that_is_not_a_level_beside_the_fill_is_left_alone():
+    """A level on top of the fill is a position that closes instantly at a loss; Alpaca
+    refuses it, and naming it here says which number was wrong."""
+    session = StubSession()
+    session.queue("GET", "/v2/orders", StubResponse(200, _open_bracket()))
+
+    report = _executor_on(session).amend_exits("AAPL", stop=100.0, take=104.0, reference_price=100.0)
+
+    assert report["amended"] == []
+    assert len(report["left"]) == 1 and "not a level" in report["left"][0]["reason"]
+
+
+def test_a_bracket_parent_is_not_an_exit_leg():
+    """The parent is the ENTRY. Replacing it would mean replacing a filled market order,
+    which is not an amendment — it would be a second order nobody decided to place."""
+    session = StubSession()
+    session.queue("GET", "/v2/orders", StubResponse(200, _open_bracket(legs=False)))
+
+    report = _executor_on(session).amend_exits("AAPL", stop=98.0, take=106.0)
+
+    assert report["amended"] == [] and report["failed"] == []
+    assert "no resting exit legs" in report["reason"]
+    assert not [r for r in session.requests if r["method"] == "PATCH"]
+
+
+def test_there_is_nothing_to_amend_without_levels():
+    """No levels means no configured exits, so there is nothing to move — and no call is
+    made to find that out."""
+    session = StubSession()
+    report = _executor_on(session).amend_exits("AAPL")
+    assert report["amended"] == [] and "no levels" in report["reason"]
+    assert session.requests == [], "an empty amendment must not touch the broker"
+
+
+# ---------------------------------------------------------------------------
+# adopting an exit the broker made (defect 1)
+# ---------------------------------------------------------------------------
+def test_the_closing_fill_reads_the_reason_off_the_broker_order():
+    """The reason is a property of the order that filled, not a guess: a stop is a stop
+    because Alpaca says the order that closed the position was a stop."""
+    from src.execution.alpaca_broker import closing_fill_from_history
+
+    def history(kind, *, side="sell", status="filled", price="97.25"):
+        return [{"id": "leg-x", "symbol": "AAPL", "side": side, "type": kind,
+                 "status": status, "filled_avg_price": price, "filled_qty": "10",
+                 "filled_at": "2026-09-16T15:00:00Z"}]
+
+    assert closing_fill_from_history(history("stop"), symbol="AAPL", short=False).reason == "stop"
+    assert closing_fill_from_history(history("limit"), symbol="AAPL", short=False).reason == "take"
+    assert closing_fill_from_history(history("market"), symbol="AAPL", short=False).reason == "forced", (
+        "a market close is not the bracket: it is reported as forced rather than invented"
+    )
+    # A cancelled leg did not close anything, and the ENTRY is the wrong side.
+    assert closing_fill_from_history(history("stop", status="canceled"), symbol="AAPL", short=False) is None
+    assert closing_fill_from_history(history("stop", side="buy"), symbol="AAPL", short=False) is None
+    # A short is closed by a BUY, so the same order means the opposite there.
+    assert closing_fill_from_history(history("stop", side="buy"), symbol="AAPL", short=True).reason == "stop"
+    assert closing_fill_from_history([], symbol="AAPL", short=False) is None
+
+
+def test_the_closing_fill_is_found_among_a_brackets_legs():
+    """The usual shape: the parent is the entry and the exits hang off ``legs``. The two
+    legs arrive with the same timestamp in a nested list, so the newest is decided by the
+    timestamp rather than by position."""
+    from src.execution.alpaca_broker import closing_fill_from_history
+
+    parent = {
+        "id": "ord-1", "symbol": "AAPL", "side": "buy", "type": "market",
+        "status": "filled", "order_class": "bracket", "filled_avg_price": "100.00",
+        "legs": [
+            {"id": "leg-stop", "symbol": "AAPL", "side": "sell", "type": "stop",
+             "status": "filled", "filled_avg_price": "96.50", "filled_at": "2026-09-16T14:00:00Z"},
+            {"id": "leg-take", "symbol": "AAPL", "side": "sell", "type": "limit",
+             "status": "canceled", "filled_avg_price": None, "filled_at": "2026-09-16T15:00:00Z"},
+        ],
+    }
+
+    closing = closing_fill_from_history([parent], symbol="AAPL", short=False)
+
+    assert closing is not None
+    assert closing.price == 96.50 and closing.reason == "stop"
+    assert closing.order_id == "leg-stop"
+
+
+def test_the_broker_answers_both_live_only_questions():
+    """``AlpacaBroker`` implements the two methods the seam grew, through its executor."""
+    settings = _settings()
+    session = StubSession()
+    session.queue("GET", "/v2/orders", StubResponse(200, _open_bracket()))
+    session.queue("PATCH", "/v2/orders/leg-stop", StubResponse(200, {"id": "leg-stop"}))
+    session.queue("PATCH", "/v2/orders/leg-take", StubResponse(200, {"id": "leg-take"}))
+    broker = AlpacaBroker(settings, executor=_executor_on(session, settings))
+
+    resolved = broker.reprice_exits(98.0, 106.0)
+    assert [a["leg"] for a in resolved["amended"]] == ["stop", "limit"]
+
+    # ...and the closing fill, from the same history endpoint.
+    history_session = StubSession()
+    history_session.queue("GET", "/v2/orders", StubResponse(200, [
+        {"id": "leg-stop", "symbol": "AAPL", "side": "sell", "type": "stop",
+         "status": "filled", "filled_avg_price": "97.25", "filled_at": "2026-09-16T15:00:00Z"},
+    ]))
+    history_broker = AlpacaBroker(settings, executor=_executor_on(history_session, settings))
+    closing = history_broker.closing_fill(short=False)
+    assert closing is not None and closing.price == 97.25 and closing.reason == "stop"
+
+
+def test_an_unreadable_order_history_is_not_an_exit():
+    """Fail closed: if the history cannot be read, nothing is proved, so the driver keeps
+    refusing rather than booking a price it made up."""
+    settings = _settings()
+    session = StubSession()
+    session.queue("GET", "/v2/orders", StubResponse(500, {"message": "boom"}))
+    broker = AlpacaBroker(settings, executor=_executor_on(session, settings))
+
+    assert broker.closing_fill(short=False) is None

@@ -260,6 +260,20 @@ class AlpacaClient:
             params["symbols"] = symbol
         return list(self.request("GET", "/v2/orders", params=params) or [])
 
+    def replace_order(self, order_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Amend a RESTING order in place (``PATCH /v2/orders/{order_id}``).
+
+        Alpaca replaces ONE order per call and only these types: ``limit``, ``stop``,
+        ``stop_limit``, ``trailing_stop``. A bracket's two exits are therefore two calls,
+        and a replacement the broker rejects leaves the ORIGINAL order working — which is
+        what makes this safe to attempt against a live position: the exit the strategy
+        already has does not vanish while the amendment is being decided.
+
+        Idempotent by nature (setting the same price twice is the same state), so unlike a
+        submit this is safe to retry.
+        """
+        return self.request("PATCH", f"/v2/orders/{order_id}", json=payload) or {}
+
     def cancel_order(self, order_id: str) -> bool:
         """``True`` when it is now gone. A 404 is success: someone else cancelled it."""
         self.request("DELETE", f"/v2/orders/{order_id}", allow_404=True)

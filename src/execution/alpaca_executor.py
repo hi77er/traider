@@ -107,6 +107,53 @@ def _is_whole(quantity: float) -> bool:
     return abs(float(quantity) - round(float(quantity))) < WHOLE_SHARE_EPSILON
 
 
+# The order types Alpaca will replace in place: exactly the RESTING exit legs. An entry
+# is a market order, so this set is also how an exit is told from an entry without
+# having to know which one the caller meant.
+REPLACEABLE_TYPES = frozenset({"stop", "stop_limit", "trailing_stop", "limit"})
+
+
+def _exit_legs(orders) -> list:
+    """The resting, replaceable exit legs among ``orders`` — parents and children alike.
+
+    A bracket comes back as a parent whose exits hang off ``legs``, and a leg can also be
+    listed on its own; both are flattened here so callers need not know which shape Alpaca
+    used today. Terminal legs are dropped, because replacing a finished order is not an
+    amendment — it is a new order nobody decided to place.
+    """
+    found: list = []
+    for order in orders or []:
+        if not isinstance(order, dict):
+            continue
+        for candidate in [order] + list(order.get("legs") or []):
+            if not isinstance(candidate, dict):
+                continue
+            kind = str(candidate.get("type") or "").lower()
+            if kind not in REPLACEABLE_TYPES or not candidate.get("id"):
+                continue
+            if str(candidate.get("status") or "").lower() in TERMINAL_STATUSES:
+                continue
+            found.append(candidate)
+    return found
+
+
+def _level_is_replaceable(level: float, reference: Optional[float]) -> bool:
+    """Is ``level`` far enough from ``reference`` to be a level at all?
+
+    Only the distance is checked, deliberately: whether a stop belongs above or below the
+    fill depends on the direction, and this layer is not told the direction because it
+    does not need to be — the levels arrive from ``StrategyEngine.levels``, which derives
+    them from the fill price and the position's side. Re-deriving the side here would be a
+    second opinion on a question already answered (see rule 1: refuse what is impossible,
+    do not re-decide what is decided).
+    """
+    if level <= 0:
+        return False
+    if reference is None:
+        return True
+    return abs(level - float(reference)) >= MIN_STOP_DISTANCE
+
+
 def build_order_payload(
     *,
     symbol: str,
@@ -303,6 +350,10 @@ class AlpacaExecutor:
     def open_orders(self, instrument: Optional[str] = None) -> list:
         return self.client.open_orders(instrument)
 
+    def closed_orders(self, instrument: Optional[str] = None, limit: int = 20) -> list:
+        """Recently finished orders, newest first — where a resting exit's fill is read."""
+        return self.client.closed_orders(instrument, limit=limit)
+
     def clock(self) -> Dict[str, Any]:
         return self.client.clock()
 
@@ -465,6 +516,85 @@ class AlpacaExecutor:
             if price:
                 return price
         return None
+
+    def amend_exits(
+        self,
+        instrument: str,
+        *,
+        stop: Optional[float] = None,
+        take: Optional[float] = None,
+        reference_price: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Move the RESTING exits of the open position to ``stop`` / ``take``.
+
+        A bracket is submitted from the price the strategy EXPECTED and fills at the price
+        the broker actually got. Resting an exit computed from the expectation leaves a
+        real position with its stop in the wrong place — a long filled above expectation
+        would carry more risk than ``RISK_LIMIT_PERCENT`` asked for — so replacing the legs
+        is what makes the stop the stop the backtest modelled, not housekeeping.
+
+        Never raises and never cancels: a leg that cannot be replaced keeps the level it
+        already had, which is still protection. Returns a report for the caller to log.
+        """
+        report: Dict[str, Any] = {"amended": [], "failed": [], "left": [], "reason": ""}
+        if stop is None and take is None:
+            report["reason"] = "no levels to amend"
+            return report
+
+        try:
+            orders = self.client.open_orders(instrument)
+        except AlpacaError as exc:
+            report["reason"] = f"could not read the resting orders ({exc})"
+            logger.warning("%s cannot amend exits: %s", self.label, report["reason"])
+            return report
+
+        for leg in _exit_legs(orders):
+            order_id = leg.get("id")
+            kind = str(leg.get("type") or "").lower()
+            wanted = stop if kind.startswith("stop") else take
+            field = "stop_price" if kind.startswith("stop") else "limit_price"
+            current = _as_float(leg.get(field))
+
+            if not order_id:
+                continue
+            if wanted is None:
+                continue
+            if current is not None and abs(current - float(wanted)) < MIN_STOP_DISTANCE:
+                # Already where it should be: a call would be churn, and Alpaca rejects a
+                # replace that changes nothing.
+                continue
+            if reference_price and not _level_is_replaceable(float(wanted), reference_price):
+                report["left"].append(
+                    {"order_id": order_id, "leg": kind, "reason": f"{field} {float(wanted):.4f} is not a level beside {reference_price}"}
+                )
+                continue
+
+            payload = {field: f"{float(wanted):.2f}"}
+            try:
+                execute_with_retry(
+                    lambda oid=order_id, p=payload: self.client.replace_order(oid, p),
+                    max_retries=int(getattr(self.settings, "execution_max_retries", 3) or 0),
+                    base_delay=float(getattr(self.settings, "execution_retry_base_delay_seconds", 1.0) or 0.0),
+                    sleep=self._sleep,
+                    label=f"{self.label} amend {kind} of {instrument}",
+                )
+            except (AlpacaError, OrderRefused) as exc:
+                # The original leg is still working — that is Alpaca's documented
+                # behaviour for a rejected replace, and the reason this is safe.
+                report["failed"].append({"order_id": order_id, "leg": kind, "reason": str(exc)})
+                logger.error(
+                    "%s could not amend the %s of %s to %s: %s — the leg keeps its old level",
+                    self.label, kind, instrument, wanted, exc,
+                )
+                continue
+            report["amended"].append({"order_id": order_id, "leg": kind, field: float(wanted)})
+            logger.warning(
+                "%s AMENDED %s %s %s -> %.2f", self.label, instrument, kind, field, float(wanted)
+            )
+
+        if not report["amended"] and not report["failed"] and not report["left"]:
+            report["reason"] = "no resting exit legs to amend"
+        return report
 
     def flatten(self, instrument: str, reason: str = "") -> Dict[str, Any]:
         """Get out and stay out: cancel the resting exits, then close what is left.
