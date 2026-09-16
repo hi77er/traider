@@ -18,12 +18,12 @@ replay of it.
 | Data pipeline (OpenBB + yfinance, Parquet store, delta backfill) | done |
 | Features, rule model, risk layer, backtest engine + Gate | done |
 | Web portal (chart, config, backtest panel, report page) | done |
-| Tests | 418 passing |
+| Tests | 611 passing |
 | Execution config — Alpaca broker, per-strategy paper/live, fail-closed | done |
 | Trading on/off switch + the "no reconfiguration while trading is on" lock | done |
-| Live order execution (the Alpaca executor itself) | **not implemented** |
+| Live order execution — order building, retries, brackets, cancel/flatten | done |
 | Portfolio state (DynamoDB) | **not implemented** |
-| Scheduler / bot entry point | **not implemented** - `src/main.py` is a stub |
+| The execution loop — `src/main.py`, a separate process | **not implemented** |
 
 The current strategy **does not pass its own Gate yet** (see
 [CHECKLIST.md](CHECKLIST.md) for the metrics). Treat every stored result as
@@ -64,6 +64,50 @@ Two consequences worth knowing:
   execution loop, which is where the frequent decisions are. See
   [One strategy, two drivers](#one-strategy-two-drivers) for the sizing rule.
 
+## Two processes
+
+TRAIDER runs as **two processes that share files and nothing else**. Neither can
+start or stop the other, and there is no in-memory state to keep in step: every
+setting and every result is already a file, and the settings layer re-reads them
+when they change (`src/config/effective.py` caches on file mtime).
+
+```mermaid
+flowchart LR
+    subgraph loop["process 1 — python -m src.main"]
+        A[wait for the bar boundary] --> T[one tick] --> B[Alpaca]
+    end
+    subgraph dash["process 2 — python -m src.web.app"]
+        W[FastAPI + dashboard]
+    end
+    loop -.-> F[("settings/ · data/ · trading.json")]
+    dash -.-> F
+```
+
+|  | **The loop** — `src/main.py` | **The dashboard** — `src/web` |
+| --- | --- | --- |
+| Started by | `scripts/run-bot.sh` | `scripts/run-dashboard.sh` |
+| Owns | the bar clock, the shared strategy machine, **every order** | HTTP: the UI, configuration, backtests, reports |
+| Must never | serve HTTP | place an order, or start the loop |
+| Reaches the other by | reading and writing files | reading files |
+
+Why they are separate:
+
+- **The dashboard is the window you debug a broken loop through.** If they shared a
+  process, a wedged loop would take down the very screen you use to notice it.
+- **The dashboard is restarted constantly** — during development, on every code
+  edit. A restart there must never be able to restart trading.
+- **Turning trading on does not start the loop.** The loop runs permanently and
+  reads the switch before every tick, so ON is a flag the next bar picks up, and
+  OFF takes effect at the next boundary without touching the network.
+
+That is enforced, not just described: `src/main.py` refuses to start if the
+dashboard is loaded in its own process, and `tests/test_architecture.py` fails if
+any web module gains a path to the loop.
+
+> The loop itself is **not implemented yet** (Phase 6 of
+> [TRAIDER_PLAN.md](TRAIDER_PLAN.md)). `python -m src.main` names its role, says so,
+> and exits non-zero — it will not run as a silent no-op.
+
 ## Requirements
 
 - Python 3.9 (developed and tested on 3.9.6)
@@ -86,12 +130,20 @@ cp .env.example .env        # the defaults work as-is for a local, data-only run
 comments. Real values never leave your machine - `.env` is gitignored, and the
 template ships with every credential blank.
 
-## Run the portal
+## Run it
+
+Two processes, two terminals — see [Two processes](#two-processes):
 
 ```bash
-.venv/bin/python -m uvicorn src.web.app:app --host 0.0.0.0 --port 8000
-# -> http://127.0.0.1:8000
+./scripts/run-dashboard.sh        # -> http://127.0.0.1:8000
+./scripts/run-bot.sh              # the trading loop (not implemented yet)
 ```
+
+Both are thin wrappers around `python -m src.web.app` and `python -m src.main`,
+run from the repo root. uvicorn directly works too —
+`.venv/bin/python -m uvicorn src.web.app:app --host 0.0.0.0 --port 8000` — it just
+skips the startup banner. There is no `--reload` anywhere on purpose: this process
+is restarted often during development, and must never be able to restart trading.
 
 Use `.venv/bin/python` explicitly; a bare `python` may resolve to a different
 interpreter.

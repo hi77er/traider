@@ -103,11 +103,15 @@ process today**. That (plus the deferred loss limits) is the remaining work.
 ```
 traider/
 ├── src/
+│   ├── main.py                      # THE TRADING LOOP — a process of its own (see below)
+│   ├── process_info.py              # The two process roles: names, banner, the host guard
 │   ├── config/
 │   │   ├── __init__.py
 │   │   ├── settings.py              # Configuration & env validation
 │   │   ├── effective.py             # strategy > account > .env resolution
 │   │   ├── session.py               # trading window (the decision bound)
+│   │   ├── state_files.py           # The atomic JSON read/write pair for runtime state
+│   │   ├── trading_state.py         # trading.json — read by the loop AND the dashboard
 │   │   └── history.py               # bar size ⇄ history period table
 │   ├── data/
 │   │   ├── __init__.py
@@ -151,14 +155,14 @@ traider/
 │   │   └── tracker.py               # Portfolio persistence layer (DynamoDB wrapper)
 │   ├── scheduler/
 │   │   ├── __init__.py
-│   │   └── orchestrator.py          # APScheduler main loop — NOT BUILT (nothing ticks)
+│   │   └── orchestrator.py          # Bar-boundary loop — NOT BUILT (nothing ticks)
 │   ├── logging/
 │   │   ├── __init__.py
 │   │   ├── logger.py                # Structured logging
 │   │   └── alerts.py                # Alert feed (surfaced in the Web Portal)
 │   ├── web/
 │   │   ├── __init__.py
-│   │   ├── app.py                   # FastAPI app (dashboard)
+│   │   ├── app.py                   # FastAPI app (dashboard — serves HTTP, never trades)
 │   │   ├── routes/                  # Progress, charts, config, settings, alerts
 │   │   └── auth.py                  # Portal login
 │
@@ -192,13 +196,25 @@ traider/
 │   ├── entrypoint.sh                # Start gateway + bot
 │   └── .dockerignore
 │
+├── scripts/
+│   ├── run-bot.sh                   # Start the trading loop      (its own process)
+│   ├── run-dashboard.sh             # Start the dashboard         (its own process)
+│   └── backfill.py
+│
 ├── .env.example                     # Template for .env (committed, sanitized)
 ├── .gitignore
 ├── requirements.txt                 # Python dependencies
-├── main.py                          # Entry point: initialize, start scheduler
 ├── TRAIDER_PLAN.md                  # This file
 └── README.md                        # Quick start, architecture overview
 ```
+
+**Two processes, sharing files and nothing else** — see README, "Two processes".
+`src/main.py` is the trading loop (the bar clock and every order);
+`src/web/app.py` is the dashboard (HTTP, never trades). Neither starts or stops the
+other, and there is no in-memory state between them: settings and results are files,
+and `src/config/effective.py` re-reads them when their mtime changes. The loop host
+refuses to start if the dashboard is loaded inside it, and `tests/test_architecture.py`
+fails if a web module ever gains a path to the loop.
 
 ---
 
@@ -511,7 +527,10 @@ logger.error(f"Order submission failed: {error_details}")
 The Web Portal is the single interface for monitoring and controlling the bot. Built with FastAPI + uvicorn (already a dependency via OpenBB).
 
 **Implemented (`src/web/`):**
-- `app.py` — FastAPI app, mounts `/static`, includes routers, uvicorn entry (`uvicorn src.web.app:app`)
+- `app.py` — FastAPI app, mounts `/static`, includes routers, its own entry point
+  (`python -m src.web.app`). **This process serves HTTP and never trades**: order
+  placement belongs to the loop (`src/main.py`), which runs separately. See README,
+  "Two processes".
 - `auth.py` — HTTP Basic auth via `WEB_PORTAL_AUTH_ENABLED` / `WEB_PORTAL_USERNAME` / `WEB_PORTAL_PASSWORD` (dev default: disabled when password empty)
 - `routes/pages.py` — `GET /` (dashboard), `GET /api/v1/health`
 - `routes/dataset.py` — `GET /api/v1/dataset/status`, `GET /api/v1/dataset/data` (paginated), `POST /api/v1/dataset/backfill` (async background thread)
@@ -668,7 +687,11 @@ Moved from Phases 2 & 3 so Risk & Execution can start first. Prerequisite for Ph
                                SCHEDULER_ENABLED is read by nothing, so nothing starts
                                a tick and no order can leave the process]
 ⏸️ scheduler-error-handling → Robust error handling [with the scheduler]
-⏸️ main-entry               → Entry point wiring the live loop (main.py is a stub)
+⏸️ main-entry               → Entry point wiring the live loop. `src/main.py` is now a
+                              real host: it names its role, refuses to start if the
+                              dashboard is loaded in its process, and exits non-zero
+                              while the loop is unbuilt (never a silent no-op). The
+                              loop itself is still to be written into it.
 ```
 
 ### Phase 7: Testing (Days 18-21)

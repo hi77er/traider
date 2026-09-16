@@ -118,6 +118,8 @@ Build a modular Python trading bot for AAPL (Apple) stock that:
 ```
 traider/
 ├── src/
+│   ├── main.py      ← the trading loop (its own process)
+│   ├── web/app.py   ← the dashboard (its own process)
 │   ├── config/
 │   ├── data/
 │   ├── features/
@@ -129,9 +131,9 @@ traider/
 │   └── logging/
 ├── backtest/
 ├── tests/
+├── scripts/         ← run-bot.sh, run-dashboard.sh
 ├── docker/
 │   └── Dockerfile
-├── main.py  ← Entry point
 ├── requirements.txt
 ├── .env.example
 └── TRAIDER_PLAN.md  ← Full details
@@ -167,15 +169,22 @@ page screens the whole US market (gainers, volume, losers, small caps)
 
 ---
 
-## Run the Web Portal
+## Run it — two processes
+
+TRAIDER is **two processes that share files and nothing else**: the dashboard
+(HTTP, never trades) and the trading loop (owns the clock and every order). Neither
+starts or stops the other — see [Two processes](README.md#two-processes).
 
 ```bash
 # one-time: fetch the initial historical dataset (or use the portal's button)
 .venv/bin/python -m scripts.backfill
 
-# start the dashboard (configurable in .env via WEB_PORTAL_*)
-.venv/bin/python -m uvicorn src.web.app:app --host 0.0.0.0 --port 8000
+# terminal 1 — the dashboard (configurable in .env via WEB_PORTAL_*)
+./scripts/run-dashboard.sh
 # → open http://localhost:8000
+
+# terminal 2 — the trading loop (not implemented yet: it says so and exits)
+./scripts/run-bot.sh
 ```
 
 Endpoints:

@@ -1,7 +1,15 @@
-"""FastAPI application for the TRAIDER Web Portal.
+"""FastAPI application for the TRAIDER Web Portal — the dashboard process.
 
-Run locally:
-    uvicorn src.web.app:app --reload --port 8000
+    .venv/bin/python -m src.web.app     # this: the dashboard
+    .venv/bin/python -m src.main        # the other one: the trading loop
+
+**This process serves HTTP and never trades.** Order placement belongs to the loop
+(``src/main.py``), which runs separately and reads the same files: the trading
+switch, the settings, and everything under ``data/``. See README, "Two processes".
+
+That is why nothing here starts the loop and no ``--reload`` flag appears below:
+this process is restarted constantly during development, and a restart here must
+never be able to restart trading. ``tests/test_architecture.py`` keeps it that way.
 """
 
 from __future__ import annotations
@@ -72,4 +80,12 @@ app.include_router(report_routes.router)
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("src.web.app:app", host="0.0.0.0", port=8000, reload=False)
+    from src.process_info import DASHBOARD, announce
+
+    # Name the process in the log, so "which one am I looking at?" is one line away.
+    announce(DASHBOARD)
+    # Pass the app OBJECT, not "src.web.app:app": under `python -m src.web.app` this
+    # module *is* ``__main__``, so the import string would import it a second time and
+    # build a second app. Passing the object serves the one already loaded, and rules
+    # out ``--reload`` at the same time (reload needs an import string).
+    uvicorn.run(app, host="0.0.0.0", port=8000, reload=False)
