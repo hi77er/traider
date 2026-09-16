@@ -148,7 +148,9 @@ traider/
 │   │   ├── alpaca_client.py         # The API as URLs and status codes
 │   │   ├── retry.py                 # May this call be tried again?
 │   │   ├── alpaca_executor.py       # Place ONE order (bracket, poll, flatten)
-│   │   └── alpaca_broker.py         # AlpacaBroker implements the strategy's Broker
+│   │   ├── alpaca_broker.py         # AlpacaBroker implements the strategy's Broker
+│   │   ├── positions.py             # What each account holds, for the exposure gates
+│   │   └── store.py                 # data/live_results/<strategy>/ — the loop's output
 │   ├── state/
 │   │   ├── __init__.py
 │   │   ├── schema.py                # DynamoDB table schema / mapper (boto3/pynamodb)

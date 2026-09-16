@@ -92,6 +92,7 @@ _LABELS: Dict[str, str] = {
     "DATA_DIR": "Data folder",
     "HISTORICAL_DATA_DIR": "Historical data subfolder",
     "BACKTEST_DIR": "Backtest data subfolder",
+    "LIVE_DIR": "Live results subfolder",
     "ALPACA_PAPER_API_KEY": "Alpaca paper API key",
     "ALPACA_PAPER_API_SECRET": "Alpaca paper API secret",
     "ALPACA_LIVE_API_KEY": "Alpaca live API key",
@@ -381,9 +382,9 @@ _ACCOUNT_SECTIONS: List[Tuple[str, Tuple[str, ...]]] = [
     (
         "Data & Folders",
         (
-            # DATA_DIR is the single folder the user picks; the two subfolders
+            # DATA_DIR is the single folder the user picks; the three subfolders
             # below are DERIVED from it (read-only in the popup).
-            "DATA_DIR", "HISTORICAL_DATA_DIR", "BACKTEST_DIR",
+            "DATA_DIR", "HISTORICAL_DATA_DIR", "BACKTEST_DIR", "LIVE_DIR",
             "DATA_CACHE_ENABLED", "CACHE_DIR",
             "LIVE_LOOKBACK_DAYS",
         ),
@@ -407,7 +408,7 @@ _ACCOUNT_SECTIONS: List[Tuple[str, Tuple[str, ...]]] = [
 ACCOUNT_SCOPED_KEYS = frozenset(k for _, keys in _ACCOUNT_SECTIONS for k in keys)
 
 # Derived from DATA_DIR — shown so the layout is visible, never stored.
-_DERIVED_ACCOUNT_KEYS = frozenset({"HISTORICAL_DATA_DIR", "BACKTEST_DIR"})
+_DERIVED_ACCOUNT_KEYS = frozenset({"HISTORICAL_DATA_DIR", "BACKTEST_DIR", "LIVE_DIR"})
 
 
 def _field_by_env_key() -> Dict[str, str]:

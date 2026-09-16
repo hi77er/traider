@@ -182,6 +182,49 @@ def test_the_output_helpers_are_the_same_objects_everywhere() -> None:
         assert getattr(store, name) is getattr(artifacts, name), f"{name} is a second copy"
 
 
+# --- the live store ---------------------------------------------------------
+
+
+def test_the_live_store_does_not_depend_on_the_backtester() -> None:
+    """``src/execution/store.py`` imports nothing from ``src/backtest``.
+
+    The trading process must not need the backtester: the loop runs on a machine that has
+    no reason to have run a backtest, and the dependency is easy to acquire by accident
+    because the two trees look alike and share their helpers (which is what
+    ``src/config/artifacts.py`` is for).
+    """
+    imports = GRAPH["src.execution.store"]
+    offenders = sorted(n for n in imports if n == "src.backtest" or n.startswith("src.backtest."))
+    assert offenders == [], f"the live store imports the backtester: {offenders}"
+
+
+#: What only the loop may do. Names, not receivers — a wrapper named the same would be
+#: just as wrong, and the store is the only module that should have these at all.
+_STORE_WRITES = frozenset(
+    {"append_line", "append_order", "append_tick", "append_trade", "retire_legacy_state",
+     "save_latest", "upsert_day"}
+)
+
+
+def test_the_dashboard_never_writes_the_live_store() -> None:
+    """The loop writes the live tree; the dashboard only reads it.
+
+    Not a style rule. These files are the loop's memory — the last tick and the position it
+    believes it has — and a second writer is how the dashboard and the bot end up
+    disagreeing about what happened, with the log as the only evidence and no way to tell
+    which of them was right. The read side is deliberately NOT restricted: rendering the
+    panel needs the same paths.
+    """
+    offenders = []
+    for name, path, _is_package in _modules():
+        if not name.startswith("src.web."):
+            continue
+        for node in ast.walk(_tree(path)):
+            if isinstance(node, ast.Attribute) and node.attr in _STORE_WRITES:
+                offenders.append(f"{name}:{node.lineno} .{node.attr}")
+    assert offenders == [], f"the web layer writes the live store: {offenders}"
+
+
 # --- the shared machine -----------------------------------------------------
 
 

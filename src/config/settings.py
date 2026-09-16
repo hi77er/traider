@@ -103,6 +103,13 @@ class Settings(BaseSettings):
         default="",
         description="Backtest runs + reports directory; empty = <DATA_DIR>/backtest_results",
     )
+    live_dir: str = Field(
+        default="",
+        description=(
+            "Live results directory (one subfolder per strategy: the tick log, orders, "
+            "trades and the driver's state); empty = <DATA_DIR>/live_results"
+        ),
+    )
     # Optional S3 sync: the dataset is written locally, then uploaded to S3 as
     # the durable source of truth. Disabled (local-only) until deployment.
     s3_enabled: bool = Field(default=False, description="Sync the canonical dataset to S3")
@@ -339,25 +346,32 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _derive_data_dirs(self) -> "Settings":
-        """Fill the two data subfolders from DATA_DIR unless set explicitly.
+        """Fill the three data subfolders from DATA_DIR unless set explicitly.
 
-        The Account Settings popup asks for ONE folder; ``historical/`` and
-        ``backtest_results/`` are then fixed subfolders of it, so the dataset and
-        its backtest runs can never drift into two unrelated places. An explicit
-        ``HISTORICAL_DATA_DIR`` (tests, advanced setups) still wins and keeps the
-        results beside it.
+        The Account Settings popup asks for ONE folder; ``historical/``,
+        ``backtest_results/`` and ``live_results/`` are then fixed subfolders of it, so the
+        dataset, its backtest runs and the bot's live output can never drift into three
+        unrelated places. An explicit value (tests, advanced setups) still wins, and an
+        explicit ``HISTORICAL_DATA_DIR`` keeps the other two beside it.
         """
         root = (self.data_dir or "data").strip().rstrip("/") or "data"
         hist = (self.historical_data_dir or "").strip()
         back = (self.backtest_dir or "").strip()
+        live = (self.live_dir or "").strip()
         if not hist and not back:
             hist, back = f"{root}/historical", f"{root}/backtest_results"
         elif hist and not back:
             back = str(Path(hist).parent / "backtest_results")
         elif back and not hist:
             hist = f"{root}/historical"
+        if not live:
+            # Beside its siblings, whether those came from DATA_DIR or were set explicitly —
+            # so pointing the dataset somewhere specific does not leave live output behind in
+            # a data folder nobody is looking at.
+            live = str(Path(back).parent / "live_results")
         self.historical_data_dir = hist
         self.backtest_dir = back
+        self.live_dir = live
         return self
 
     @model_validator(mode="after")

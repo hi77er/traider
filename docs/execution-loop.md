@@ -5,7 +5,7 @@ the SAME strategy machine the backtest drives, and places orders through the Alp
 broker. This document is the agreed design plus the order it gets built in, so the
 reasoning survives the code.
 
-Status: **design settled 2026-09-16**. Phases 0 and 1 are built; 2–8 are not.
+Status: **design settled 2026-09-16**. Phases 0–3 are built; 4–8 are not.
 
 Related reading: [`README.md`](../README.md) ("Two processes"), `TRAIDER_PLAN.md`
 (phases and the file tree), `src/strategy/live.py` (the driver), and
@@ -107,7 +107,29 @@ Consequences:
 - **`require_flat` guards the three orphan-prone actions** — `/execution/env`,
   `/rules/select`, `/rules/delete` — with a 5–10s positions cache. An unreachable
   broker is a refusal **with the reason**, never treated as flat.
-- **The lock follows EXPOSURE, not the switch.** `require_trading_off` stays cheap and
+### When is an account flat? Three answers, and only three
+
+The gate fails closed, but not blindly. "Unreachable" and "empty" look identical from the
+outside, so the distinction is made from the **configuration** rather than from a guess:
+
+| Situation | What it proves | Gate |
+| --- | --- | --- |
+| No credentials for that environment | no order could have been placed there | **allow** — flat by construction |
+| Credentials configured, broker answers | what is actually held | allow if flat, refuse if not |
+| Credentials configured, broker unreachable | nothing | **refuse**, with the reason |
+| Credentials half-configured (key, no secret) | nothing | **refuse**, with the reason |
+
+"Flat by construction" is a proof, not an assumption: it is what keeps a data-only install
+(the README's default) able to switch strategies without Alpaca keys at all. Everything
+else refuses, because a 401 is indistinguishable from an empty account to every caller
+downstream.
+
+### Both accounts are read, not just the one in play
+
+Paper and live are different accounts, and switching paper→live strands a **paper** position
+just as thoroughly as the reverse. A check that only looked at the environment in play would
+refuse a switch for a reason it cannot see. An environment with no credentials is flat by
+construction and costs nothing, so covering both is free until both are genuinely configured.- **The lock follows EXPOSURE, not the switch.** `require_trading_off` stays cheap and
   local for the frequent settings writes.
 - **The loop trades the STAMPED strategy** and refuses on mismatch, so a stale tab, a
   hand-edited store or a future endpoint that forgets the dependency produces a loud
@@ -133,22 +155,36 @@ timeline.
 
 ```
 data/live_results/<strategy-slug>/
-  latest.json               # trimmed view the panel reads
-  index.json                # one record per session
+  latest.json               # the panel's view: the LAST tick, whatever it did
+  index.json                # one record per trading day
   ticks/<date>.jsonl        # append-only: bar key, signal, intents, refusals
   orders.jsonl              # every submit: env, client_order_id, status, fill
   trades.jsonl              # closed round trips (the ledger)
   state-<env>.json          # driver state, PER ENVIRONMENT
 ```
 
-- **State is keyed by (strategy, env).** Paper and live are different accounts, and a
-  name-only state file would reconcile a paper position against the live account and
-  refuse for ever.
-- **`.jsonl` for the logs.** A rewritten array loses its tail on a crash — exactly when
-  the tail is wanted.
-- `src/execution/store.py` builds this on `src/config/artifacts.py`
-  (`slug`, `jsonable`, `write_json_atomic`, `output_root`) and **must not import
-  `src/backtest/`**: the trading process must not depend on the backtester.
+- **State is keyed by (strategy, env), and both halves matter.** The environment because
+  paper and live are different ACCOUNTS — a shared file reconciles a paper position against
+  the live account and refuses for ever. The strategy because this used to be keyed by the
+  INSTRUMENT alone, which gave two strategies on the same symbol one position between them.
+- **The day is the MARKET's day**, not UTC: `ticks/<date>.jsonl` and the index are keyed by
+  the date in `MARKET_TIMEZONE`, so one session is one file rather than two halves either
+  side of midnight. The same boundary is what the deferred loss limits reset on.
+- **`latest.json` is written on EVERY tick, including the ones that do nothing.** It carries
+  the heartbeat, so a quiet day — no new bar, market closed, or trading off — still moves it.
+  Without that, "alive with nothing to do" and "dead" look identical from the dashboard, and
+  those two want opposite responses. The `.jsonl` logs get a line only when something
+  happened, because they are events.
+- **`.jsonl` for the logs.** A rewritten array loses its tail on a crash — exactly when the
+  tail is wanted — and a reader must skip a line it cannot parse, because the loop may be
+  mid-append and a torn final line is normal rather than corrupt.
+- `src/execution/store.py` builds this on `src/config/artifacts.py` and **does not import
+  `src/backtest/`**: the trading process must not depend on the backtester. The one path the
+  strategy layer shares is `artifacts.live_state_path`, because `src/strategy` must not
+  import `src/execution` either — the broker is injected as a protocol precisely to avoid
+  that.
+- **The loop writes this tree; the dashboard only reads it.** A second writer is how the two
+  processes end up disagreeing about what happened, with nobody able to say which was right.
 - `trading.json` and `credential_checks.json` stay where they are — account/global, not
   per-strategy.
 
@@ -213,29 +249,54 @@ rather than a record of it.
 | 1.4 | `reconcile` still refuses for genuine drift: a position only one side knows about, an unprovable close, or a direction the two disagree on | ✅ |
 | 1.5–1.6 | `AlpacaClient.replace_order` (PATCH), `AlpacaExecutor.amend_exits`, `Broker.reprice_exits`: the resting exits are moved onto the levels the REAL fill implies | ✅ |
 
-### Phase 2 — the gates ⏸️ NEXT
+### Phase 2 — the gates ✅ DONE
 
-| # | Step |
-| --- | --- |
-| 2.1 | A positions reader for gating, behind a 5–10s cache (separate from the loop's uncached per-tick reads) |
-| 2.2 | The `require_flat` dependency: refuse with 409, name the position, and treat an unreachable broker as a refusal |
-| 2.3–2.5 | `require_flat` on `/execution/env`, `/rules/select`, `/rules/delete` |
-| 2.6 | `turn_on` stamps the active strategy name into `trading.json` |
-| 2.7 | `turn_on` refuses while any position is open, with both ways out in the message |
-| 2.8 | "Stop trading & flatten" — OFF + `flatten()`, with the live confirmation |
-| 2.9 | `turn_off` reports what it left behind, distinguishing the three cases |
+| # | Step | State |
+| --- | --- | --- |
+| 2.1 | `src/execution/positions.py`: a cached, both-accounts positions reader, with the three-ways-to-be-flat rule above | ✅ |
+| 2.2 | `trading_service.require_flat(action)` — a factory, so each route says what it is refusing | ✅ |
+| 2.3–2.5 | `require_flat` on `/execution/env`, `/rules/select`, `/rules/delete` | ✅ |
+| 2.6 | `turn_on` stamps the active strategy name into `trading.json` | ✅ |
+| 2.7 | `turn_on` refuses while any position is open, naming it and giving both ways out | ✅ |
+| 2.8 | `POST /trading/off-flatten` + the panel button: OFF first, then `flatten()` | ✅ |
+| 2.9 | `turn_off` reports what it left behind — nothing / open and protected / open with **no** exit | ✅ |
 
-### Phase 3 — storage
+Two consequences worth knowing:
 
-| # | Step |
-| --- | --- |
-| 3.1 | `src/execution/store.py` over `data/live_results/<strategy-slug>/` |
-| 3.2 | `latest.json`, `index.json`, `ticks/`, `orders.jsonl`, `trades.jsonl` |
-| 3.3 | State keyed by (strategy, env) |
-| 3.4 | A pre-existing name-only state file is ignored or archived, never adopted |
-| 3.5 | `latest.json` written per tick, the full record to `.jsonl` |
-| 3.6 | A test pinning that the store does not import `src/backtest/` |
-| 3.7 | Every read tolerates a missing file, so a deleted log degrades the explanation and not the screen |
+- **The panel stays on screen when trading is OFF and something is open.** That is the
+  OFF≠flat point made visible: it is exactly where the flatten button is needed, and hiding
+  it would be the screen agreeing with a wrong assumption.
+- **The suite is now offline by construction.** `tests/conftest.py` patches the gate's single
+  network door AND closes `requests.Session.request` outright, because the gate's first
+  version made a *real* call with dummy keys — and a 401 is indistinguishable from an empty
+  account, so that accident silently turns "a position is open" into "flat".
+
+### Phase 3 — storage ✅ DONE
+
+| # | Step | State |
+| --- | --- | --- |
+| 3.1 | `src/execution/store.py` over `data/live_results/<strategy-slug>/` | ✅ |
+| 3.2 | `latest.json`, `index.json`, `ticks/`, `orders.jsonl`, `trades.jsonl` | ✅ |
+| 3.3 | State keyed by (strategy, env), via `artifacts.live_state_path` | ✅ |
+| 3.4 | A legacy `strategy_state_<name>.json` is moved to `_legacy/` and never adopted | ✅ |
+| 3.5 | `latest.json` written every tick (the heartbeat); `.jsonl` only for events | ✅ |
+| 3.6 | Tests pinning that the store does not import `src/backtest`, and that the web layer never writes it | ✅ |
+| 3.7 | Every read tolerates a missing file or a torn final line | ✅ |
+
+Two things this phase had to fix on the way through, both found by reading the code:
+
+- **The state file was keyed by the INSTRUMENT.** `LiveDriver` derived its identity from
+  `settings.instrument` and nothing ever passed a name, so two strategies on one symbol
+  shared a single position — latent, since no two stored strategies currently share one, but
+  it would have carried a position across a strategy switch.
+- **There were two sanitisers and they disagreed.** ``live._safe`` produced
+  ``My_Strategy``/``Delta___NVDA_-_1h`` where ``artifacts.slug`` produces
+  ``My-Strategy``/``Delta-NVDA-1h``, so the state file would have landed in a different
+  directory from the results. ``_safe`` now delegates to ``slug``.
+
+`LIVE_DIR` was added to `Settings` for this phase to work as documented: the live tree is
+derived as `<DATA_DIR>/live_results` exactly like its `historical/` and `backtest_results/`
+siblings, and appears read-only in the account panel beside them.
 
 ### Phase 4 — the loop
 

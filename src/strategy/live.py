@@ -31,8 +31,8 @@ from typing import Any, Dict, Optional
 
 import pandas as pd
 
-from src.config import state_files
-from src.strategy.broker import Broker, BrokerPosition, Fill
+from src.config import artifacts, state_files
+from src.strategy.broker import Broker, BrokerPosition, ClosingFill, Fill
 from src.strategy.engine import (
     CLOSE,
     FORCED,
@@ -82,9 +82,18 @@ class LiveDriver:
         self.state = state or StrategyState()
         self.broker = broker
         self.dry_run = bool(dry_run)
-        self.name = name or str(getattr(settings, "instrument", "strategy"))
-        self.state_path = Path(state_path) if state_path else state_files.state_path(
-            settings, f"strategy_state_{_safe(self.name)}.json"
+        # WHAT this driver is. The strategy comes first, and not for cosmetics: it is the
+        # identity the state file is keyed by and the name the store puts on the tree, so
+        # falling back to the instrument (which is what this used to do) gave two
+        # strategies on the same symbol ONE position between them.
+        #
+        # A caller may pass it explicitly and the loop DOES: it must be able to run the
+        # strategy STAMPED in trading.json even when the active one has changed underneath,
+        # and looking that up here would answer with the wrong one.
+        self.name = str(name or _active_strategy() or getattr(settings, "instrument", "strategy"))
+        self.env = str(getattr(settings, "execution_env", "paper") or "paper").strip().lower()
+        self.state_path = Path(state_path) if state_path else artifacts.live_state_path(
+            settings, self.name, self.env
         )
         self.ledger = Ledger(n=0, opens=[], closes=[])
         self.ledger.finalise(self.state)
@@ -347,4 +356,25 @@ class LiveDriver:
 
 
 def _safe(name: str) -> str:
-    return "".join(c if c.isalnum() or c in "-_" else "_" for c in str(name))[:60]
+    """Retired — use ``src.config.artifacts.slug``, which is what the store uses.
+
+    Kept as an alias for one release so nothing that imported it breaks silently. The two
+    sanitisers disagreed on anything with a space, a dash or a non-ASCII letter
+    (``"My Strategy"`` became ``My_Strategy`` here and ``My-Strategy`` there), which would
+    have put one strategy's state file in a different directory from its results.
+    """
+    return artifacts.slug(name)
+
+
+def _active_strategy() -> Optional[str]:
+    """The active strategy's name, or ``None`` when it cannot be determined.
+
+    Imported and called defensively: a driver must still be constructible for a parity test
+    or a dry run with no strategy store on disk at all, and the fallback is the instrument.
+    """
+    try:
+        from src.config.effective import active_strategy_name
+
+        return active_strategy_name()
+    except Exception:  # noqa: BLE001 - identity is not worth failing a run over
+        return None

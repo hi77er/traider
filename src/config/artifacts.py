@@ -30,7 +30,23 @@ import unicodedata
 from pathlib import Path
 from typing import Any, Dict
 
-__all__ = ["jsonable", "output_root", "slug", "write_json_atomic"]
+__all__ = [
+    "LIVE_FOLDER",
+    "jsonable",
+    "live_state_path",
+    "live_strategy_dir",
+    "output_root",
+    "slug",
+    "write_json_atomic",
+]
+
+# The live tree's folder under the account's data root. Named here rather than in
+# ``src/execution/store.py`` because two layers need to agree on it and only one of them is
+# allowed to import the other: the store writes the loop's output, and the strategy driver
+# needs to know where its own state file goes. ``src/strategy`` must not import
+# ``src/execution`` (the broker is injected as a protocol precisely to avoid that), so the
+# one path they share is defined below both of them.
+LIVE_FOLDER = "live_results"
 
 # Typographic punctuation -> plain ASCII, applied before the accent fold so
 # "Alpha – AAPL" becomes "Alpha-AAPL" rather than "AlphaAAPL".
@@ -122,3 +138,31 @@ def write_json_atomic(path: Path, payload: Any) -> Path:
     tmp.write_text(json.dumps(jsonable(payload), indent=2), encoding="utf-8")
     os.replace(tmp, path)
     return path
+
+
+def live_strategy_dir(settings, name: str) -> Path:
+    """``<live root>/<strategy-slug>/`` — everything one strategy's loop produced.
+
+    One tree per strategy, NOT split paper/live: the environment is a field on each record,
+    so splitting would break paper-vs-live comparison (the whole point of paper trading),
+    move history on promotion, and scatter one strategy's timeline.
+    """
+    return output_root(settings, folder=LIVE_FOLDER, setting="live_dir") / slug(name)
+
+
+def live_state_path(settings, name: str, env: str) -> Path:
+    """``<live root>/<strategy-slug>/state-<env>.json`` — the driver's memory.
+
+    Keyed by ``(strategy, env)``, and both halves are load-bearing:
+
+    * the STRATEGY, because two strategies on the same instrument are two different
+      positions — keyed by instrument, as this used to be, they would share one;
+    * the ENV, because paper and live are different ACCOUNTS. A shared file reconciles a
+      paper position against the live account and refuses for ever, which is the sort of
+      failure that looks like a strategy bug for a week.
+
+    The name is ``slug()``-ed by the same function the directory uses, so one strategy
+    cannot end up with two directories because two sanitisers disagreed about a space.
+    """
+    environment = str(env or "").strip().lower() or "paper"
+    return live_strategy_dir(settings, name) / f"state-{environment}.json"
