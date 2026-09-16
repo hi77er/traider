@@ -96,6 +96,14 @@ class LiveDriver:
         self.state_path = Path(state_path) if state_path else artifacts.live_state_path(
             settings, self.name, self.env
         )
+        if state is None:
+            # Recover the memory from the file, because a NEW instance has to be the SAME
+            # driver as the one that decided the last bar — the loop builds one per tick, so
+            # anything kept only in memory made every tick a first tick: the same bar
+            # decided again on each pass, and a position the driver had forgotten it owned.
+            # An explicitly passed ``state`` is left alone: it is how a test or a replay
+            # hands a run a starting point, and overwriting it from disk would ignore it.
+            self.load_state()
         self.ledger = Ledger(n=0, opens=[], closes=[])
         self.ledger.finalise(self.state)
         self.log: list = []

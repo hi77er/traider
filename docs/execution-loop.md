@@ -44,19 +44,27 @@ the dashboard. See README, "Two processes"; `tests/test_architecture.py` enforce
 | # | Step | Code |
 | --- | --- | --- |
 | 1 | Is trading armed? | `src.config.trading_state.is_trading_on` — re-read EVERY tick, never cached |
-| 2 | Is the exchange open? | Alpaca `GET /v2/clock` via `AlpacaExecutor.clock()` |
-| 3 | Is the closed bar inside the decision window? | `src/config/session.py` |
-| 4 | Sync the dataset to now | `delta.sync_missing_days` — the ONLY provider call in the loop |
-| 5 | Read the trailing window | dataset FIRST (≥ `LiveDriver.required_bars`); `get_history_window` only as a fallback |
-| 6 | Already decided this bar? | `LiveDriver.state.last_decided_bar` |
-| 7 | Reconcile with the broker | `LiveDriver.adopt_broker_exit` then `reconcile` |
-| 8 | Decide | `on_bar_closed` → features → generator → `StrategyEngine.step` |
-| 9 | Place / flatten | `AlpacaBroker.submit` → bracket, then amend the exits after the fill |
-| 10 | Record | ledger + `save_state` + the live store |
+| 2 | Is this the strategy it was armed for? | `trading.json`'s `strategy` stamp vs the active one |
+| 3 | Could an order be placed at all? | `execution_status` — credentials resolve for the configured env |
+| 4 | Is the exchange open? | Alpaca `GET /v2/clock` via `AlpacaExecutor.clock()` |
+| 5 | Sync the dataset to the newest CLOSED bar | `delta.sync_missing_days` — the ONLY provider call in the loop |
+| 6 | Read the trailing window | the DATASET (≥ `LiveDriver.required_bars`), truncated at that bar |
+| 7 | Is the newest stored bar the one that should have closed? | `dataset.last_closed_bar`; refuse on a stale file |
+| 8 | Already decided this bar? | `LiveDriver.state.last_decided_bar` |
+| 9 | Reconcile with the broker | `LiveDriver.adopt_broker_exit` then `reconcile` |
+| 10 | Decide | `on_bar_closed` → features → generator → `StrategyEngine.step` |
+| 11 | Place / flatten | `AlpacaBroker.submit` → bracket, then amend the exits after the fill |
+| 12 | Record | ledger + `save_state` + the live store |
 
-Order is not incidental. Reconcile precedes decide so the engine never sizes against
+Order is not incidental. Everything that can refuse is asked before anything can spend:
+the switch, then the stamp, then whether an order is even possible, then the exchange, then
+whether the data is current. Reconcile precedes decide so the engine never sizes against
 a stale view of what is held; state is saved last so a crash mid-tick leaves the bar
 undecided and therefore retryable.
+
+Every tick returns a record, and the record is written to `latest.json` even when the tick
+did nothing — that file is the heartbeat, and without it a quiet day and a dead loop look
+identical from the dashboard.
 
 ### Scheduling
 
@@ -64,7 +72,9 @@ undecided and therefore retryable.
   answer (`/v2/clock`, which knows holidays and half-days). "Should this strategy act
   on this bar?" is the configured window. Both must pass, in that order.
 - **If the clock call fails, fail the tick.** Falling back to a local weekday check is
-  exactly how a holiday trades a stale bar.
+  exactly how a holiday trades a stale bar. Any failure counts, not just the SDK's own
+  exception types: an exception that escapes the clock handler takes the loop down over
+  one unanswered request.
 - **No calendar is stored anywhere.** A cached calendar goes stale silently; only
   `next_close` is remembered, and only long enough to schedule the next wake.
 - **Wake on bar boundaries** (+~5s for provider lag). A boundary-aligned sleep loop
@@ -210,6 +220,20 @@ rather than a record of it.
 - **The provider is out of the tick path.** The loop reads the already-synced dataset,
   so the chart, the backtest and the live decision see identical bars. The delta sync
   is the only provider caller and it is already throttled.
+- **The sync target is the newest CLOSED bar, not the newest day.** This was wrong and
+  cost a trading day: `eligible_until_date` answered with *yesterday's* date whenever the
+  session had not yet ended, so an hourly dataset could never receive today's bars — at
+  16:05 on a session day the newest stored `NVDA_1h` bar was the previous day's 15:30, and
+  "is today in the dataset" was False. A 1h loop would then have decided once per day, at
+  an arbitrary time, on the previous day's signal. `eligible_date` now delegates to
+  `dataset.last_closed_bar`, which knows the bar grid (`:30`-past for equities) and the
+  session's own close, and the delta sync stops as soon as the dataset reaches it.
+- **Bars are identified by a canonical key, not by their string form.** A daily index
+  comes back UTC-aware (`2026-09-15 00:00:00+00:00`) and an hourly one naive
+  exchange-local (`2026-09-15 15:30:00`), so `str(bar)` differed for the same instant
+  depending on how it was written down — and a key that never matches re-fires a decision
+  on a bar that was already acted on, which costs money rather than time. `dataset.bar_key`
+  is the one place that decides how a bar is named.
 - **Rate limits are therefore a backfill question, not a trading risk.** Volume is
   small: ≈7 fetches/day at 1h bars. yfinance publishes no limit (it IP-throttles);
   Alpaca documents 200 req/min, on a separate host from the orders API.
@@ -298,18 +322,45 @@ Two things this phase had to fix on the way through, both found by reading the c
 derived as `<DATA_DIR>/live_results` exactly like its `historical/` and `backtest_results/`
 siblings, and appears read-only in the account panel beside them.
 
-### Phase 4 — the loop
+### Phase 4 — the loop ✅ DONE
 
-| # | Step |
-| --- | --- |
-| 4.1 | `src/scheduler/orchestrator.py`: a `tick()` that returns a report and a `run()` that sleeps to boundaries |
-| 4.2–4.6 | The tick's first five steps: switch → clock → window → delta sync → dataset-first window |
-| 4.7 | Detect whether a NEW bar closed; log a no-op when it did not |
-| 4.8 | Skip on `last_decided_bar` |
-| 4.9 | Reconcile (with adoption) before deciding |
-| 4.10–4.12 | Decide, act, record — in that order, state saved last |
-| 4.13 | A per-tick record: PAPER/LIVE label, bar key, signal, intents, order ids, refusals |
-| 4.14 | No catch-up: decide on the newest closed bar and log the gap |
+| # | Step | State |
+| --- | --- | --- |
+| 4.1 | `src/scheduler/orchestrator.py`: a `tick()` that returns a report and a `run()` that sleeps to boundaries | ✅ |
+| 4.2–4.6 | The tick's first five steps: switch → clock → window → delta sync → dataset-first window | ✅ |
+| 4.7 | Detect whether a NEW bar closed; log a no-op when it did not | ✅ |
+| 4.8 | Skip on `last_decided_bar` | ✅ |
+| 4.9 | Reconcile (with adoption) before deciding | ✅ |
+| 4.10–4.12 | Decide, act, record — in that order, state saved last | ✅ |
+| 4.13 | A per-tick record: PAPER/LIVE label, bar key, signal, intents, order ids, refusals | ✅ |
+| 4.14 | No catch-up: decide on the newest closed bar and log the gap | ✅ |
+
+The tick asks its questions in a fixed order, and each one is a gate that can only refuse:
+is trading on, is this the strategy the switch was armed for, could an order be placed, is
+the exchange open, can the dataset be brought up to now, is the newest stored bar the one
+that should have closed, is this bar already decided. Only then does it decide.
+
+**Three defects this phase had to fix on the way through**, all of them invisible to the
+tests that already existed:
+
+- **`LiveDriver` never loaded its own state file.** `state` was constructed empty and
+  `load_state()` was only ever called by tests, so a driver built for a tick started with no
+  memory of the previous one. In production the loop builds a driver per tick, so this made
+  every tick a first tick: the same bar decided again on each pass, and a position the
+  driver had forgotten it owned — which `reconcile` then reported as drift and refused on,
+  wedging the bot for the life of the position. It now recovers its state on construction
+  (and still honours an explicitly passed `state`, which is how a test or a replay seeds a
+  run). The existing suite could not see this because every test either reused one driver
+  instance or passed the state in.
+- **The tick log was dated by the wall clock.** `append_tick` derived the day from "now"
+  rather than from the tick's own moment, so a replayed or backfilled tick was filed under
+  today and the file's name disagreed with the record's `day` field — which is read from the
+  same moment and is what everything else believes. In a live run the two coincide, which is
+  why it went unnoticed.
+- **`run()` and `tick()` both called their entry point `now`** — a callable in `run`, a
+  moment in `tick`. Passing one where the other was meant was silent: the loop ticked on the
+  wall clock while its caller believed it was on a fixed one. `run`'s parameter is now
+  `clock`.
 
 ### Phase 5 — the host
 

@@ -157,7 +157,7 @@ traider/
 │   │   └── tracker.py               # Portfolio persistence layer (DynamoDB wrapper)
 │   ├── scheduler/
 │   │   ├── __init__.py
-│   │   └── orchestrator.py          # Bar-boundary loop — NOT BUILT (nothing ticks)
+│   │   └── orchestrator.py          # Bar-boundary loop — tick() + run() (Phase 4)
 │   ├── logging/
 │   │   ├── __init__.py
 │   │   ├── logger.py                # Structured logging
@@ -687,15 +687,15 @@ Moved from Phases 2 & 3 so Risk & Execution can start first. Prerequisite for Ph
 ### Phase 6: Integration (Days 16-17)
 ```
 ⏸️ scheduler-create         → The bar-boundary loop
-                              [NOT BUILT — src/scheduler/ is an empty package and the
-                               Scheduler settings were RETIRED, so nothing starts a
-                               tick and no order can leave the process]
+                              [BUILT — src/scheduler/orchestrator.py ticks the gates in
+                               order and sleeps to the next boundary. The HOST that runs
+                               it (lease, wake, --once) is Phase 5 and is not built yet.]
 ⏸️ scheduler-error-handling → Robust error handling [with the scheduler]
 ⏸️ main-entry               → Entry point wiring the live loop. `src/main.py` is now a
                               real host: it names its role, refuses to start if the
                               dashboard is loaded in its process, and exits non-zero
                               while the loop is unbuilt (never a silent no-op). The
-                              loop itself is still to be written into it.
+                              loop itself is still to be wired into it (Phase 5).
 ```
 
 **The full design and build order for this phase: [`docs/execution-loop.md`](docs/execution-loop.md).**

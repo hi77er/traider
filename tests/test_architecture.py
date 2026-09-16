@@ -260,6 +260,56 @@ def test_the_backtest_is_the_web_processs_business() -> None:
     )
 
 
+# --- the loop ---------------------------------------------------------------
+
+
+def test_only_the_host_may_import_the_loop() -> None:
+    """Nothing but ``src/main.py`` may reach ``src/scheduler``.
+
+    The loop moves money, so the ways INTO it are the security surface. A web route that
+    could call a tick would put an order behind an HTTP request; a script that imported it
+    would be a second, unleased writer of the live tree. ``src.main`` is the host: it holds
+    the lease, owns the wake schedule and is the only entry point a deployment starts.
+
+    Stated as a subset rather than an equality on purpose — the host does not import the
+    loop until Phase 5 wires it, and an empty set is the correct answer until then.
+    """
+    offenders = sorted(_importers_of("src.scheduler", GRAPH) - {"src.main"})
+    assert offenders == [], f"these modules drive the loop besides the host: {offenders}"
+
+
+def test_the_backtester_cannot_reach_the_live_side() -> None:
+    """``src/backtest`` must not depend on the loop or the live store.
+
+    A backtest is a pure function of the dataset and the rules. The moment it needs the
+    loop's tree it stops being reproducible from the data alone — and the trading machine
+    would have to carry the backtester's dependencies to place an order.
+    """
+    offenders = sorted(
+        f"{module} -> {name}"
+        for module, imported in GRAPH.items()
+        if module.startswith("src.backtest.")
+        for name in imported
+        for package in ("src.scheduler", "src.execution.store")
+        if name == package or name.startswith(package + ".")
+    )
+    assert offenders == [], f"the backtester reaches the live side: {offenders}"
+
+
+def test_the_bar_grid_stays_below_both_processes() -> None:
+    """``src/data`` may not know about the loop or the execution layer.
+
+    The bar grid answers "which bar has closed" for the chart, the backtest and the loop
+    alike. Teaching it about any one of its callers is how the three start disagreeing about
+    which bars exist — the failure it was written to prevent.
+    """
+    imports = GRAPH["src.data.dataset"]
+    offenders = sorted(
+        n for n in imports if n.startswith(("src.scheduler", "src.execution", "src.web"))
+    )
+    assert offenders == [], f"src.data.dataset reaches the live side: {offenders}"
+
+
 # --- the host's own guard ---------------------------------------------------
 
 
