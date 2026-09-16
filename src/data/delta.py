@@ -25,6 +25,7 @@ import pandas as pd
 
 from src.config import session
 from src.config.settings import Settings
+from src.data import dataset
 from src.data.dataset import load_dataset, save_dataset
 from src.data.openbb_client import OpenBBClient
 
@@ -59,27 +60,17 @@ def eligible_until_date(settings: Settings, now: Optional[datetime] = None) -> d
     Before the configured market close, today's bar is still forming, so the
     latest eligible date is the previous weekday. At/after close (on a
     weekday) it is today. Weekends roll back to the previous Friday.
+
+    This is the DAILY rule, and it is the right answer for a calendar bar and the wrong
+    one for anything intraday — see ``sync_missing_days``. Delegates to
+    ``dataset.eligible_date`` so there is one implementation: delta imports that module
+    already, so the shared rule lives in the lower of the two.
     """
     tz = ZoneInfo(settings.market_timezone)
-    now = now or datetime.now(tz)
-    if now.tzinfo is None:
-        now = now.replace(tzinfo=tz)
-    now = now.astimezone(tz)
-    today = now.date()
-    close = session.parse_hhmm(settings.trading_end_hour)
-
-    if today.weekday() >= 5:  # weekend -> previous weekday
-        d = today - timedelta(days=1)
-        while d.weekday() >= 5:
-            d -= timedelta(days=1)
-        return d
-
-    if now.time() >= close:
-        return today
-    d = today - timedelta(days=1)  # e.g. Monday morning -> Friday
-    while d.weekday() >= 5:
-        d -= timedelta(days=1)
-    return d
+    moment = now or datetime.now(tz)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=tz)
+    return dataset.eligible_date(settings, moment.astimezone(tz))
 
 
 def dataset_delta_status(
@@ -187,14 +178,23 @@ def sync_missing_days(
     if df.empty:
         return dataset_delta_status(settings, client, now)
 
-    eligible = eligible_until_date(settings, now)
-    have = {ts.date() for ts in df.index}
+    # The bound is the newest bar that has FINISHED FORMING, as a canonical stamp. This
+    # used to be ``eligible_until_date`` — a DATE — which for an hourly dataset before the
+    # close is YESTERDAY, so today's closed bars could never reach the dataset during the
+    # session and a live tick would decide on yesterday's bar at today's price.
+    until = dataset.bar_stamp(settings, dataset.last_closed_bar(settings, now))
+    first_ts = dataset.bar_stamp(settings, df.index.min())
+    last_ts = dataset.bar_stamp(settings, df.index.max())
+    have_bars = {dataset.bar_stamp(settings, ts) for ts in df.index}
+
+    # The interior check stays DAY-based: it is asking "is a whole trading day missing",
+    # which is the right question for a tail that never notices a hole in the middle, and
+    # the wrong one for per-bar completeness (which the tail comparison above covers).
+    have_days = {ts.date() for ts in df.index}
     first_date = df.index.min().date()
     last_date = df.index.max().date()
-
-    # Nothing can be missing -> don't touch the provider at all.
-    interior = _interior_candidates(have, first_date, last_date)
-    if last_date >= eligible and not interior:
+    interior = _interior_candidates(have_days, first_date, last_date)
+    if last_ts >= until and not interior:
         return dataset_delta_status(settings, client, now)
 
     fetched = client.fetch_historical(
@@ -207,14 +207,15 @@ def sync_missing_days(
     if fetched is not None and not fetched.empty:
         wanted = [
             ts for ts in fetched.index
-            if first_date <= ts.date() <= eligible and ts.date() not in have
+            if first_ts <= dataset.bar_stamp(settings, ts) <= until
+            and dataset.bar_stamp(settings, ts) not in have_bars
         ]
         keep = fetched[fetched.index.isin(wanted)] if wanted else fetched.iloc[0:0]
         if not keep.empty:
             logger.info("Syncing %s missing bar(s) for %s", len(keep), symbol)
             save_dataset(settings, keep, symbol, interval)
         else:
-            logger.info("No missing bars for %s (through %s)", symbol, eligible)
+            logger.info("No missing bars for %s (through %s)", symbol, until)
         _remember_provider_span(settings, fetched)
     return dataset_delta_status(settings, client, now)
 

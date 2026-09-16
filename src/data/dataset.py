@@ -15,8 +15,10 @@ and compressed, and is trivially appendable with dedupe.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -62,6 +64,197 @@ def bar_in_trading_window(settings: Settings, ts) -> bool:
     if stamp.tz is None:
         stamp = stamp.tz_localize(settings.market_timezone or "America/New_York")
     return session.is_open_at(settings, stamp.to_pydatetime())
+
+
+# ---------------------------------------------------------------------------
+# the bar grid: which bar is this, when did it close, when is the next one
+# ---------------------------------------------------------------------------
+# Everything below exists because a bar's timestamp alone is not enough to reason with,
+# and because the DATASET does not agree with itself about how to write one down: a daily
+# index comes back UTC-aware (``2026-09-15 00:00:00+00:00``) while an hourly one comes
+# back naive and exchange-local (``2026-09-15 15:30:00``). Comparing the two, or keying
+# an idempotency check on ``str(ts)``, silently depends on which provider wrote the file.
+# These two functions are the ONE conversion, so every caller agrees.
+
+_INTERVAL_UNITS = {"m": 1, "h": 60, "d": 1440, "W": 7 * 1440, "M": 30 * 1440, "Q": 91 * 1440}
+
+
+def interval_minutes(interval: Optional[str]) -> Optional[int]:
+    """``"15m"``/``"1h"``/``"1d"`` → minutes. ``None`` when it cannot be read.
+
+    Month/quarter lengths are approximations on purpose: this is used for BUFFERING a
+    fetch and for stepping a bar grid, never for dating a bar.
+    """
+    text = str(interval or "").strip()
+    if not text:
+        return None
+    unit = text[-1]
+    number = text[:-1]
+    if unit not in _INTERVAL_UNITS or not number.isdigit():
+        return None
+    return int(number) * _INTERVAL_UNITS[unit]
+
+
+def bar_stamp(settings: Settings, ts) -> pd.Timestamp:
+    """A bar's time in ONE canonical form — UTC-aware — whatever the file holds.
+
+    Naive intraday stamps are exchange-local (``15:30`` means half past three in New
+    York) and naive calendar stamps are UTC dates, because that is how the two kinds are
+    actually stored. Localising them the same way would shift every daily bar by the
+    session offset and make a stored bar look missing.
+    """
+    stamp = pd.Timestamp(ts)
+    if stamp.tz is None:
+        zone = "UTC" if not is_intraday(settings.historical_bar_size) else (
+            settings.market_timezone or "America/New_York"
+        )
+        stamp = stamp.tz_localize(zone)
+    return stamp.tz_convert("UTC")
+
+
+def bar_key(settings: Settings, ts) -> str:
+    """The IDEMPOTENCY KEY for a bar: ``bar_stamp`` as ISO text.
+
+    ``str(Timestamp)`` is not one. An hourly index stringifies as
+    ``"2026-09-15 15:30:00"`` and a daily one as ``"2026-09-15 00:00:00+00:00"``, so a
+    key stored from one and compared against the other never matches — which re-fires a
+    decision on a bar that was already acted on. That is the one failure here that costs
+    money rather than time.
+    """
+    return bar_stamp(settings, ts).isoformat()
+
+
+def last_closed_bar(settings: Settings, now=None):
+    """The newest bar that has FINISHED FORMING at ``now``, as providers stamp it.
+
+    This is the question an intraday tick actually needs to ask, and the one
+    ``eligible_until_date`` cannot answer: that returns the latest date whose *daily* bar
+    is complete, which before the close is yesterday — so an hourly dataset could never
+    receive today's bars during the session.
+
+    A bar stamped ``T`` covers ``[T, T + size)``, and the session's last bar is cut short
+    by the close. So a bar is closed when its own interval has passed, or as soon as the
+    session ends. On a weekend, before the open, or after the close, the answer is the
+    final bar of the most recent session.
+    """
+    tz = ZoneInfo(settings.market_timezone or "America/New_York")
+    moment = now or datetime.now(timezone.utc)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    moment = moment.astimezone(tz)
+
+    interval = settings.historical_bar_size
+    if not is_intraday(interval):
+        # A calendar bar IS its session: the eligible date's bar is the last complete one.
+        return pd.Timestamp(eligible_date(settings, moment), tz="UTC")
+
+    size = interval_minutes(interval) or 60
+    open_at = session.parse_hhmm(settings.trading_start_hour)
+    close_at = session.parse_hhmm(settings.trading_end_hour)
+
+    def session_bars(day) -> list:
+        """Every stamp in that session, in order — the grid the provider actually uses."""
+        stamps, cursor = [], datetime.combine(day, open_at).replace(tzinfo=tz)
+        end = datetime.combine(day, close_at).replace(tzinfo=tz)
+        while cursor < end:
+            stamps.append(pd.Timestamp(cursor))
+            cursor += timedelta(minutes=size)
+        return stamps
+
+    def previous_session(day) -> list:
+        back = day - timedelta(days=1)
+        while back.weekday() >= 5:
+            back -= timedelta(days=1)
+        return session_bars(back)
+
+    today = moment.date()
+    if today.weekday() >= 5:
+        bars = previous_session(today)
+        return bars[-1] if bars else None
+    if moment.time() >= close_at:
+        # The session is over, so its last (short) bar is complete too.
+        bars = session_bars(today)
+        return bars[-1] if bars else None
+    if moment.time() < open_at:
+        bars = previous_session(today)
+        return bars[-1] if bars else None
+
+    closed = [
+        stamp for stamp in session_bars(today)
+        if stamp + timedelta(minutes=size) <= moment
+    ]
+    if closed:
+        return closed[-1]
+    bars = previous_session(today)
+    return bars[-1] if bars else None
+
+
+def eligible_date(settings: Settings, moment: datetime):
+    """The most recent weekday that is over — the anchor for a calendar bar.
+
+    Deliberately re-derived here rather than imported from ``src/data/delta``: delta
+    imports THIS module, and a cycle for one date calculation would be worse than the
+    four lines.
+    """
+    day = moment.date()
+    if day.weekday() >= 5 or moment.time() < session.parse_hhmm(settings.trading_end_hour):
+        day -= timedelta(days=1)
+    while day.weekday() >= 5:
+        day -= timedelta(days=1)
+    return day
+
+
+def next_bar_boundary(settings: Settings, now=None):
+    """When the next bar will have closed — the moment the loop should wake.
+
+    Derived from the SESSION and the bar size, never from the clock's round numbers: this
+    market opens at :30, so an hourly grid is :30-past, not on the hour, and a loop that
+    woke at :00 would always be half a bar early or late. The session's last bar is cut
+    short by the close, so the close itself is a boundary too.
+
+    Returns ``None`` only for a bar size that cannot be parsed.
+    """
+    tz = ZoneInfo(settings.market_timezone or "America/New_York")
+    moment = now or datetime.now(timezone.utc)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    moment = moment.astimezone(tz)
+
+    open_at = session.parse_hhmm(settings.trading_start_hour)
+    close_at = session.parse_hhmm(settings.trading_end_hour)
+    interval = settings.historical_bar_size
+
+    if not is_intraday(interval):
+        # A calendar bar closes with its session: the next boundary is the next session's
+        # close, since today's has either passed or is the one we are waiting for.
+        day = moment.date()
+        if day.weekday() < 5 and moment.time() < close_at:
+            return datetime.combine(day, close_at).replace(tzinfo=tz)
+        day += timedelta(days=1)
+        while day.weekday() >= 5:
+            day += timedelta(days=1)
+        return datetime.combine(day, close_at).replace(tzinfo=tz)
+
+    size = interval_minutes(interval)
+    if not size:
+        return None
+
+    def boundaries(day) -> list:
+        out, cursor = [], datetime.combine(day, open_at).replace(tzinfo=tz)
+        end = datetime.combine(day, close_at).replace(tzinfo=tz)
+        while cursor < end:
+            out.append(min(cursor + timedelta(minutes=size), end))
+            cursor += timedelta(minutes=size)
+        return out
+
+    day = moment.date()
+    for _ in range(10):  # a fortnight of weekdays is plenty; this only skips weekends
+        if day.weekday() < 5:
+            ahead = [b for b in boundaries(day) if b > moment]
+            if ahead:
+                return ahead[0]
+        day += timedelta(days=1)
+    return None
 
 
 def chart_time(

@@ -32,6 +32,7 @@ from typing import Any, Dict, Optional
 import pandas as pd
 
 from src.config import artifacts, state_files
+from src.data import dataset
 from src.strategy.broker import Broker, BrokerPosition, ClosingFill, Fill
 from src.strategy.engine import (
     CLOSE,
@@ -231,7 +232,12 @@ class LiveDriver:
         self.check_history(candles)
         candles = candles.sort_index()
         signal_bar = candles.index[-1]
-        bar_key = str(signal_bar)
+        # CANONICAL, not ``str(signal_bar)``. The idempotency key has to survive the way the
+        # bar was written down: a daily index stringifies as "2026-09-15 00:00:00+00:00" and
+        # an hourly one as "2026-09-15 15:30:00", so a key stored from one and compared
+        # against the other never matches — and a non-matching key re-fires a decision on a
+        # bar that was already acted on, which costs money rather than time.
+        bar_key = dataset.bar_key(self.settings, signal_bar)
         if self.state.last_decided_bar == bar_key:
             return {"action": "noop", "reason": "this bar was already decided", "bar": bar_key}
 

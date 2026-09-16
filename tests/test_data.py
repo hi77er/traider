@@ -11,7 +11,15 @@ import pandas as pd
 import pytest
 
 from src.config.settings import Settings
-from src.data.dataset import dataset_path, load_dataset, save_dataset
+from src.data.dataset import (
+    bar_key,
+    bar_stamp,
+    dataset_path,
+    interval_minutes,
+    last_closed_bar,
+    load_dataset,
+    save_dataset,
+)
 from src.data.historical import fetch_candles
 from src.data.live import (
     days_for_bars,
@@ -326,6 +334,104 @@ def test_get_latest_candle_skips_when_market_closed(tmp_path, monkeypatch):
     result = get_latest_candle(settings, client=client)
     assert result.empty
     assert client.called is False
+
+
+# ---------------------------------------------------------------------------
+# the bar grid: canonical stamps, and which bar has closed
+# ---------------------------------------------------------------------------
+def _bars(tmp_path, **kw) -> Settings:
+    values = dict(
+        _env_file=None,
+        historical_data_dir=str(tmp_path),
+        market_timezone="America/New_York",
+        trading_start_hour="09:30",
+        trading_end_hour="16:00",
+    )
+    values.update(kw)
+    return Settings(**values)
+
+
+def test_interval_minutes_reads_the_bar_size():
+    assert interval_minutes("15m") == 15
+    assert interval_minutes("1h") == 60
+    assert interval_minutes("4h") == 240
+    assert interval_minutes("1d") == 1440
+    assert interval_minutes("") is None and interval_minutes("nonsense") is None
+
+
+def test_a_bar_stamp_is_canonical_whatever_the_file_holds(tmp_path):
+    """The dataset does not agree with itself: daily comes back UTC-aware, hourly naive.
+
+    Comparing the two, or keying an idempotency check on ``str(ts)``, silently depends on
+    which provider wrote the file.
+    """
+    hourly = _bars(tmp_path, historical_bar_size="1h")
+    daily = _bars(tmp_path, historical_bar_size="1d")
+
+    assert (bar_stamp(hourly, "2024-01-05 15:30:00")
+            == bar_stamp(hourly, "2024-01-05 15:30:00-05:00")), "naive hourly is exchange-local"
+    assert (bar_stamp(daily, "2024-01-05 00:00:00")
+            == bar_stamp(daily, "2024-01-05 00:00:00+00:00")), "naive daily is a UTC date"
+
+    # And a daily bar is NOT shifted by the session offset into the previous day.
+    assert bar_stamp(daily, "2024-01-05 00:00:00").date().isoformat() == "2024-01-05"
+
+
+def test_the_bar_key_is_the_same_bar_in_every_representation(tmp_path):
+    """The one failure here that costs money: a key that changes shape re-fires a decision."""
+    hourly = _bars(tmp_path, historical_bar_size="1h")
+    as_written_by_a_naive_provider = bar_key(hourly, "2024-01-05 15:30:00")
+    as_written_by_an_aware_one = bar_key(hourly, "2024-01-05 15:30:00-05:00")
+    assert as_written_by_a_naive_provider == as_written_by_an_aware_one
+    # ...and a different bar is still a different key.
+    assert bar_key(hourly, "2024-01-05 14:30:00") != as_written_by_a_naive_provider
+
+
+@pytest.mark.parametrize(
+    "when,expected",
+    [
+        # An hourly grid on a 09:30 open: the 12:30 bar covers 12:30-13:30, so at 13:00 it
+        # is still forming and 11:30 is the newest complete one.
+        ("2024-01-05 10:00", "2024-01-04 15:30"),
+        ("2024-01-05 11:00", "2024-01-05 09:30"),
+        ("2024-01-05 13:00", "2024-01-05 11:30"),
+        ("2024-01-05 14:05", "2024-01-05 12:30"),
+        # After the close the session's short last bar is complete too.
+        ("2024-01-05 16:05", "2024-01-05 15:30"),
+        # Before the open, and on a weekend, it is the previous session's last bar.
+        ("2024-01-05 08:00", "2024-01-04 15:30"),
+        ("2024-01-06 12:00", "2024-01-05 15:30"),
+    ],
+)
+def test_last_closed_bar_on_an_hourly_grid(tmp_path, when, expected):
+    """10:00 shows the bug in miniature: nothing has closed yet today, so the answer is
+    yesterday's last bar — which is why the sync bound has to be a BAR and not a date."""
+    settings = _bars(tmp_path, historical_bar_size="1h")
+    moment = datetime.fromisoformat(when).replace(tzinfo=ZoneInfo("America/New_York"))
+    assert str(last_closed_bar(settings, moment))[:16] == expected
+
+
+@pytest.mark.parametrize(
+    "when,expected",
+    [
+        ("2024-01-05 10:00", "2024-01-04"),   # today's daily bar is still forming
+        ("2024-01-05 16:05", "2024-01-05"),   # and after the close it is complete
+        ("2024-01-05 08:00", "2024-01-04"),
+        ("2024-01-06 12:00", "2024-01-05"),   # Saturday -> Friday
+    ],
+)
+def test_last_closed_bar_for_a_daily_bar_follows_the_date_rule(tmp_path, when, expected):
+    """Calendar bars keep the behaviour the dataset already had — this must not regress."""
+    settings = _bars(tmp_path, historical_bar_size="1d")
+    moment = datetime.fromisoformat(when).replace(tzinfo=ZoneInfo("America/New_York"))
+    assert last_closed_bar(settings, moment).date().isoformat() == expected
+
+
+def test_a_four_hour_grid_closes_fewer_bars_a_day(tmp_path):
+    """The grid follows the bar size, so a 4h strategy gets four bars a session, not seven."""
+    settings = _bars(tmp_path, historical_bar_size="4h")
+    moment = datetime.fromisoformat("2024-01-05 14:05").replace(tzinfo=ZoneInfo("America/New_York"))
+    assert str(last_closed_bar(settings, moment))[:16] == "2024-01-05 09:30"
 
 
 def test_the_live_lookback_setting_is_a_floor_not_a_window(tmp_path):
