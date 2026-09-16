@@ -33,7 +33,7 @@ PROJECT OVERVIEW
 7. EXECUTION       → Place bracketed orders on Alpaca via its API (data comes from
                      OpenBB). Built — but nothing starts a tick yet
 8. STATE TRACKER   → DynamoDB table (positions, P&L, trades)  [not built]
-9. SCHEDULER       → Main loop over closed bars (APScheduler)  [not built]
+9. SCHEDULER       → Main loop over closed bars (own process)  [not built]
 10. LOGGING/WEB PORTAL → Structured logs + dashboard (progress, charts, config, alerts)
 11. BACKTESTER     → Validate strategy on historical data before live
 
@@ -70,7 +70,9 @@ Phase 5: Deferred — Core & Backtest Completion (moved from Phases 2 & 3)
 
 Phase 6: Integration (Days 16-17, 3 tasks) — NOT STARTED
   ➜ APScheduler loop, error handling, entry point
-    src/scheduler/ is an empty package and SCHEDULER_ENABLED is read by nothing,
+    src/scheduler/ is an empty package and the SCHEDULER_* settings were retired,
+    so nothing starts a tick and no order can leave the process. The design and the
+    build order are in docs/execution-loop.md.
     so NOTHING STARTS A TICK: the execution layer is built and tested, but no
     order can leave the process until this phase is done
   
@@ -143,7 +145,7 @@ ARCHITECTURE
        │  • Trade history │
        └──────────────────┘
 
-SCHEDULER (APScheduler)
+SCHEDULER (own process, bar boundaries)
   Every 4 hours: Data → Features → Signal → Risk Check → Execute → Update State
   
 LOGGING & WEB PORTAL

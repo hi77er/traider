@@ -154,6 +154,34 @@ def test_the_switch_state_module_stays_neutral() -> None:
     assert imports == allowed, f"trading_state must only import src.config, found: {sorted(imports - allowed)}"
 
 
+def test_the_artefact_helpers_are_below_every_layer() -> None:
+    """``src/config/artifacts`` imports nothing from the project, at all.
+
+    Two output trees share it — backtest runs and, from Phase 3, live results — and the
+    whole reason it exists is that ``src/execution`` must not learn these helpers by
+    importing ``src/backtest``. Any project import here re-creates that coupling one
+    level down, where it is harder to see.
+    """
+    assert GRAPH["src.config.artifacts"] == set(), (
+        f"artifacts.py must stay dependency-free, found: {sorted(GRAPH['src.config.artifacts'])}"
+    )
+
+
+def test_the_output_helpers_are_the_same_objects_everywhere() -> None:
+    """Both stores must call the SAME functions, not equal-looking copies.
+
+    ``src/backtest/store.py`` re-exports them for its existing callers, which makes it easy
+    to "helpfully" re-add a local definition later. Two implementations would then be free
+    to disagree about what a slug or a timestamp looks like on disk — and the disagreement
+    would only show up as two strategies writing to two directories.
+    """
+    from src.backtest import store
+    from src.config import artifacts
+
+    for name in ("slug", "jsonable", "write_json_atomic"):
+        assert getattr(store, name) is getattr(artifacts, name), f"{name} is a second copy"
+
+
 # --- the shared machine -----------------------------------------------------
 
 

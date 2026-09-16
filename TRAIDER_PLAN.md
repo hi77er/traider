@@ -235,7 +235,9 @@ fails if a web module ever gains a path to the loop.
 - **Execution — account-wide (Alpaca):** `ALPACA_PAPER_API_KEY`, `ALPACA_PAPER_API_SECRET`, `ALPACA_LIVE_API_KEY`, `ALPACA_LIVE_API_SECRET`, `EXECUTION_MAX_RETRIES`, `EXECUTION_RETRY_BASE_DELAY_SECONDS`, `EXECUTION_ORDER_TIMEOUT_SECONDS`
 - **Execution — per strategy:** `EXECUTION_ENV` (paper | live) — stored per strategy but edited from the header dropdown, not a settings panel
 - **Execution — runtime (NOT config):** `data/trading.json` holds the trading ON/OFF switch. It is deliberately outside the configuration files, because those are exactly what the switch freezes.
-- **Scheduler:** `SCHEDULER_ENABLED`, `SCHEDULER_TIMEZONE`
+- **Scheduler:** no settings. `SCHEDULER_ENABLED` and `SCHEDULER_TIMEZONE` are RETIRED
+  (nothing read either; the trading switch says whether a tick acts, and the schedule
+  comes from the exchange clock)
 - **State (DynamoDB):** `AWS_REGION`, `DYNAMODB_TABLE`, `DYNAMODB_TTL_DAYS`, `DYNAMODB_ENDPOINT_URL`
 - **Web Portal:** `WEB_PORTAL_ENABLED`, `WEB_PORTAL_HOST`, `WEB_PORTAL_PORT`, `WEB_PORTAL_AUTH_ENABLED`, `WEB_PORTAL_USERNAME`, `WEB_PORTAL_PASSWORD`
 
@@ -682,10 +684,10 @@ Moved from Phases 2 & 3 so Risk & Execution can start first. Prerequisite for Ph
 
 ### Phase 6: Integration (Days 16-17)
 ```
-⏸️ scheduler-create         → APScheduler main loop
-                              [NOT BUILT — src/scheduler/ is an empty package and
-                               SCHEDULER_ENABLED is read by nothing, so nothing starts
-                               a tick and no order can leave the process]
+⏸️ scheduler-create         → The bar-boundary loop
+                              [NOT BUILT — src/scheduler/ is an empty package and the
+                               Scheduler settings were RETIRED, so nothing starts a
+                               tick and no order can leave the process]
 ⏸️ scheduler-error-handling → Robust error handling [with the scheduler]
 ⏸️ main-entry               → Entry point wiring the live loop. `src/main.py` is now a
                               real host: it names its role, refuses to start if the
@@ -693,6 +695,11 @@ Moved from Phases 2 & 3 so Risk & Execution can start first. Prerequisite for Ph
                               while the loop is unbuilt (never a silent no-op). The
                               loop itself is still to be written into it.
 ```
+
+**The full design and build order for this phase: [`docs/execution-loop.md`](docs/execution-loop.md).**
+That document is authoritative for the loop — the tick order, the gate policy, the
+storage layout, and what is deliberately left out. Phases 0 (foundations) and 1 (the
+two driver defects) of it are built; 2–8 are not.
 
 ### Phase 7: Testing (Days 18-21)
 ```

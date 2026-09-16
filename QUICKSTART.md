@@ -101,8 +101,8 @@ Build a modular Python trading bot for AAPL (Apple) stock that:
 7. STATE TRACKER → DynamoDB table of positions & P&L
    └─ Survives if bot crashes
 
-8. SCHEDULER → Main loop (every 4 hours: fetch → think → trade)
-   └─ Uses APScheduler
+8. SCHEDULER → Main loop (wakes on the bar boundary, not on a fixed clock)
+   └─ Runs as its own process; the trading switch decides whether a tick acts
 
 9. LOGGING & WEB PORTAL → Records every decision + dashboard alerts
    └─ Why did it trade? Why didn't it? Progress, charts, config, alerts.

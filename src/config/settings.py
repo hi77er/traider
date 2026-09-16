@@ -80,7 +80,12 @@ class Settings(BaseSettings):
     train_test_split: float = Field(default=0.8, ge=0.0, le=1.0, description="Fraction of data used for training")
     live_lookback_days: int = Field(
         default=10, ge=1,
-        description="Lookback window (days) fetched by the daily live poll; should cover FEATURES_MIN_LOOKBACK",
+        description=(
+            "FLOOR, not a window: the live fetch never asks for fewer days than the "
+            "configured features need (LIVE_LOOKBACK_DAYS is a minimum, and the "
+            "derived bar count wins when it is larger). Raise it to tolerate missed "
+            "runs; lowering it below the feature warmup changes nothing."
+        ),
     )
     # ── Where the data lives (account setting) ───────────────────────
     # ONE folder per account; the two subfolders are derived from it so the user
@@ -264,8 +269,19 @@ class Settings(BaseSettings):
     execution_order_timeout_seconds: int = Field(default=60, ge=1)
 
     # ── Scheduler ────────────────────────────────────────────────────
-    scheduler_enabled: bool = True
-    scheduler_timezone: str = Field(default="America/New_York")
+    # There is nothing here any more, and that is the decision rather than an
+    # omission. ``SCHEDULER_ENABLED`` was read by no code: the loop runs when its
+    # PROCESS runs, and the TRADING SWITCH is what decides whether a tick does
+    # anything, so a second master switch could only disagree with the first
+    # (armed, with trading off). ``SCHEDULER_TIMEZONE`` was read by no code either
+    # and was worse than merely redundant: the loop takes its schedule from the
+    # EXCHANGE (Alpaca's /v2/clock, which knows holidays and half-days) and its bar
+    # timestamps from MARKET_TIMEZONE, so a settable third clock would have been a
+    # timezone the loop silently ignores.
+    #
+    # Both are in ``config_service.RETIRED_STRATEGY_KEYS``, so a stored strategy
+    # that still carries them has them DROPPED on the next save rather than being
+    # rejected — the same handling the two risk master switches got.
 
     # ── State storage (DynamoDB) ─────────────────────────────────────
     aws_region: str = Field(default="us-east-1")

@@ -34,13 +34,18 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
 import re
 import shutil
-import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
+
+# The four generic helpers live in ``src/config/artifacts.py`` and are re-exported
+# here, because they are not backtest ideas: ``src/execution/store.py`` needs the same
+# notion of a safe name, a JSON encoder that survives numpy, an atomic write and a root
+# under the account's data folder — and it must not learn them by importing THIS package
+# (the trading process must not depend on the backtester).
+from src.config.artifacts import jsonable, output_root, slug, write_json_atomic
 
 __all__ = [
     "slug",
@@ -64,55 +69,6 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-# Typographic punctuation -> plain ASCII, applied before the accent fold so
-# "Alpha – AAPL" becomes "Alpha-AAPL" rather than "AlphaAAPL".
-_PUNCT_MAP = str.maketrans(
-    {
-        "\u2010": "-", "\u2011": "-", "\u2012": "-", "\u2013": "-",
-        "\u2014": "-", "\u2015": "-", "\u2212": "-",
-        "\u2018": "'", "\u2019": "'", "\u201c": '"', "\u201d": '"',
-        "\u00a0": " ", "\u2026": "...", "\u00b7": "-",
-    }
-)
-_UNSAFE = re.compile(r"[^A-Za-z0-9._-]+")
-_DASH_RUN = re.compile(r"-{2,}")
-
-
-def slug(name: str) -> str:
-    """Filesystem- and URL-safe ASCII form of a strategy name.
-
-    ``slug("Delta – NVDA - 1h") == "Delta-NVDA-1h"``. Never empty (falls back to
-    ``"strategy"``), so it is always safe to use as a path segment.
-    """
-    text = str(name or "").translate(_PUNCT_MAP)
-    folded = (
-        unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
-    )
-    cleaned = _DASH_RUN.sub("-", _UNSAFE.sub("-", folded)).strip("-._")
-    return cleaned or "strategy"
-
-
-def jsonable(obj):
-    """Recursively coerce numpy/pandas scalars & timestamps to JSON types."""
-    if isinstance(obj, dict):
-        return {str(k): jsonable(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
-        return [jsonable(v) for v in obj]
-    if obj is None or isinstance(obj, bool):
-        return obj
-    if isinstance(obj, str):
-        return obj
-    if isinstance(obj, (int, float)):
-        return obj
-    if hasattr(obj, "item"):  # numpy scalar
-        try:
-            return jsonable(obj.item())
-        except (TypeError, ValueError):
-            pass
-    if hasattr(obj, "isoformat"):  # pandas/numpy timestamps & datetimes
-        return obj.isoformat()
-    return str(obj)
-
 
 # ---------------------------------------------------------------------------
 # paths
@@ -125,13 +81,7 @@ def results_root(settings) -> Path:
     ``historical_data_dir``-only settings object working: results sit beside the
     dataset, which is how the layout worked before the account layer existed.
     """
-    base = getattr(settings, "backtest_dir", None)
-    if base:
-        return Path(str(base))
-    hist = getattr(settings, "historical_data_dir", None)
-    if hist:
-        return Path(str(hist)).resolve().parent / "backtest_results"
-    return Path("data/backtest_results")
+    return output_root(settings, folder="backtest_results", setting="backtest_dir")
 
 
 def strategy_dir(settings, name: str) -> Path:
@@ -202,15 +152,6 @@ def new_run_id(inputs: dict, when: Optional[datetime] = None) -> str:
     tested configuration."""
     stamp = (when or datetime.now(timezone.utc)).astimezone(timezone.utc)
     return f"{stamp.strftime('%Y%m%dT%H%M%SZ')}-{inputs_hash(inputs)}"
-
-
-def write_json_atomic(path: Path, payload) -> Path:
-    """Write ``payload`` as pretty JSON via a temp file + atomic replace."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(jsonable(payload), indent=2), encoding="utf-8")
-    os.replace(tmp, path)
-    return path
 
 
 def _read_json(path: Path):

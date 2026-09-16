@@ -38,8 +38,11 @@ no network). The layering, outermost last:
 
 NOT built: anything that STARTS a tick. No scheduler, no route, no startup hook calls
 `LiveDriver` or `AlpacaBroker`, so no order can leave the process today. `src/scheduler/`
-is an empty package and `SCHEDULER_ENABLED` is read by nothing. That wiring is the next
-step; do not assume a running bot exists because this layer is complete.
+is an empty package, and the `SCHEDULER_*` settings were RETIRED because nothing read
+them — so there is no switch that turns a loop on, only the trading switch, which is a gate
+inside a tick rather than a way to start one. That wiring is the next step (see
+`docs/execution-loop.md`); do not assume a running bot exists because this layer is
+complete.
 
 Behaviour worth not re-litigating (each is asserted by a test):
 - Refusals happen BEFORE anything is sent (`OrderRefused`), from four checks: config,

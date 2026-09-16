@@ -13,7 +13,13 @@ import pytest
 from src.config.settings import Settings
 from src.data.dataset import dataset_path, load_dataset, save_dataset
 from src.data.historical import fetch_candles
-from src.data.live import get_latest_candle, is_market_open
+from src.data.live import (
+    days_for_bars,
+    get_history_window,
+    get_latest_candle,
+    is_market_open,
+    required_bars,
+)
 from src.data.openbb_client import OHLCV_COLUMNS, OpenBBClient, OpenBBError
 
 
@@ -320,6 +326,51 @@ def test_get_latest_candle_skips_when_market_closed(tmp_path, monkeypatch):
     result = get_latest_candle(settings, client=client)
     assert result.empty
     assert client.called is False
+
+
+def test_the_live_lookback_setting_is_a_floor_not_a_window(tmp_path):
+    """A window shorter than the features need is not a small decision — it is no decision.
+
+    Too few bars evaluates every indicator to NaN, so every rule is skipped and the signal
+    is HOLD for ever, which is indistinguishable from a quiet market. So the bar count
+    DERIVED from the configured features sets the floor, and LIVE_LOOKBACK_DAYS can only
+    ever raise it. This is the reconcile between the setting and that derivation: the
+    derivation is authoritative, the setting is slack.
+    """
+
+    class WindowClient:
+        """Records how far back the fetch actually asked for."""
+
+        def __init__(self, df):
+            self.df = df
+            self.days = None
+
+        def fetch_historical(self, symbol, start_date, end_date, interval):
+            self.days = (datetime.now(ZoneInfo("America/New_York")).date()
+                         - datetime.fromisoformat(start_date).date()).days
+            return self.df
+
+    df = OpenBBClient._normalize(make_raw_df(10))
+
+    # A window far too small for the features: the derivation wins.
+    tiny = make_settings(tmp_path).model_copy(update={"live_lookback_days": 1})
+    client = WindowClient(df)
+    get_history_window(tiny, client=client)
+    needed = days_for_bars(tiny, required_bars(tiny))
+    assert client.days >= needed, "a too-small setting must not shrink the window"
+    assert client.days > 1, "LIVE_LOOKBACK_DAYS=1 did not shorten anything, so it was a floor"
+
+    # A generous window is honoured as-is: the setting can still buy tolerance for a
+    # missed run, which is the only thing it is for.
+    roomy = make_settings(tmp_path).model_copy(update={"live_lookback_days": 365})
+    client = WindowClient(df)
+    get_history_window(roomy, client=client)
+    assert 364 <= client.days <= 365, client.days
+
+    # And an explicit bar count is the caller's business, not the setting's.
+    client = WindowClient(df)
+    get_history_window(roomy, client=client, bars=required_bars(roomy) + 50)
+    assert client.days >= days_for_bars(roomy, required_bars(roomy) + 50)
 
 
 # ---------------------------------------------------------------------------

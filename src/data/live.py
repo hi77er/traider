@@ -110,6 +110,11 @@ def get_history_window(
     symbol = symbol or settings.instrument
     bar_size = bar_size or settings.historical_bar_size
     wanted = int(bars or required_bars(settings))
+    # The DERIVED window wins and the setting is only a floor: a decision needs the bars
+    # its indicators look back over, and a window shorter than that yields NaN features
+    # and a permanent HOLD — which is indistinguishable from a quiet market. Raising
+    # LIVE_LOOKBACK_DAYS buys tolerance for a missed run; lowering it cannot buy less, so
+    # no configuration of it can produce a decision on too little history.
     days = max(int(getattr(settings, "live_lookback_days", 0) or 0), days_for_bars(settings, wanted))
 
     now = datetime.now(ZoneInfo(settings.market_timezone))

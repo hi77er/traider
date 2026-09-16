@@ -125,17 +125,35 @@ def test_market_timezone_is_a_short_list_of_exchanges():
     assert field["value"] in [o["value"] for o in field["options"]]
 
 
-def test_strategy_scope_carries_trading_gates_scheduler():
+def test_strategy_scope_carries_trading_gates():
     """Everything a strategy needs is editable per strategy."""
     by_key = {f["key"]: f for g in config_service.strategy_config_groups(S(_env_file=None))
               for f in g["fields"]}
     for key in ("MARKET_TIMEZONE", "TRADING_START_HOUR",
                 "TRADING_END_HOUR", "DATA_DELTA_PULL_TIME",
                 "GATE_MIN_SHARPE", "GATE_MAX_DRAWDOWN_PERCENT",
-                "GATE_MIN_WIN_RATE_PERCENT", "GATE_MAX_WEEKLY_LOSS_PERCENT",
-                "SCHEDULER_ENABLED", "SCHEDULER_TIMEZONE"):
+                "GATE_MIN_WIN_RATE_PERCENT", "GATE_MAX_WEEKLY_LOSS_PERCENT"):
         assert key in by_key, key
         assert config_service.validate_strategy_config({key: by_key[key]["value"]})[0], key
+
+
+def test_the_scheduler_section_is_gone():
+    """Both scheduler keys asked for something the bot does not have.
+
+    ``SCHEDULER_ENABLED`` was a second "is the bot on" switch — the trading switch already
+    answers that, and a second one can disagree with it. ``SCHEDULER_TIMEZONE`` offered a
+    clock the loop ignores, since it schedules from the exchange's own /v2/clock.
+    """
+    groups = config_service.strategy_config_groups(S(_env_file=None))
+    assert "Scheduler" not in [g["name"] for g in groups]
+    offered = {f["key"] for g in groups for f in g["fields"]}
+    assert not [k for k in offered if k.startswith("SCHEDULER_")], sorted(offered)
+    for gone in ("SCHEDULER_ENABLED", "SCHEDULER_TIMEZONE"):
+        assert gone not in config_service.STRATEGY_SCOPED_KEYS, "nor writable as a strategy key"
+        assert gone in config_service.RETIRED_STRATEGY_KEYS, "...and dropped, not rejected"
+    # Deleted from Settings too, so a stray .env line cannot make them look live again.
+    s = S(_env_file=None)
+    assert not hasattr(s, "scheduler_enabled") and not hasattr(s, "scheduler_timezone")
 
 
 # ---------------------------------------------------------------------------

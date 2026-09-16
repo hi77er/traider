@@ -111,8 +111,6 @@ _LABELS: Dict[str, str] = {
     "GATE_MAX_DRAWDOWN_PERCENT": "Gate: max drawdown (%)",
     "GATE_MIN_WIN_RATE_PERCENT": "Gate: min win rate (%)",
     "GATE_MAX_WEEKLY_LOSS_PERCENT": "Gate: max weekly loss (%)",
-    "SCHEDULER_ENABLED": "Scheduler enabled",
-    "SCHEDULER_TIMEZONE": "Scheduler timezone",
 }
 
 # ── Numeric bounds surfaced to the UI ──────────────────────────────────────
@@ -159,8 +157,6 @@ _HINTS: Dict[str, str] = {
     "EXECUTION_MAX_RETRIES": "Attempts to send/fetch an order before giving up.",
     "EXECUTION_RETRY_BASE_DELAY_SECONDS": "Delay before the first retry; later retries back off.",
     "EXECUTION_ORDER_TIMEOUT_SECONDS": "Seconds to wait for an order acknowledgement before retrying.",
-    "SCHEDULER_ENABLED": "Master switch for the scheduled daily jobs.",
-    "SCHEDULER_TIMEZONE": "IANA timezone, e.g. America/New_York.",
     "OPENBB_PROVIDER": "Provider for candles/quotes — yfinance (free) or polygon/fmp (API key).",
     "BACKTEST_START_DATE": "Optional window start, YYYY-MM-DD; empty = start of the dataset.",
     "BACKTEST_END_DATE": "Optional window end, YYYY-MM-DD; empty = end of the dataset.",
@@ -291,7 +287,6 @@ _STRATEGY_SCOPE: List[Tuple[str, Tuple[str, ...]]] = [
             "GATE_MIN_WIN_RATE_PERCENT", "GATE_MAX_WEEKLY_LOSS_PERCENT",
         ),
     ),
-    ("Scheduler", ("SCHEDULER_ENABLED", "SCHEDULER_TIMEZONE")),
     (
         "Risk Management",
         (
@@ -336,6 +331,16 @@ RETIRED_STRATEGY_KEYS = frozenset(
         # they are deleted from ``Settings`` as well as retired here.
         "DECISION_INTERVAL_HOURS",
         "DECISION_TIME",
+        # The Scheduler group is gone, and with it both of its settings. Nothing ever
+        # read either of them. ``SCHEDULER_ENABLED`` asked a question the TRADING
+        # SWITCH already answers — the loop runs when its process runs, and the switch
+        # decides whether a tick acts — so it could only ever disagree. And
+        # ``SCHEDULER_TIMEZONE`` offered a clock the loop does not use: it takes its
+        # schedule from the exchange (Alpaca's /v2/clock) and its bar timestamps from
+        # MARKET_TIMEZONE. They are deleted from ``Settings`` as well as retired here,
+        # so a strategy still carrying them keeps loading and loses them on save.
+        "SCHEDULER_ENABLED",
+        "SCHEDULER_TIMEZONE",
         # The Model group is gone from the panel. MODEL_TYPE was a switch between the
         # one model that exists and one that does not (the backtester and the signal
         # service both refuse to run under anything else), and a retrain cadence has
