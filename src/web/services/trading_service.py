@@ -24,56 +24,45 @@ we can trade with.
 The state is runtime, not configuration — so it does not live in the strategy
 store (which the lock itself would otherwise block), it lives beside the datasets
 and is gitignored with them.
+
+The state itself now lives in ``src/config/trading_state.py``, because the
+**execution loop** reads it too and must not have to import this package to ask.
+This module keeps the policy and re-exports the state helpers, so every caller
+that already imports them from here keeps working.
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
-from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, HTTPException, status
 
-from src.config import state_files
 from src.config.effective import active_strategy_name, get_effective_settings_dep
+from src.config.trading_state import (
+    STATE_FILENAME,  # noqa: F401  (re-exported for existing callers)
+    get_state,
+    is_trading_on,
+    now_iso as _now_iso,
+    state_path,  # noqa: F401  (re-exported for existing callers)
+    write_state as _write,
+)
 from src.execution import credentials
 from src.execution.config import execution_status
 from src.web.services import config_service, freshness
 
 logger = logging.getLogger(__name__)
 
-STATE_FILENAME = "trading.json"
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
-
-
-def state_path(settings) -> Path:
-    """``<data root>/trading.json`` — beside ``historical/`` and ``backtest_results/``."""
-    return state_files.state_path(settings, STATE_FILENAME)
-
-
-def _read(settings) -> dict:
-    """Current state, defaulting to OFF. Never raises: an unreadable file must
-    not be mistaken for "on"."""
-    state = state_files.read_json(state_path(settings), {"on": False, "since": None})
-    state["on"] = bool(state.get("on"))
-    return state
-
-
-def _write(settings, state: dict) -> None:
-    """Atomic, owner-only write (mkstemp gives 0600)."""
-    state_files.write_json(state_path(settings), state)
-
-
-def is_trading_on(settings) -> bool:
-    return bool(_read(settings).get("on"))
-
-
-def get_state(settings) -> dict:
-    return _read(settings)
+__all__ = [
+    "STATE_FILENAME",
+    "get_state",
+    "is_trading_on",
+    "payload",
+    "require_trading_off",
+    "state_path",
+    "turn_off",
+    "turn_on",
+]
 
 
 def turn_on(settings, *, confirm_live: bool = False) -> dict:

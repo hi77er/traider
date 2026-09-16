@@ -220,21 +220,27 @@ def build_order_payload(
 
 
 def _default_guard(settings):
-    """The master switch, read from the one place that owns it.
+    """The master switch, read from ``src/config/trading_state``.
 
-    Imported lazily and *inside* the call: ``src/web/services/trading_service`` imports
-    this package, so a module-level import here would be circular. It is deliberately
-    not optional — if the switch cannot be read, the answer is NO. A guard that quietly
-    disappears when it cannot be evaluated is worse than no guard, because it looks
-    like one.
+    That module holds the state and imports nothing but ``state_files``, so this is
+    an arrow pointing ``execution -> config``. It used to reach into
+    ``src/web/services/trading_service``, which meant the execution loop had to import
+    the whole FastAPI dashboard to ask "am I allowed to trade?".
+
+    Read on EVERY call, never cached: a loop that cached the switch would keep trading
+    after the operator pressed stop, which is the one thing the switch must never do.
+
+    It is deliberately not optional — if the switch cannot be read, the answer is NO. A
+    guard that quietly disappears when it cannot be evaluated is worse than no guard,
+    because it looks like one.
     """
 
     def guard() -> Optional[str]:
         try:
-            from src.web.services import trading_service
+            from src.config import trading_state
         except Exception as exc:  # noqa: BLE001 - fail closed, with the reason
             return f"the trading switch could not be read ({exc}) — refusing to assume it is on"
-        if not trading_service.is_trading_on(settings):
+        if not trading_state.is_trading_on(settings):
             return "trading is OFF"
         return None
 
