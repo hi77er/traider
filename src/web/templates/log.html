@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TRAIDER — Trading log</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body class="report-page">
+  <header>
+    <h1>📋 TRAIDER — Trading log</h1>
+    <div class="header-actions">
+      <span id="lg-state" class="chip">…</span>
+      <span id="lg-strategy" class="chip"></span>
+      <a class="btn-link" href="/">← Back to dashboard</a>
+    </div>
+  </header>
+
+  <main class="report-main">
+    <!-- ── Day menu: what the loop's index says it has run ──
+         Built from the index rather than from the tick files, so listing the days never
+         depends on how much was logged. -->
+    <aside class="card report-menu">
+      <h2>Days</h2>
+      <p class="muted note">One entry per day the loop ran this strategy. The counters come
+        from its own index, so this list stays fast however large the logs get.</p>
+      <div id="lg-days" class="rp-runs"></div>
+    </aside>
+
+    <section class="report-body">
+      <div id="lg-error" class="bt-warn" hidden></div>
+
+      <!-- ── Account state FIRST: the broker is the truth ── -->
+      <div class="card">
+        <div class="card-head-static">
+          <h2>Account</h2>
+          <span class="muted" id="lg-env"></span>
+        </div>
+        <p id="lg-protection" class="muted"></p>
+        <div id="lg-positions"></div>
+        <h3 class="lg-sub">Working orders</h3>
+        <div id="lg-working"></div>
+      </div>
+
+      <!-- ── Then the loop's own record of the same day ── -->
+      <div class="card">
+        <div class="card-head-static">
+          <h2>What the loop did</h2>
+          <span class="muted" id="lg-day"></span>
+        </div>
+        <p class="muted note">One line per tick, newest first. A tick that decided nothing is
+          not written here — the heartbeat in <code>latest.json</code> is what proves the loop
+          is alive, and this file is what it <em>did</em>.</p>
+        <div id="lg-ticks"></div>
+      </div>
+
+      <div class="card">
+        <h2>Orders the bot submitted</h2>
+        <p class="muted note">The loop's own account of every order it sent, including the
+          ones that were refused, with the client id that joins each row to the broker's
+          copy.</p>
+        <div id="lg-orders"></div>
+      </div>
+
+      <div class="card">
+        <h2>Trades closed</h2>
+        <p class="muted note">Round trips the loop has finished, newest first — entry, exit,
+          the reason, and the return the strategy machine itself computed.</p>
+        <div id="lg-trades"></div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/log.js"></script>
+</body>
+</html>

@@ -26,6 +26,7 @@ from src.web.routes import dataset as dataset_routes
 from src.web.routes import delta as delta_routes
 from src.web.routes import execution as execution_routes
 from src.web.routes import live as live_routes
+from src.web.routes import log as log_routes
 from src.web.routes import market as market_routes
 from src.web.routes import pages as page_routes
 from src.web.routes import report as report_routes
@@ -65,6 +66,7 @@ async def no_store_dashboard(request, call_next):
 
 app.mount("/static", StaticFiles(directory=_STATIC), name="static")
 app.include_router(page_routes.router)
+app.include_router(log_routes.router)
 app.include_router(dataset_routes.router)
 app.include_router(delta_routes.router)
 app.include_router(market_routes.router)

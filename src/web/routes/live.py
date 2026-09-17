@@ -150,3 +150,38 @@ def get_trades(
     name = loop_service.status(settings)["strategy"]
     rows = store.read_trades(settings, name, limit=limit)
     return {"ok": True, "strategy": name, "count": len(rows), "trades": list(reversed(rows))}
+
+
+@router.get("/log")
+def get_log(
+    day: Optional[str] = Query(None, description="YYYY-MM-DD in the market's timezone"),
+    limit: int = Query(500, ge=1, le=5000),
+    settings=Depends(get_effective_settings_dep),
+) -> dict:
+    """One day of the LOOP's own record: what it decided, and what it submitted.
+
+    This is the local half of the log page. The broker's half is ``/orders`` and
+    ``/positions`` — account state first, local context second, which is the only order that
+    makes sense: the account is the truth and the local rows are the explanation.
+
+    Everything here tolerates an absent file. A log someone deleted, or one that has never
+    been written, must render as an empty day rather than as an error, or the page would be
+    useless in exactly the situation — something went wrong and the log is gone — where it
+    is most needed.
+    """
+    from src.execution import store
+
+    name = loop_service.status(settings)["strategy"]
+    index = store.load_index(settings, name)
+    chosen = day or (index[-1].get("day") if index else store.trading_day(settings))
+    ticks = store.read_ticks(settings, name, when=chosen, limit=limit)
+    return {
+        "ok": True,
+        "strategy": name,
+        "day": chosen,
+        # The day menu comes from the index, which exists so that listing the days a strategy
+        # ran never has to read the tick logs — they grow without bound.
+        "days": [entry.get("day") for entry in reversed(index)][:120],
+        "ticks": list(reversed(ticks)),
+        "orders": list(reversed(store.read_orders(settings, name, limit=limit))),
+    }

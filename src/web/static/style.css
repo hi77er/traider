@@ -1398,3 +1398,23 @@ td.mkt-sym { font-weight: 600; }
 .live-row .warn { color: #f0b429; }
 .chip.good { color: var(--green); border-color: rgba(38, 166, 154, 0.5); }
 .chip.bad { color: var(--red); border-color: rgba(239, 83, 80, 0.55); }
+
+/* ---------- Trading log page ----------
+
+   Account state first, local rows second, so the tables share one shape and one set of
+   colours. A return is coloured by its SIGN, and a refusal by being one. */
+.card-head-static { display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px; }
+.card-head-static h2 { margin: 0; }
+.lg-sub { font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 18px 0 6px; }
+.lg-table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+.lg-table th {
+  text-align: left; color: var(--muted); font-weight: 500; font-size: 12px;
+  border-bottom: 1px solid var(--border); padding: 6px 8px; white-space: nowrap;
+}
+.lg-table td { padding: 5px 8px; border-bottom: 1px solid rgba(38, 43, 54, 0.6); }
+.lg-table tbody tr:hover { background: rgba(76, 141, 255, 0.05); }
+.lg-table td.bad, .lg-table td:first-child { white-space: nowrap; }
+.lg-table td.bad { color: var(--red); }
+.lg-table td.good { color: var(--green); }
+#lg-protection.bad { color: var(--red); }
+.rp-run.active { border-color: var(--accent); color: var(--accent); }

@@ -349,6 +349,23 @@ def test_a_skipped_leg_is_still_a_row(tmp_path):
 # ---------------------------------------------------------------------------
 # the pre-(strategy, env) state file
 # ---------------------------------------------------------------------------
+def test_a_day_asked_for_by_name_stays_that_day(tmp_path):
+    """``trading_day(settings, "2026-09-17")`` must not be re-parsed as midnight UTC.
+
+    It was, and midnight UTC in New York is 20:00 on the 16th — so every reader that asked
+    for a day by name was pointed at the PREVIOUS day's file, silently and always. The log
+    page asked for the 17th and was shown the 16th, which is how this was found.
+    """
+    settings = _s(tmp_path)
+
+    assert store.trading_day(settings, "2026-09-17") == "2026-09-17"
+    assert store.trading_day(settings, " 2026-09-17 ") == "2026-09-17"
+    # A MOMENT at the same nominal date is still converted: that is what the market
+    # timezone is for, and it is why the two cases have to be told apart.
+    assert store.trading_day(settings, "2026-09-17T00:00:00+00:00") == "2026-09-16"
+    assert store.trading_day(settings, datetime(2026, 9, 17, 0, 0, tzinfo=timezone.utc)) == "2026-09-16"
+
+
 def test_a_legacy_state_file_is_moved_aside_and_never_adopted(tmp_path):
     """It is keyed by instrument alone, so it cannot be attributed — and guessing is worse
     than starting flat, because the broker is asked what is actually held."""

@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -77,6 +78,9 @@ __all__ = [
 
 LATEST = "latest.json"
 STATE_PREFIX = "state-"
+
+#: A day, as a reader names it. See ``trading_day`` for why this is matched at all.
+_DATE_ONLY = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 # The pre-(strategy, env) state file, written beside the dataset as
 # ``strategy_state_<name>.json``. Recognised only so it can be moved aside — never read.
@@ -138,7 +142,16 @@ def load_state(settings, name: str, env: str) -> Dict[str, Any]:
 
 
 def trading_day(settings, when: Any = None) -> str:
-    """``YYYY-MM-DD`` in the MARKET's timezone — one session, one file."""
+    """``YYYY-MM-DD`` in the MARKET's timezone — one session, one file.
+
+    A value that is ALREADY a day (``"2026-09-17"``) is returned unchanged, and that is a fix
+    rather than a shortcut: parsing it would make it midnight UTC, which in New York is 20:00
+    on the 16th, so every reader that asked for a day by name was pointed at the previous
+    day's file. A caller holding a day has the answer already; only a MOMENT needs converting.
+    """
+    if isinstance(when, str) and _DATE_ONLY.match(when.strip()):
+        return when.strip()
+
     tz_name = str(getattr(settings, "market_timezone", "") or "America/New_York")
     try:
         tz = ZoneInfo(tz_name)
