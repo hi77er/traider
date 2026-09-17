@@ -9,7 +9,11 @@ lives anywhere else:
   serialization, so a live run can be restarted without re-deciding;
 * :mod:`src.strategy.config` — the knobs the machine reads, resolved from the
   strategy's effective settings;
-* :mod:`src.strategy.broker` — the small seam between a decision and a fill.
+* :mod:`src.strategy.broker` — the small seam between a decision and a fill;
+* :mod:`src.strategy.limits` — the day's loss limits. Not a trading rule and not in a
+  driver: the execution LOOP applies them, so a backtest does not. That is the one place a
+  backtest and a live run deliberately differ, and it is why they live in their own module
+  rather than in an ``if`` inside a driver.
 
 The point of the split is the guarantee the backtest needs to be worth anything: the
 backtest and a live run feed the SAME machine, one bar at a time, and differ only in

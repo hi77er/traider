@@ -140,16 +140,23 @@ class StrategyEngine:
             del self._closed_closes[:-keep]
 
     # -- the decision ------------------------------------------------------
-    def step(self, state: StrategyState, bar: Bar, act: str) -> List[Intent]:
+    def step(self, state: StrategyState, bar: Bar, act: str, *, veto: str = "") -> List[Intent]:
         """Decide what this bar does, given ``act`` — the PREVIOUS bar's signal.
 
         Returns the intents for this bar in the order they happen: a signal exit
         before a level exit, and two only when a position opened on this bar is
         stopped out by the same bar's range (a bracket order filling at once).
+
+        ``veto`` is why no NEW entry may be opened on this bar (the day's loss limit, in a
+        live run — see ``src.strategy.limits``): an entry the machine wanted becomes a SKIP
+        carrying that reason. It is a plain argument rather than something the machine
+        looks up, on purpose — the machine is told that entries are vetoed and why, and
+        never works out whether they should be. A backtest passes nothing and cannot tell
+        the seam exists.
         """
         intents: List[Intent] = []
         if state.position is None:
-            entry = self._entry_intent(state, bar, act)
+            entry = self._entry_intent(state, bar, act, veto)
             if entry is not None:
                 intents.append(entry)
         else:
@@ -167,7 +174,7 @@ class StrategyEngine:
                 intents.append(self._close_at(state, bar, level, reason, level=level))
         return intents
 
-    def _entry_intent(self, state: StrategyState, bar: Bar, act: str) -> Optional[Intent]:
+    def _entry_intent(self, state: StrategyState, bar: Bar, act: str, veto: str = "") -> Optional[Intent]:
         """Open a position, or nothing. ``act`` is the previous bar's signal."""
         cfg = self.config
         want_short: Optional[bool] = None
@@ -177,6 +184,15 @@ class StrategyEngine:
             want_short = True
         if want_short is None:
             return None
+
+        if veto:
+            # Refused HERE, before anything below happens, and that placement is the whole
+            # point: this method creates ``state.position`` as part of deciding, so a veto
+            # applied after it returned would leave the state holding a position the broker
+            # never received — and the next tick would refuse for ever over drift that never
+            # happened. Returning a SKIP instead costs the position, the weight memory and
+            # the sizing, and leaves the ledger to record the refusal (``record_skip``).
+            return Intent(action=SKIP, reason=veto, short=bool(want_short))
 
         short = bool(want_short)
 
@@ -427,10 +443,12 @@ class Ledger:
     def record_skip(self, *, index: int, short: bool, reason: str) -> None:
         """An entry that was refused before it reached a broker. A veto is a decision.
 
-        Nothing in the machine emits one today: the loss limits that will refuse an
-        entry are deferred to the execution loop (MAX_CONSECUTIVE_LOSSES and
-        MAX_LOSS_PERCENT are collected but not yet applied). The vocabulary stays so
-        that a refusal is a leg in the ledger rather than a silence when it returns.
+        The machine emits none of these itself — a refusal is not a trading rule — but the
+        EXECUTION LOOP does: when the day's loss limit is in force it passes a veto into
+        ``step``, and an entry the machine wanted comes back as one of these rather than as
+        an OPEN. Booking it is what keeps the refusal visible: a leg in the ledger, a row in
+        the trade log, and a reason on the tick — where a dropped intent would be an entry
+        that silently never happened.
         """
         self.legs.append(
             {

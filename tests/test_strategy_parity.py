@@ -280,12 +280,14 @@ def test_exactly_one_implementation_decides(tmp_path, monkeypatch):
     df = _zigzag(40)
     settings = _settings(tmp_path)
     gen = _generator(settings, _always_buy())
-    calls = {"n": 0}
+    calls = {"n": 0, "vetoes": 0}
     real_step = StrategyEngine.step
 
-    def counting_step(self, state, bar, act):
+    def counting_step(self, state, bar, act, **kw):
         calls["n"] += 1
-        return real_step(self, state, bar, act)
+        if kw.get("veto"):
+            calls["vetoes"] += 1
+        return real_step(self, state, bar, act, **kw)
 
     monkeypatch.setattr(StrategyEngine, "step", counting_step)
 
@@ -297,6 +299,11 @@ def test_exactly_one_implementation_decides(tmp_path, monkeypatch):
 
     _run_live(df, settings, gen, tmp_path, 7)
     assert calls["n"] > after_batch, "the live driver did not use the shared machine"
+    # ``veto`` is the one argument a live run can pass that a backtest cannot, so it is the
+    # one way the two could drift apart in a way this test would otherwise welcome. The
+    # day's loss limits are the LOOP's (``LiveDriver.halt``, set per tick); neither a
+    # backtest nor a replay that never sets a halt may reach that path.
+    assert calls["vetoes"] == 0, "a veto reached the shared machine from a run with no halt"
 
 
 def test_the_adapter_holds_no_decisions_of_its_own():

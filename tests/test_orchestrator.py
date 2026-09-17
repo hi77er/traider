@@ -23,6 +23,7 @@ from src.config import state_files
 from src.config.settings import Settings
 from src.config.trading_state import write_state
 from src.data.dataset import save_dataset
+from src.execution.accounts import EnvAccount
 from src.scheduler import lease as lease_mod
 from src.scheduler import orchestrator
 from src.strategy.broker import SimulatedBroker
@@ -513,6 +514,168 @@ def test_a_closed_position_writes_a_trade_row(tmp_path, armed):
     assert trades[0]["reason"] in ("signal", "forced")
     assert orchestrator.store.load_latest(settings, STRATEGY)["trades"], "also on the heartbeat"
     assert len(orchestrator.store.read_orders(settings, STRATEGY)) == 2, "the open and the close"
+
+
+# ---------------------------------------------------------------------------
+# the day's loss limits
+# ---------------------------------------------------------------------------
+def _closed_trade(settings, when, *, equity_ret: float = -0.01) -> None:
+    """One closed round trip in the strategy's trade log, dated by ``when``."""
+    orchestrator.store.append_trade(
+        settings,
+        STRATEGY,
+        orchestrator.store.trade_record(
+            settings=settings,
+            strategy=STRATEGY,
+            env="paper",
+            at=when,
+            bar="2024-01-05T17:30:00+00:00",
+            leg={
+                "entry_idx": 1, "exit_idx": 3, "direction": "long",
+                "entry_price": 100.0, "exit_price": 99.0,
+                "ret": equity_ret, "equity_ret": equity_ret, "weight": 1.0,
+                "bars": 2, "reason": "signal", "skipped": False,
+            },
+        ),
+    )
+
+
+def _account(equity, last_equity, env: str = "paper"):
+    return EnvAccount(env=env, fields=(("equity", equity), ("last_equity", last_equity)))
+
+
+def test_the_limits_read_nothing_when_they_are_not_configured(tmp_path, armed, monkeypatch):
+    """Empty means NOT APPLIED, and it must cost nothing.
+
+    A strategy that does not use these settings must not start making a broker call per
+    tick, and must not have a new way to behave differently — the tick below is the same
+    tick it was before the limits existed.
+    """
+    settings = armed()
+
+    def never(settings, env, force=False):
+        raise AssertionError("the account was read for a strategy with no loss limits")
+
+    monkeypatch.setattr(orchestrator.accounts, "snapshot", never)
+    driver = _driver(settings)
+    record = orchestrator.tick(
+        settings, now=_at("2024-01-05 14:05"), sync_call=lambda: {}, clock_call=Calls().clock,
+        driver=driver,
+    )
+
+    assert driver.halt is None
+    assert record["action"] == "decided" and record["reason"] == ""
+    assert record["intents"][0]["intent"] == "open", "the entry went through"
+
+
+def test_a_healthy_day_is_not_halted(tmp_path, armed, monkeypatch):
+    """Both settings configured, nothing breached: the bot trades as usual."""
+    settings = armed(max_loss_percent=2.0, max_consecutive_losses=3)
+    monkeypatch.setattr(
+        orchestrator.accounts, "snapshot", lambda s, env, force=False: _account(101.0, 100.0)
+    )
+    driver = _driver(settings)
+    record = orchestrator.tick(
+        settings, now=_at("2024-01-05 14:05"), sync_call=lambda: {}, clock_call=Calls().clock,
+        driver=driver,
+    )
+
+    assert driver.halt is None
+    assert record["reason"] == "" and record["intents"][0]["intent"] == "open"
+
+
+def test_a_losing_streak_halts_the_day_and_the_refusal_is_logged(tmp_path, armed):
+    """The refusal has to be visible everywhere the day is read.
+
+    The tick record carries it (the Live panel shows the last tick's reason), the intent is
+    a SKIP (the engine booked the veto rather than creating a position), and the trade log
+    holds the skipped leg — which is also why the tally has to ignore skipped rows.
+    """
+    settings = armed(max_consecutive_losses=1)
+    _closed_trade(settings, _at("2024-01-05 13:05"))
+    driver = _driver(settings)
+
+    record = orchestrator.tick(
+        settings, now=_at("2024-01-05 14:05"), sync_call=lambda: {}, clock_call=Calls().clock,
+        driver=driver,
+    )
+
+    assert driver.halt and "MAX_CONSECUTIVE_LOSSES=1" in driver.halt, driver.halt
+    assert record["action"] == "decided", "the bar was decided; the entry was refused"
+    assert record["reason"] == driver.halt
+    assert record["intents"][0]["skipped"] is True
+    assert orchestrator.store.read_orders(settings, STRATEGY) == [], "nothing was sent"
+    rows = orchestrator.store.read_trades(settings, STRATEGY, when="2024-01-05")
+    assert [row["skipped"] for row in rows] == [False, True], "the day's loss, then the refusal"
+    assert rows[1]["reason"] == driver.halt
+    assert orchestrator.store.read_ticks(settings, STRATEGY, "2024-01-05")[0]["reason"] == driver.halt
+
+
+def test_yesterdays_losses_do_not_halt_today(tmp_path, armed):
+    """The tally is the EXCHANGE day's, which is what lets a halt clear itself.
+
+    Measured across days, a streak could only be broken by a win — and a halted bot takes no
+    trades, so there would be no win to break it with.
+    """
+    settings = armed(max_consecutive_losses=1)
+    _closed_trade(settings, _at("2024-01-04 14:05"))
+    driver = _driver(settings)
+
+    record = orchestrator.tick(
+        settings, now=_at("2024-01-05 14:05"), sync_call=lambda: {}, clock_call=Calls().clock,
+        driver=driver,
+    )
+
+    assert driver.halt is None, "yesterday's loss is yesterday's"
+    assert record["intents"][0]["intent"] == "open", "and today's entry went through"
+    assert len(orchestrator.store.read_orders(settings, STRATEGY)) == 1
+
+
+def test_the_percent_limit_halts_on_the_days_drawdown(tmp_path, armed, monkeypatch):
+    """Measured on the ACCOUNT, so a drawdown that is still open counts too."""
+    settings = armed(max_loss_percent=2.0)
+    monkeypatch.setattr(
+        orchestrator.accounts, "snapshot", lambda s, env, force=False: _account(97.0, 100.0)
+    )
+    driver = _driver(settings)
+
+    record = orchestrator.tick(
+        settings, now=_at("2024-01-05 14:05"), sync_call=lambda: {}, clock_call=Calls().clock,
+        driver=driver,
+    )
+
+    assert driver.halt and "MAX_LOSS_PERCENT=2" in driver.halt, driver.halt
+    assert "3.00%" in driver.halt, "the real move, so it can be checked: " + driver.halt
+    assert record["reason"] == driver.halt
+    assert orchestrator.store.read_orders(settings, STRATEGY) == []
+
+
+def test_an_unreadable_account_halts_when_the_percent_limit_is_set(tmp_path, armed, monkeypatch):
+    """FAIL CLOSED, and with the broker's own words.
+
+    The limit is configured, so the day's loss is a number that matters — and an account we
+    cannot read is not evidence that it is zero. The reason is carried through rather than
+    replaced, because it is the only thing that says whether this clears in a second or in
+    an hour.
+    """
+    settings = armed(max_loss_percent=2.0)
+    monkeypatch.setattr(
+        orchestrator.accounts,
+        "snapshot",
+        lambda s, env, force=False: EnvAccount(
+            env=env, known=False, reason="the paper account could not be read (401 Unauthorized)"
+        ),
+    )
+    driver = _driver(settings)
+    record = orchestrator.tick(
+        settings, now=_at("2024-01-05 14:05"), sync_call=lambda: {}, clock_call=Calls().clock,
+        driver=driver,
+    )
+
+    assert driver.halt and "MAX_LOSS_PERCENT is set" in driver.halt, driver.halt
+    assert "401 Unauthorized" in driver.halt, "the reason the account could not be read"
+    assert record["intents"][0]["skipped"] is True
+    assert orchestrator.store.read_orders(settings, STRATEGY) == [], "nothing was sent"
 
 
 # ---------------------------------------------------------------------------

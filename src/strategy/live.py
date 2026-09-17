@@ -104,6 +104,7 @@ class LiveDriver:
         state_path: Optional[Path] = None,
         dry_run: bool = False,
         name: Optional[str] = None,
+        halt: Optional[str] = None,
     ):
         self.settings = settings
         self.engine = engine
@@ -111,6 +112,11 @@ class LiveDriver:
         self.state = state or StrategyState()
         self.broker = broker
         self.dry_run = bool(dry_run)
+        # Why no NEW entry may be opened today, or None. The LOOP owns the day's loss limits
+        # (``src.strategy.limits``) and hands the verdict down, because measuring them needs
+        # the trade log and the account's equity, and ``src/strategy`` may reach neither.
+        # A halt refuses what the machine wants to OPEN; it never blocks an exit.
+        self.halt = halt or None
         # WHAT this driver is. The strategy comes first, and not for cosmetics: it is the
         # identity the state file is keyed by and the name the store puts on the tree, so
         # falling back to the instrument (which is what this used to do) gave two
@@ -313,7 +319,7 @@ class LiveDriver:
                 "trades": self._booked_since(booked_before),
             }
 
-        intents = self.engine.step(self.state, fill_bar, act)
+        intents = self.engine.step(self.state, fill_bar, act, veto=str(self.halt or ""))
         done = []
         for index, intent in enumerate(intents):
             # Named from the SIGNAL bar, not the fill bar: it is the bar a reader will look
@@ -328,6 +334,11 @@ class LiveDriver:
         self.save_state()
         self.log.extend(done)
         report = {"action": "decided", "bar": bar_key, "signal": act, "intents": done}
+        if self.halt:
+            # Carried even when nothing was skipped: "this strategy is not taking entries
+            # today" is the first thing someone staring at a quiet panel needs to know, and
+            # the tick record is where they will look for it.
+            report["reason"] = self.halt
         booked = self._booked_since(booked_before)
         if booked:
             report["trades"] = booked

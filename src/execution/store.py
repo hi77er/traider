@@ -420,8 +420,30 @@ def read_orders(settings, name: str, limit: Optional[int] = None) -> List[Dict[s
     return read_lines(orders_path(settings, name), limit=limit)
 
 
-def read_trades(settings, name: str, limit: Optional[int] = None) -> List[Dict[str, Any]]:
-    return read_lines(trades_path(settings, name), limit=limit)
+def read_trades(
+    settings, name: str, when: Any = None, limit: Optional[int] = None
+) -> List[Dict[str, Any]]:
+    """The closed round trips, oldest first. ``when`` narrows it to one trading day.
+
+    ``when`` mirrors the argument ``read_ticks`` takes, and for the same reader: the loss
+    limits are measured over ONE exchange day, and a tally that could see yesterday's
+    losses would call today over on them. The filtering happens here rather than at each
+    call site so that no two readers can disagree about what "today" means — and a row
+    with no ``day`` at all (hand-written, or written before days were recorded) is left
+    out of a filtered read rather than guessed at.
+
+    ``limit`` counts from the END, so a limited read is "the newest N of that day", which
+    is exactly what it means for a day's tick log too.
+    """
+    if when is None:
+        return read_lines(trades_path(settings, name), limit=limit)
+    day = trading_day(settings, when)
+    rows = [
+        row
+        for row in read_lines(trades_path(settings, name))
+        if str(row.get("day")) == day
+    ]
+    return rows if limit is None else rows[-int(limit):]
 
 
 # ---------------------------------------------------------------------------

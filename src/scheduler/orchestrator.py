@@ -10,6 +10,7 @@ One tick, in this order, and the order is not arbitrary:
   3  sync the dataset to now    the only provider call in the loop
   4  read the trailing window   from the DATASET, ending at the newest CLOSED bar
   5  is the stored bar current? the file must reach the bar that should have closed
+  5b has the day hit its loss limit?  ``src.strategy.limits`` — entries only, never exits
   6  already decided that bar?  the driver's idempotency key
   7  decide and act             ``LiveDriver.on_bar_closed`` → reconcile → engine → broker
   8  record it                  the ledger, the state file and the live store
@@ -28,6 +29,13 @@ identical from the dashboard, and those two want opposite responses.
 **No tick may kill the loop.** Anything unexpected is caught, recorded as a refusal and
 logged; the run sleeps to the next boundary and tries again. A bot that stops tiring itself
 out on one bad bar is worse than one that keeps asking, because the next bar is usually fine.
+
+**The day's loss limits belong to the loop, not to the machine.** ``MAX_LOSS_PERCENT`` and
+``MAX_CONSECUTIVE_LOSSES`` are measured over the exchange DAY and against the ACCOUNT, so
+they need the trade log and a broker — neither of which ``src/strategy`` may reach. The loop
+gathers the facts, ``src.strategy.limits`` decides, and the verdict is handed to the driver
+as a refusal to OPEN anything new. An open position keeps its stop, its take and its signal
+exit: this holds back new risk, it never holds a loser.
 
 What this module deliberately does NOT do: hold an executor or a driver between ticks. Both
 are built per tick from the settings and the stored state, so a change to the rules, the risk
@@ -50,12 +58,13 @@ from src.data import dataset
 from src.data import delta as delta_mod
 from src.data import live as live_data
 from src.data.dataset import load_dataset
-from src.execution import store
+from src.execution import accounts, store
 from src.execution.alpaca_broker import AlpacaBroker
 from src.execution.alpaca_executor import AlpacaExecutor
 from src.execution.config import execution_status
 from src.model.simple_model import RuleBasedSignalGenerator
 from src.scheduler import lease as lease_mod
+from src.strategy import limits
 from src.strategy.config import StrategyConfig
 from src.strategy.engine import StrategyEngine
 from src.strategy.live import LiveDriver, NotEnoughHistory
@@ -125,6 +134,55 @@ def _bump_day(settings, name: str, day: str, **fields) -> None:
         else:
             entry[key] = value
     store.upsert_day(settings, name, day, **entry)
+
+
+def _day_loss_halt(settings, strategy: str, env: str, at) -> Optional[str]:
+    """Whether the day's loss limits stop new entries, and why (``src.strategy.limits``).
+
+    Three facts, gathered HERE because this is the layer that can reach all of them: the
+    day's trades from the trade log, the account's equity from the broker, and the day
+    itself from the exchange's calendar. The day comes from ``store.trading_day`` and never
+    from the local date: a tally that reset at local midnight would hand a losing session a
+    fresh budget halfway through it.
+
+    Reads NOTHING when neither limit is configured — no broker call, no file read, no new
+    way for a run that does not use these settings to behave differently.
+
+    ``accounts.snapshot`` is asked only when ``MAX_LOSS_PERCENT`` is set, and it answers
+    with "could not be read" rather than raising; that answer is passed straight through so
+    the policy can fail closed on it.
+
+    Anything unexpected in gathering the facts is a FAILED CLOSED verdict rather than a
+    shrug: a limit that cannot be evaluated is not a limit that has been satisfied.
+    """
+    config = StrategyConfig.from_settings(settings)
+    if config.max_loss_percent is None and config.max_consecutive_losses is None:
+        return None
+
+    try:
+        day = store.trading_day(settings, at)
+        trades = store.read_trades(settings, strategy, when=day)
+        equity = last_equity = None
+        account_reason = ""
+        if config.max_loss_percent is not None:
+            account = accounts.snapshot(settings, env).as_dict()
+            equity = account.get("equity")
+            last_equity = account.get("last_equity")
+            account_reason = str(account.get("reason") or "")
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Could not evaluate the day's loss limits")
+        return (
+            f"the day's loss limits could not be evaluated ({exc}) — refusing new entries "
+            "rather than trading without them"
+        )
+
+    return limits.day_halt_reason(
+        config,
+        trades=trades,
+        equity=equity,
+        last_equity=last_equity,
+        account_reason=account_reason,
+    )
 
 
 def tick(
@@ -258,6 +316,12 @@ def tick(
             "the dataset is behind; refusing to decide on a stale bar",
         )
 
+    # -- 5b. the day's loss limits -----------------------------------------
+    # Before the driver is built, because the answer changes what it is allowed to open.
+    # A breach stops NEW entries for the rest of the exchange day and lifts by itself when
+    # the next one starts — a halt nobody has to remember to clear.
+    halt = _day_loss_halt(settings, strategy, env, at)
+
     # -- 5 & 6. decide and act ---------------------------------------------
     wanted = armed_strategy(settings)
     driver = driver or build_driver(settings, name=wanted, dry_run=dry_run)
@@ -265,6 +329,11 @@ def tick(
         # A caller handed us a driver for a different strategy. Better to say so than to
         # trade through it: the state file and the account would both be the wrong one.
         return finish("refused", f"the driver is for {driver.name!r}, not {wanted!r}")
+    # The verdict is the LOOP's, so it is applied to whichever driver the tick ended up
+    # with — including one injected by a test or a replay. A driver cannot disagree with
+    # the loop about whether today is halted, and the loop cannot be bypassed by passing it
+    # a driver that was built before the tally was taken.
+    driver.halt = halt
 
     try:
         result = driver.on_bar_closed(window)
@@ -310,6 +379,10 @@ def tick(
     position = driver.state.position
     return finish(
         "decided",
+        # The driver's own reason, when it has one: with the day's loss limit in force the
+        # tick decided, refused the entry, and this is where it says so. An empty reason is
+        # the ordinary case.
+        reason=result.get("reason") or "",
         logged=True,
         index_fields={"decided": 1, "orders": len(orders), "trades": len(legs)},
         orders=orders,
