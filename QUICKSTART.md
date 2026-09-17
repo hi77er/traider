@@ -190,7 +190,8 @@ starts or stops the other — see [Two processes](README.md#two-processes).
 ```
 
 Endpoints:
-- `GET /` — dashboard (left: summary, chart, Daily Delta, data table, backfill; right: the Live panel and collapsible settings forms)
+- `GET /` — dashboard (left: summary, chart, Backtest, Live; right: the collapsible
+  strategy/risk forms, Daily Delta and the data table)
 - `GET /log` — the trading log: the account's state, then a day of the loop's own ticks,
   submitted orders and closed trades (account state first, local context second)
 - `GET /api/v1/health` — health check

@@ -18,7 +18,7 @@ replay of it.
 | Data pipeline (OpenBB + yfinance, Parquet store, delta backfill) | done |
 | Features, rule model, risk layer, backtest engine + Gate | done |
 | Web portal (chart, config, backtest panel, report page) | done |
-| Tests | 869 passing |
+| Tests | 879 passing |
 | Execution config — Alpaca broker, per-strategy paper/live, fail-closed | done |
 | Trading on/off switch + the "no reconfiguration while trading is on" lock | done |
 | Live order execution — order building, retries, brackets, cancel/flatten | done |
@@ -247,8 +247,8 @@ The portal is the whole interface:
   Yahoo Finance: a preset screener, the whole US market, top gainers, highest
   volume, top losers and the small-cap gainers/volume lists. The two long tables
   are collapsible and start collapsed so the page opens as an overview
-- **Live panel** (right column, click the header to expand) - whether a loop is
-  running the active strategy, what it last did and when, whether anything open is
+- **Live panel** (left column, directly under Backtest; click the header to expand) - whether
+  a loop is running the active strategy, what it last did and when, whether anything open is
   actually **protected** by a resting exit, and whether the **exchange is open** —
   with the time it next changes. That last line is read from Alpaca's clock rather
   than inferred from the last tick, so it answers "do I need to come back, and

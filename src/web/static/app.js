@@ -37,6 +37,14 @@ const $ = (id) => document.getElementById(id);
 async function api(path, options) {
   const res = await fetch(path, options);
   if (!res.ok) {
+    // A dashboard process started before an endpoint existed still serves the CURRENT
+    // app.js from disk, so the page is new and its routes are old. "404: Not Found" reads
+    // like a typo in the URL; this says what actually happened — and it happens every time
+    // the dashboard is left running across a change.
+    if (res.status === 404) {
+      throw new Error(`${path} is missing (404) — the dashboard is running older code than "
+        + "this page, so restart it`);
+    }
     let detail = res.statusText;
     try {
       detail = (await res.json()).detail || detail;
@@ -1864,6 +1872,16 @@ function toggleCollapse(head) {
   if (chev) chev.textContent = body.hidden ? "+" : "−";
 }
 
+// The one-way half of it, for when a panel has something to show. A collapse is a courtesy
+// until it hides the thing you just asked for.
+function expandCard(card) {
+  if (!card) return;
+  const body = card.querySelector(".collapse-body");
+  const chev = card.querySelector(".card-toggle");
+  if (body) body.hidden = false;
+  if (chev) chev.textContent = "−";
+}
+
 /* ---------- Historical Delta panel ---------- */
 async function loadDelta() {
   const body = $("delta-body");
@@ -3660,6 +3678,9 @@ function openBacktestReport() {
 }
 
 async function runBacktest() {
+  // A result that lands inside a shut panel looks like nothing happened, so asking for a run
+  // is asking to see it.
+  expandCard($("backtest"));
   const msg = $("bt-msg");
   if (msg) msg.textContent = "Starting backtest…";
   try {

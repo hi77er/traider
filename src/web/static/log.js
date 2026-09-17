@@ -29,7 +29,15 @@
 
   async function api(path) {
     const res = await fetch(path);
-    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    if (!res.ok) {
+      // Same reason as the dashboard's wrapper: a process running older code answers 404 for
+      // an endpoint this page was built against, and "404 Not Found" reads like a typo.
+      if (res.status === 404) {
+        throw new Error(`${path} is missing (404) — the dashboard is running older code than "
+          + "this page, so restart it`);
+      }
+      throw new Error(`${res.status} ${res.statusText}`);
+    }
     return res.json();
   }
 

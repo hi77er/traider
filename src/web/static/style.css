@@ -1018,8 +1018,12 @@ button.primary.small:disabled, button.ghost.small:disabled {
 
 
 /* ---------- Backtest panel (below the chart) ---------- */
-#backtest .bt-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+#backtest .bt-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 #backtest .bt-head h2 { margin: 0; }
+/* The toggle sits first, then the title, then the actions pushed right — the same order
+   every other collapsible panel uses. ``space-between`` would have centred the title once
+   the toggle became a third child. */
+#backtest .bt-actions { margin-left: auto; }
 #backtest .bt-actions { display: flex; align-items: center; gap: 10px; margin-left: auto; }
 #bt-msg { margin: 0 0 14px; font-size: 13px; }
 #bt-gate { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 8px 12px; border-radius: 8px; margin: 0 0 14px; font-size: 13px; background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border); }

@@ -117,17 +117,23 @@
             </p>
           </div>
 
-          <!-- Backtest: run against the latest saved strategy/rules -->
-          <div id="backtest" class="card">
-            <div class="bt-head">
+          <!-- Backtest: run against the latest saved strategy/rules.
+               Collapsible like the other panels, and expanded by default: it is the action
+               area, and a run whose result lands inside a shut body would look like nothing
+               happened. Running it opens the panel for that reason (``runBacktest``). -->
+          <div id="backtest" class="card collapsible">
+            <div class="card-head bt-head" onclick="toggleCollapse(this)"
+                 title="Collapse / expand the backtest">
+              <span class="card-toggle">−</span>
               <h2>Backtest</h2>
-              <div class="bt-actions">
+              <div class="bt-actions" onclick="event.stopPropagation()">
                 <span id="bt-spinner" class="bt-spinner" title="Backtest running…" hidden></span>
                 <button id="bt-report" class="ghost small" onclick="openBacktestReport()" hidden
                         title="Open the full report in a new tab">📊 Open full report</button>
                 <button id="bt-run" class="primary small" onclick="runBacktest()">▶ Run backtest</button>
               </div>
             </div>
+            <div class="collapse-body" id="bt-panel">
             <p id="bt-msg" class="muted"></p>
             <div id="bt-datawarn" class="bt-warn" hidden></div>
             <div id="bt-norules" class="bt-warn" hidden>
@@ -160,6 +166,33 @@
               <h4>Equity curve</h4>
               <div id="bt-curve" class="bt-curve"></div>
             </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ── Live: what the loop is doing, and what the account is worth ──
+             Directly under the backtest it belongs to, and OUTSIDE ``#dashboard``: the panel
+             reports the loop, the accounts and the exchange, none of which need a stored
+             dataset, so it must not disappear with the chart when there is none. -->
+        <section class="card collapsible" id="live-card">
+          <div class="card-head" onclick="toggleLivePanel(event)" title="Collapse / expand the live view">
+            <button id="toggle-live" class="ghost small" onclick="toggleLivePanel(event)"
+                    title="Expand the live view">+</button>
+            <h2>Live</h2>
+            <div class="settings-actions" onclick="event.stopPropagation()">
+              <span id="live-chip" class="chip">…</span>
+              <button id="live-refresh" class="ghost small" onclick="loadLive(true)"
+                      title="Re-read the loop's records and the broker">↻</button>
+              <a class="btn-link" href="/log">Open trading log →</a>
+            </div>
+          </div>
+          <div class="collapse-body" id="live-body" hidden>
+            <p id="live-state" class="muted">Checking…</p>
+            <p id="live-protection" class="muted"></p>
+            <div id="live-detail"></div>
+            <p class="muted note">Read from the loop's own records and from Alpaca. Nothing
+              on this panel can place, change or cancel an order — the trading controls are
+              at the top of the page.</p>
           </div>
         </section>
       </section>
@@ -224,32 +257,6 @@
               backtest replays the same rules so the Gate describes the system that will actually trade.
               Stored with the strategy.</p>
             <div id="risk-groups"></div>
-          </div>
-        </section>
-
-        <!-- What the loop is doing right now, and whether what it holds is protected.
-             Every line here is read from the loop's own records or from the broker;
-             nothing here can change either. The state chip leads because "is a bot
-             running" is the first question, and a quiet market and a dead loop look
-             identical without it. -->
-        <section class="card collapsible" id="live-card">
-          <div class="card-head" onclick="toggleLivePanel(event)" title="Collapse / expand the live view">
-            <button id="toggle-live" class="ghost small" onclick="toggleLivePanel(event)"
-                    title="Expand the live view">+</button>
-            <h2>Live</h2>
-            <div class="settings-actions" onclick="event.stopPropagation()">
-              <span id="live-chip" class="chip">…</span>
-              <button id="live-refresh" class="ghost small" onclick="loadLive(true)"
-                      title="Re-read the loop's records and the broker">↻</button>
-            </div>
-          </div>
-          <div class="collapse-body" id="live-body" hidden>
-            <p id="live-state" class="muted">Checking…</p>
-            <p id="live-protection" class="muted"></p>
-            <div id="live-detail"></div>
-            <p class="muted note">Read from the loop's own records and from Alpaca. Nothing
-              on this panel can place, change or cancel an order — the trading controls are
-              at the top of the page. <a href="/log">Open the trading log →</a></p>
           </div>
         </section>
 
