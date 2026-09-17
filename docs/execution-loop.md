@@ -129,14 +129,24 @@ Consequences:
   change.** `/rules/select` and `/rules/delete` pass `unreadable_blocks=False`: they place
   no orders in any account, so "we could not look" is not the hazard there that it is for
   arming. A switch cannot be the reason an order lands somewhere unreadable; the remedy for
-  a dead key is elsewhere; **arming is refused anyway** while an account is blind, so
-  nothing is made safe by blocking the switch too; and a rejected key never fixes itself,
-  so a false positive never clears on retry.
-- **Arming and `/execution/env` keep the strict rule** and treat an unreadable account as a
-  refusal **with the reason**, because those two DO reach an account whose contents are
-  unknown. The honest cost of the split: if a position really is sitting behind a dead key,
-  a switch leaves it unmanaged — but it was already unmanaged the moment the key stopped
-  working, and the pill says `… unreadable` either way, so the condition stays on screen.
+  a dead key is elsewhere; and a rejected key never fixes itself, so a false positive never
+  clears on retry.
+- **Arming proves the account it would TRADE** (`trade_env`). `turn_on` passes the environment
+  in play, so a dead key on the OTHER account does not refuse it: arming does not reach that
+  account, so nothing is made safe by blocking, and the refusal could never clear by itself —
+  which is what a paper run with a broken live key used to be stuck behind. The account orders
+  would go to is still proven flat first, and its own credential re-check runs a moment later
+  with the reason. The other account stays on screen: the pill and the log both report
+  `… unreadable`, and its credential badge stays red.
+- **`/execution/env` keeps the strict rule for every account**, because the account being
+  switched TO is exactly the one whose contents are unknown at the moment of the switch, and
+  the switch is what would put orders there. The honest cost of the split: if a position really
+  is sitting behind a dead key, the run leaves it unmanaged — but it was already unmanaged the
+  moment the key stopped working.
+- **A refusal names the remedy that can work.** An unreadable account answers
+  `needs_flatten: false`, because the flatten button cannot fix a key — it would report
+  "already flat" or fail on the same rejection, while the real problem is one the operator
+  cannot see. Only a SEEN position asks for a flatten.
 ### When is an account flat? Three answers, and only three
 
 The gate fails closed, but not blindly. "Unreachable" and "empty" look identical from the
@@ -146,14 +156,15 @@ outside, so the distinction is made from the **configuration** rather than from 
 | --- | --- | --- |
 | No credentials for that environment | no order could have been placed there | **allow** — flat by construction |
 | Credentials configured, broker answers | what is actually held | allow if flat, refuse if not |
-| Credentials configured, broker unreachable | nothing | **refuse** for arming and `/execution/env`¹; **allow** for a strategy change or delete |
+| Credentials configured, broker unreachable | nothing | **refuse** for the account being armed or switched to¹; **allow** when only the OTHER account is blind and the action does not reach it |
 | Credentials half-configured (key, no secret) | nothing | **refuse**, with the reason |
 
-¹ A 401 says the key does not work, not that a position exists. Arming and the environment
-switch act on the account, so they refuse. Changing or deleting a strategy places no order,
-so a dead key must not freeze the picker — it cannot be the reason an order lands somewhere
-unreadable, and refusing would never clear on retry. A position that can be **seen** blocks
-every one of these actions, in either account.
+¹ A 401 says the key does not work, not that a position exists. Arming refuses when the account
+BEING ARMED cannot be read, because orders would go there; a blind key on the account it does not
+reach refuses nothing, and does not freeze the strategy picker either — it cannot be the reason
+an order lands somewhere unreadable, and it would never clear on retry. Switching the environment
+stays strict about every account, because the target is the one whose contents are unknown. A
+position that can be **seen** blocks every one of these actions, in either account.
 
 "Flat by construction" is a proof, not an assumption: it is what keeps a data-only install
 (the README's default) able to switch strategies without Alpaca keys at all. Everything

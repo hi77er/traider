@@ -582,25 +582,83 @@ def test_a_seen_position_outranks_a_blind_account(tmp_path, monkeypatch):
         "the position is the actionable finding, so it leads"
 
 
-def test_arming_is_still_refused_by_the_same_blind_account(tmp_path, monkeypatch):
-    """The asymmetry, in one place: identical settings that allow a strategy change must
-    not allow arming, because arming is what would put orders in the blind account."""
+def test_arming_has_to_prove_the_account_it_would_trade(tmp_path, monkeypatch):
+    """WHICH account arming must answer for — and which it must not be blocked by.
+
+    A blind LIVE key cannot be reached by arming PAPER: no order from that run goes there, the
+    remedy for a dead key is to repair or clear it, and a rejected key does not heal by itself
+    — so refusing over it is a false positive that never clears. The account that WOULD be
+    traded is a different matter entirely: orders go there, so it has to answer.
+    """
     _blind(monkeypatch, "live")
     settings = _s(tmp_path, execution_env="paper", **PAPER_KEYS, **LIVE_KEYS)
 
-    blocker = trading_service.flat_blocker(settings, action="Trading cannot be started")
-
-    assert blocker is not None
-    assert "unknown" in blocker and "live" in blocker
+    assert trading_service.flat_blocker(
+        settings, action="Trading cannot start", trade_env="paper"
+    ) is None, "arming paper does not reach the live account at all"
+    assert trading_service.flat_blocker(
+        settings, action="Trading cannot start"
+    ) is not None, "without naming the environment, every account must answer"
     assert trading_service.flat_blocker(
         settings, action="switch", unreadable_blocks=False
-    ) is None, "the switch is the one that has to keep working"
+    ) is None, "and the strategy switch keeps working, as before"
+
+    _blind(monkeypatch, "paper")
+    positions.forget()  # the read is cached for a few seconds; re-blinding is not a change
+    blocker = trading_service.flat_blocker(
+        settings, action="Trading cannot start", trade_env="paper"
+    )
+    assert blocker is not None
+    assert "the paper account could not be read" in blocker
 
 
-def test_the_strategy_routes_allow_a_401_but_arming_does_not(tmp_path, monkeypatch):
-    """End to end on the reported bug, with both strategy actions exercised."""
+def test_a_position_in_the_other_account_still_blocks_arming(tmp_path, account):
+    """The rule nothing may narrow: a position that can be SEEN, in EITHER account.
+
+    Unlike a dead key this is not a false positive. Arming would leave a real position in an
+    account the bot is then not watching, and its flatten button follows the strategy.
+    """
+    settings = _s(tmp_path, execution_env="paper", **PAPER_KEYS, **LIVE_KEYS)
+    account["live"] = [_position("TSLA", qty="2")]
+
+    blocker = trading_service.flat_blocker(
+        settings, action="Trading cannot start", trade_env="paper"
+    )
+
+    assert blocker is not None
+    assert "the live account holds 2 TSLA" in blocker
+
+
+def test_an_unreadable_account_does_not_ask_for_a_flatten(tmp_path, monkeypatch, state_file):
+    """The refusal has to name the remedy that could work. A flatten cannot fix a key.
+
+    Both branches used to answer ``needs_flatten: True``, which sends the operator to a button
+    that will report "already flat" or fail on the same dead key — while the actual problem is
+    one they cannot see.
+    """
+    _blind(monkeypatch, "paper")
+    settings = _s(tmp_path, execution_env="paper", **PAPER_KEYS, **LIVE_KEYS)
+
+    body = trading_service.turn_on(settings)
+
+    assert body["ok"] is False
+    assert body["needs_flatten"] is False, "nothing here can be flattened"
+    assert "could not be read" in body["message"]
+
+
+def test_a_401_on_the_live_key_does_not_stop_paper_trading(
+    tmp_path, monkeypatch, state_file, verified
+):
+    """End to end on the reported bug: the PAPER pair verified, and arming it failed with a
+    401 that was about the LIVE key.
+
+    Nothing about paper was wrong, and nothing about paper could have fixed it — the refusal
+    could not clear by itself. All three actions now agree about a 401 on an account the
+    action does not reach, and the account being traded is still proven flat first.
+    """
     _blind(monkeypatch, "live")
     settings = _s(tmp_path, execution_env="paper", **PAPER_KEYS, **LIVE_KEYS)
+    verified(settings, "paper")
     app.dependency_overrides[get_effective_settings_dep] = lambda: settings
     try:
         client = TestClient(app)
@@ -613,9 +671,8 @@ def test_the_strategy_routes_allow_a_401_but_arming_does_not(tmp_path, monkeypat
     for name, response in (("select", selected), ("delete", deleted)):
         assert response.status_code != 409, (name, response.json())
 
-    # Arming refuses the same account, but as a PAYLOAD rather than a status code —
-    # ``turn_on`` never raises, because the panel shows the reason inline instead of
-    # as an error toast. The refusal is the ``ok: false``.
-    assert armed.json()["ok"] is False, "arming must still refuse the account it cannot read"
-    assert armed.json()["needs_flatten"] is True
-    assert "live" in armed.json()["message"]
+    body = armed.json()
+    assert body["ok"] is True, body["message"]
+    assert body["state"]["on"] is True, "paper is armed"
+    assert body["state"]["env"] == "paper"
+    assert trading_service.is_trading_on(settings) is True

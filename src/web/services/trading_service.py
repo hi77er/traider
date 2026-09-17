@@ -72,7 +72,13 @@ __all__ = [
 
 
 # -- the exposure gate -----------------------------------------------------
-def flat_blocker(settings, *, action: str, unreadable_blocks: bool = True) -> Optional[str]:
+def flat_blocker(
+    settings,
+    *,
+    action: str,
+    unreadable_blocks: bool = True,
+    trade_env: Optional[str] = None,
+) -> Optional[str]:
     """Why this action must not proceed, or ``None`` when nothing is in the way.
 
     ``action`` leads the message because the same check guards four different things, and
@@ -82,6 +88,15 @@ def flat_blocker(settings, *, action: str, unreadable_blocks: bool = True) -> Op
     reach an account — an account that could not be read. The second is a decision not to
     trade blind; see ``src/execution/positions`` for why "no credentials" is provably flat
     while "unreachable" is not.
+
+    ``trade_env`` narrows the second rule to ONE account: the one the action would actually
+    trade (``turn_on`` passes the environment in play). A dead key on the OTHER account cannot
+    be reached by the action at all, so refusing over it protects nothing — and it is a false
+    positive that never clears, because a rejected key does not heal by itself. That state
+    stays on screen (the header pill and the log both report it), and the account about to be
+    traded is still proven flat first. ``None`` means every account must answer, which is what
+    switching the ENVIRONMENT keeps: the account being switched TO is exactly the one whose
+    contents are unknown.
 
     ``unreadable_blocks=False`` drops the second rule and keeps only the first. Two
     actions use it — changing the active strategy and deleting one — because **a 401 is a
@@ -104,8 +119,9 @@ def flat_blocker(settings, *, action: str, unreadable_blocks: bool = True) -> Op
 
     ⚠️ Neither flag narrows the HELD rule, and nothing may: a position that can be seen, in
     EITHER account, is exactly what the switch or delete would leave behind — the flatten
-    button follows the strategy. Arming (``turn_on``) and switching the environment keep the
-    strict rule, because both of those DO reach an account whose contents are unknown.
+    button follows the strategy. Switching the environment keeps the strict rule for the same
+    reason: the account being switched to is one whose contents are unknown at the moment of
+    the switch, and the switch is what would put orders there.
     """
     states = positions.snapshots(settings)
     held = positions.held(states)
@@ -121,7 +137,14 @@ def flat_blocker(settings, *, action: str, unreadable_blocks: bool = True) -> Op
         )
 
     if unreadable_blocks:
-        blind = positions.unknown(states)
+        # Kept to the account this action would trade, when the caller names it: the others
+        # are not made safe by refusing (their key is dead either way), and every screen that
+        # reads positions already reports a state it could not read.
+        blind = [
+            state
+            for state in positions.unknown(states)
+            if trade_env is None or state.env == trade_env
+        ]
         if blind:
             why = "; ".join(p.reason for p in blind)
             return (
@@ -166,18 +189,27 @@ def turn_on(settings, *, confirm_live: bool = False) -> dict:
     # This is the deliberate decision that makes "only the active strategy trades" true of
     # the POSITION as well as of new entries: the bot will not start on top of something
     # it did not open, because then nothing on screen would own it.
-    blocker = flat_blocker(settings, action="Trading cannot start")
+    # The environment in play is resolved FIRST, because it is what the gate below has to
+    # prove: the account arming would trade. ``execution_status`` reads settings only — no
+    # broker and no network — so hoisting it costs nothing.
+    status_info = execution_status(settings)
+
+    blocker = flat_blocker(
+        settings, action="Trading cannot start", trade_env=status_info["env"]
+    )
     if blocker:
+        states = positions.snapshots(settings)
         return {
             "ok": False,
-            "needs_flatten": True,
+            # Only a POSITION needs flattening. An account nobody could read is a different
+            # problem with a different remedy — repair or clear its keys — and pointing at a
+            # flatten button for something invisible is an instruction that cannot work.
+            "needs_flatten": bool(positions.held(states)),
             "message": blocker,
             "state": get_state(settings),
-            "execution": execution_status(settings),
-            "positions": [p.as_dict() for p in positions.snapshots(settings)],
+            "execution": status_info,
+            "positions": [p.as_dict() for p in states],
         }
-
-    status_info = execution_status(settings)
 
     # Fail closed: if an order could not actually be placed, "trading on" would be
     # a lie — the operator would believe the bot is live when it would refuse
