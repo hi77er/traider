@@ -88,34 +88,10 @@
             <div id="indicator-panes"></div>
           </div>
 
-          <!-- Trading: appears while trading is ON, right under the chart so the
-               armed state is impossible to miss, and above the backtest it freezes.
-               It ALSO appears when trading is OFF and something is still open, because
-               those are different questions and only the first is about the switch —
-               "off" is not "flat", and that is the case that needs a way out. -->
-          <div id="trading-panel" class="card trading-card" hidden>
-            <div class="card-head">
-              <h2>Trading switch</h2>
-              <div class="settings-actions">
-                <button id="trading-off-btn" class="ghost small danger" onclick="toggleTrading()">⏹ Turn trading off</button>
-                <button id="trading-flatten-btn" class="ghost small danger" onclick="stopAndFlatten()"
-                        title="Turn trading off and close whatever is open — the stop button does not close anything">✂ Stop trading &amp; flatten</button>
-              </div>
-            </div>
-            <p id="trading-msg" class="muted"></p>
-            <div id="trading-facts" class="rp-kv-grid"></div>
-            <p id="trading-live-note" class="muted note">
-              This strategy is armed. While trading is ON every configuration panel is locked —
-              turn trading off to change anything. <b>No orders are sent yet</b>: the Alpaca
-              executor is still to be implemented, so this panel shows the target the orders
-              <em>will</em> go to, and live activity will be reported here once it exists.
-            </p>
-            <p id="trading-off-note" class="muted note" hidden>
-              Trading is <b>off</b>, which does not close anything. Anything listed above is
-              still open at the broker: it keeps its price risk until a stop, a target, or
-              <b>Stop trading &amp; flatten</b> ends it.
-            </p>
-          </div>
+          <!-- Trading was TWO cards: a switch under the chart and an account panel under the
+               backtest, with the same facts printed in both. One card now, and the controls
+               live in its HEAD so they are reachable with the body collapsed — arming must
+               never be one collapse away from being unstoppable. -->
 
           <!-- Backtest: run against the latest saved strategy/rules.
                Collapsible like the other panels, and expanded by default: it is the action
@@ -170,10 +146,11 @@
           </div>
         </section>
 
-        <!-- ── Trading: what the loop is doing, and what the account is worth ──
-             Directly under the backtest it belongs to, and OUTSIDE ``#dashboard``: the panel
-             reports the loop, the account being traded and the exchange, none of which need a
-             stored dataset, so it must not disappear with the chart when there is none. -->
+        <!-- ── Trading: the switch, what the loop is doing, and what the account is worth ──
+             ONE panel for everything about trading, directly under the backtest it belongs to
+             and OUTSIDE ``#dashboard``: it reports the switch, the loop, the account being
+             traded and the exchange, none of which need a stored dataset, so it must not
+             disappear with the chart when there is none. -->
         <section class="card collapsible" id="live-card">
           <div class="card-head" onclick="toggleLivePanel(event)" title="Collapse / expand the trading view">
             <button id="toggle-live" class="ghost small" onclick="toggleLivePanel(event)"
@@ -181,22 +158,38 @@
             <h2>Trading</h2>
             <div class="settings-actions" onclick="event.stopPropagation()">
               <span id="live-chip" class="chip">…</span>
+              <button id="trading-off-btn" class="ghost small danger" onclick="toggleTrading()" hidden>⏹ Turn trading off</button>
+              <button id="trading-flatten-btn" class="ghost small danger" onclick="stopAndFlatten()" hidden
+                      title="Turn trading off and close whatever is open — the stop button does not close anything">✂ Stop trading &amp; flatten</button>
               <button id="live-refresh" class="ghost small" onclick="loadLive(true)"
                       title="Re-read the loop's records and the broker">↻</button>
               <a class="btn-link" href="/log">Open trading log →</a>
             </div>
           </div>
           <div class="collapse-body" id="live-body" hidden>
+            <p id="trading-msg" class="muted"></p>
             <p id="live-state" class="muted">Checking…</p>
             <p id="live-protection" class="muted"></p>
             <!-- The numbers as boxes, in the same style as the backtest KPIs and the report
                  page: a dashboard is read by glancing at boxes. Warnings stay as sentences
                  because a reason is not a measurement. -->
             <div id="live-metrics" class="live-metrics"></div>
+            <div id="trading-facts" class="rp-kv-grid"></div>
             <p id="live-warnings" class="muted" hidden></p>
-            <p class="muted note">Read from the loop's own records and from Alpaca. Nothing
-              on this panel can place, change or cancel an order — the switch is at the top of
-              the page.</p>
+            <p id="trading-live-note" class="muted note">
+              This strategy is armed. While trading is ON every configuration panel is locked —
+              turn trading off to change anything. The <b>orders</b> come from the loop process
+              and not from this page: with nothing running it, the switch is armed and nothing
+              trades.
+            </p>
+            <p id="trading-off-note" class="muted note" hidden>
+              Trading is <b>off</b>, which does not close anything. Anything listed above is
+              still open at the broker: it keeps its price risk until a stop, a target, or
+              <b>Stop trading &amp; flatten</b> ends it.
+            </p>
+            <p class="muted note">Read from the loop's own records and from Alpaca. The buttons
+              above arm, stop and flatten; nothing on this panel can place, change or cancel an
+              order on its own.</p>
           </div>
         </section>
       </section>

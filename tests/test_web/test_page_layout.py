@@ -79,22 +79,33 @@ def test_the_live_panel_says_when_arming_has_nothing_to_run_it():
     )
 
 
+def test_the_head_controls_obey_the_hidden_attribute():
+    """``display`` from a class beats the browser's ``[hidden] { display: none }``, so both
+    controls the JS hides with that attribute were visible whether or not they applied.
+
+    The same trap is already re-asserted for ``#rp-delete`` and ``#bt-report``; these two were
+    missed because the card holding them was hidden *with* them. Found by opening the page.
+    """
+    assert "#trading-off-btn[hidden]" in CSS
+    assert "#trading-flatten-btn[hidden]" in CSS
+
+
 # ---------------------------------------------------------------------------
 # the Trading panel moved
 # ---------------------------------------------------------------------------
 def test_the_panels_are_named_uniquely_and_the_account_panel_is_trading():
     """The panel that reports the account and the loop is titled "Trading" — and only one is.
 
-    Two headings with the same word on one screen is a panel nobody can refer to, and the
-    switch at the top was already called "Trading", so it is the switch that takes the longer
-    name. (The element ids stay ``live-*``: they are internal, and renaming them would churn
-    the CSS and the JS for nothing anyone can see.)
+    There is no second card any more: the switch and the account share this one, so the name
+    has to be unique for the opposite reason it used to be. (The element ids stay ``live-*``:
+    they are internal, and renaming them would churn the CSS and the JS for nothing anyone can
+    see.)
     """
     headings = re.findall(r"<h2>([^<]*)</h2>", HTML)
 
     assert headings.count("Trading") == 1, f"exactly one panel is 'Trading': {headings}"
     assert "Live" not in headings, "the account panel is not called Live any more"
-    assert "Trading switch" in headings, "and the switch is nameable apart from it"
+    assert "Trading switch" not in headings, "and the switch is not a panel of its own"
 
 
 def test_both_panels_report_the_account_being_traded_and_not_the_others_faults():

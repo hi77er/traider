@@ -1387,17 +1387,17 @@ function renderTradingControls(d) {
 }
 
 function renderTradingPanel(d) {
-  const panel = $("trading-panel");
-  if (!panel) return;
   const tr = d.trading || {};
   const exec = d.execution || {};
   const open = Number(d.open_count || 0);
-  // Visible while ARMED **or** while something is open. Those are different questions and
-  // only the first one is about the switch: a position held with trading OFF is exactly
-  // the case that needs a flatten button and a sentence saying so, and hiding the panel
-  // there would be the screen quietly agreeing with a wrong assumption.
-  panel.hidden = !tr.on && open === 0;
-
+  // The card is ALWAYS on screen now — it is the one place trading is described, and it replaced
+  // a separate switch card that duplicated half of it — so nothing here hides it. What it does
+  // hide is the controls that do not apply yet, and those sit in the card HEAD rather than the
+  // body, so a collapsed panel can still be stopped.
+  //
+  // The flatten button is not only for the armed case: a position held with trading OFF is
+  // exactly the state that needs it, and that is why it follows what is OPEN rather than what
+  // is armed.
   const offBtn = $("trading-off-btn");
   const flatBtn = $("trading-flatten-btn");
   if (offBtn) offBtn.hidden = !tr.on;

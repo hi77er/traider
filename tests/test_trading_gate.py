@@ -580,10 +580,19 @@ def test_a_retired_key_is_dropped_not_rejected(tmp_path):
 def test_the_trading_switch_and_its_lock_are_wired_into_the_dashboard():
     html = (ROOT / "src" / "web" / "templates" / "index.html").read_text(encoding="utf-8")
     assert 'id="trading-toggle"' in html
-    # The armed panel sits under the chart, i.e. above the backtest card it freezes.
-    panel = html.index('id="trading-panel"')
-    assert html.index('id="backtest"') > panel
-    assert 'id="trading-off-btn"' in html
+    # ONE panel for everything about trading. It used to be two — a switch card under the chart
+    # and the account panel under the backtest — and the same facts were printed in both, which
+    # is how a note claiming the Alpaca executor was unimplemented survived in one of them.
+    assert 'id="trading-panel"' not in html, "the separate switch card is gone"
+    live = html.index('id="live-card"')
+    body = html.index('id="live-body"')
+    for control in ("trading-off-btn", "trading-flatten-btn"):
+        assert html.index(f'id="{control}"') > live, f"{control} belongs to the Trading panel"
+        assert html.index(f'id="{control}"') < body, (
+            f"{control} goes in the HEAD: a collapsed panel must still be stoppable"
+        )
+    for readout in ("trading-msg", "trading-facts"):
+        assert html.index(f'id="{readout}"') > body, f"{readout} is panel body content"
     # The Execution panel is gone: the header carries the state, and the armed
     # panel under the chart carries the resolved target.
     for gone in ("execution-card", "exec-state-line", "exec-msg", "exec-facts", "exec-lock-note"):

@@ -105,7 +105,14 @@ header h1 { font-size: 20px; margin: 0; }
 
 /* Trading panel under the chart, shown only while trading is ON. */
 .trading-card { border-color: rgba(38, 166, 154, 0.5); box-shadow: inset 3px 0 0 var(--green); }
-body.trading-on #trading-panel { border-color: rgba(38, 166, 154, 0.5); }
+/* The armed state marks the Trading panel itself: it is the card that describes what the bot
+   is doing, and the green edge is visible with the body collapsed. */
+body.trading-on #live-card { border-color: rgba(38, 166, 154, 0.5); box-shadow: inset 3px 0 0 var(--green); }
+/* Same trap as `#rp-delete` and `#bt-report`: the global `button { display: inline-flex }`
+   beats the UA `[hidden] { display: none }`, so the attribute alone would not hide these two —
+   they appeared whether or not they applied. That was invisible while the card holding them was
+   hidden with them, and became visible the moment the card became permanent. */
+#trading-off-btn[hidden], #trading-flatten-btn[hidden] { display: none; }
 button.primary.small.danger, button.danger { color: #ff8a80; border-color: rgba(239, 83, 80, 0.6); }
 
 main { max-width: 1500px; margin: 24px auto; padding: 0 16px; }
