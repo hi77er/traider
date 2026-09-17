@@ -1,6 +1,6 @@
 """Is the loop alive? What did it last do? — the dashboard's read of it.
 
-Three screens need these answers (the header pill, the Live panel and the trading log), and
+Three screens need these answers (the header pill, the Trading panel and the trading log), and
 they must not get them from the loop: the dashboard has to survive a broken one. Everything
 here is therefore read from files the loop writes — the lease, and ``latest.json`` — plus the
 one rule that is genuinely shared, ``armed_strategy``.

@@ -1425,8 +1425,16 @@ function renderTradingPanel(d) {
       execRow("Endpoint", `<code>${escapeHtml(exec.base_url || "—")}</code>`)
     );
   }
-  // What is held, per account — the reason the panel is on screen at all when OFF.
+  // What is held, per account. The account being TRADED leads, and it is the only one whose
+  // FAULTS are reported here: a 401 on an account this run never touches is noise that reads
+  // like a fault, while its verdict is already on the credential badge, in the Account popup
+  // and on the log page (which shows both accounts side by side).
+  //
+  // Its POSITIONS are still listed — something open in the other account is real and
+  // actionable whatever mode we are in, and it is what stops the bot being armed on top of it.
+  const traded = String((exec && exec.env) || tr.env || "").toLowerCase();
   for (const account of d.positions || []) {
+    const env = String(account.env || "").toLowerCase();
     for (const p of account.positions || []) {
       const qty = p.qty === undefined || p.qty === null ? "" : `${p.qty} `;
       rows.push(execRow(
@@ -1434,7 +1442,7 @@ function renderTradingPanel(d) {
         `${escapeHtml(p.symbol || "—")} · ${escapeHtml(qty + (p.side || ""))} · entry ${escapeHtml(p.avg_entry_price || "—")}`
       ));
     }
-    if (account.known === false) {
+    if (account.known === false && (!traded || env === traded)) {
       rows.push(execRow(String(account.env || "").toUpperCase(), `<b>could not be read</b> — ${escapeHtml(account.reason || "")}`));
     }
   }
@@ -2360,12 +2368,11 @@ function renderLiveDetail(loop, orders) {
   tiles.push(liveTile("Trades closed", String(((loop.last_tick && loop.last_tick.trades) || []).length),
     "", "round trips the loop has finished on this strategy"));
 
-  // The other environment is a warning when it cannot be read and context otherwise; its
-  // numbers live on the log page, which shows both side by side.
-  for (const row of accounts.accounts || []) {
-    if (row.env === accounts.env || row.known) continue;
-    warnings.push(`<span class="warn">${escapeHtml(row.reason || `the ${row.env} account could not be read`)}</span>`);
-  }
+  // The OTHER environment is deliberately not reported here. This panel is about the account
+  // being TRADED (``accounts.env``), and a 401 on the one this run never touches is noise that
+  // reads like a fault: it is on the credential badge, in the Account popup, and on the log
+  // page, which shows both accounts side by side. A position in the other account is not lost
+  // either — it refuses an arming, with the flatten button, in the switch panel above.
 
   setIfChanged(host, tiles.join(""));
   const warnHost = $("live-warnings");
@@ -2383,7 +2390,7 @@ function toggleLivePanel(ev) {
   body.hidden = !body.hidden;
   if (btn) {
     btn.textContent = body.hidden ? "+" : "−";
-    btn.title = body.hidden ? "Expand the live view" : "Collapse the live view";
+    btn.title = body.hidden ? "Expand the trading view" : "Collapse the trading view";
   }
   // Opening it is what asks the broker: the panel is the only thing here that wants
   // Alpaca's order list, so it pays for it rather than the page load doing so.

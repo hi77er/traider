@@ -1385,7 +1385,7 @@ td.mkt-sym { font-weight: 600; }
 .mkt-filters select:focus { outline: none; border-color: var(--accent); }
 
 
-/* ---------- Live panel: what the loop is doing ----------
+/* ---------- Trading panel: what the loop is doing ----------
 
    The state is carried by WORDS in the chip and by the colour of the text beside it, not
    by restyling the header pills: an `.exec-pill.<state>` rule anywhere is what a test

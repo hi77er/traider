@@ -95,7 +95,7 @@
                "off" is not "flat", and that is the case that needs a way out. -->
           <div id="trading-panel" class="card trading-card" hidden>
             <div class="card-head">
-              <h2>Trading</h2>
+              <h2>Trading switch</h2>
               <div class="settings-actions">
                 <button id="trading-off-btn" class="ghost small danger" onclick="toggleTrading()">⏹ Turn trading off</button>
                 <button id="trading-flatten-btn" class="ghost small danger" onclick="stopAndFlatten()"
@@ -170,15 +170,15 @@
           </div>
         </section>
 
-        <!-- ── Live: what the loop is doing, and what the account is worth ──
+        <!-- ── Trading: what the loop is doing, and what the account is worth ──
              Directly under the backtest it belongs to, and OUTSIDE ``#dashboard``: the panel
-             reports the loop, the accounts and the exchange, none of which need a stored
-             dataset, so it must not disappear with the chart when there is none. -->
+             reports the loop, the account being traded and the exchange, none of which need a
+             stored dataset, so it must not disappear with the chart when there is none. -->
         <section class="card collapsible" id="live-card">
-          <div class="card-head" onclick="toggleLivePanel(event)" title="Collapse / expand the live view">
+          <div class="card-head" onclick="toggleLivePanel(event)" title="Collapse / expand the trading view">
             <button id="toggle-live" class="ghost small" onclick="toggleLivePanel(event)"
-                    title="Expand the live view">+</button>
-            <h2>Live</h2>
+                    title="Expand the trading view">+</button>
+            <h2>Trading</h2>
             <div class="settings-actions" onclick="event.stopPropagation()">
               <span id="live-chip" class="chip">…</span>
               <button id="live-refresh" class="ghost small" onclick="loadLive(true)"
@@ -195,8 +195,8 @@
             <div id="live-metrics" class="live-metrics"></div>
             <p id="live-warnings" class="muted" hidden></p>
             <p class="muted note">Read from the loop's own records and from Alpaca. Nothing
-              on this panel can place, change or cancel an order — the trading controls are
-              at the top of the page.</p>
+              on this panel can place, change or cancel an order — the switch is at the top of
+              the page.</p>
           </div>
         </section>
       </section>

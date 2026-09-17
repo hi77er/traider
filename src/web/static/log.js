@@ -125,7 +125,7 @@
   function renderHeader() {
     const loop = state.loop || {};
     const chip = $("lg-state");
-    // Same four states the dashboard's Live panel shows, from the same endpoint — a quiet
+    // Same four states the dashboard's Trading panel shows, from the same endpoint — a quiet
     // market and a dead loop look identical otherwise.
     const labels = {
       running: ["running", "good"],

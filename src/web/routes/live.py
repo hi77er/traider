@@ -1,6 +1,6 @@
 """What the loop is doing, what the account holds, and which orders are working.
 
-Three read-only endpoints for the header pill, the Live panel and the trading log page:
+Three read-only endpoints for the header pill, the Trading panel and the trading log page:
 
 ``GET /api/v1/loop``       -> the loop's own state: holder, next wake, last tick, last refusal
 ``GET /api/v1/clock``      -> whether the exchange is open, and when it next changes

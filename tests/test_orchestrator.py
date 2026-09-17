@@ -667,7 +667,7 @@ def test_a_healthy_day_is_not_halted(tmp_path, armed, monkeypatch):
 def test_a_losing_streak_halts_the_day_and_the_refusal_is_logged(tmp_path, armed):
     """The refusal has to be visible everywhere the day is read.
 
-    The tick record carries it (the Live panel shows the last tick's reason), the intent is
+    The tick record carries it (the Trading panel shows the last tick's reason), the intent is
     a SKIP (the engine booked the veto rather than creating a position), and the trade log
     holds the skipped leg — which is also why the tally has to ignore skipped rows.
     """

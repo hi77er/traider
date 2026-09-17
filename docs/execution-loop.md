@@ -454,7 +454,7 @@ strategy and a bar with no local log, which is the one thing a deleted log canno
 | 6.3 | `GET /api/v1/loop`: lease holder, last-tick age, next wake, last refusal | ✅ |
 | 6.4 | The "N open" header pill, from the broker | ✅ |
 | 6.5 | The trading log screen: account state first, local context second, tolerant of a deleted log | ✅ (`/log`) |
-| 6.6 | The Live panel: last tick, position with its exits, environment, the session's ticks | ✅ |
+| 6.6 | The Trading panel: last tick, position with its exits, environment, the session's ticks | ✅ |
 | 6.7 | The loud case surfaced: a position held with NO resting exits | ✅ |
 | 6.8 | Write `orders.jsonl` / `trades.jsonl` from the loop — built in Phase 3, called by nothing yet | ✅ |
 | 6.9 | `GET /api/v1/trades`, `GET /api/v1/log?day=` — the local half the log page reads | ✅ |
@@ -480,7 +480,7 @@ the real warning gets ignored), `unprotected` (a level was set and nothing is re
 the silent one), `protected`. Reading the configuration instead would let a setting edited
 since the position opened make an unprotected position look protected.
 
-**The dashboard never polls the broker.** The Live panel's state is local files and refreshes
+**The dashboard never polls the broker.** The Trading panel's state is local files and refreshes
 with the rest of the page; the orders view asks Alpaca only when the panel is opened or
 refreshed by hand. This app has never polled the broker, and a dashboard that generated
 traffic merely by being open would be the first thing to do so.

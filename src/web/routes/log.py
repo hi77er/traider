@@ -4,7 +4,7 @@
 
 The data comes from the ``/api/v1`` reads that already exist (``loop``, ``positions``,
 ``orders``, ``trades``, ``log``) rather than from a page-specific endpoint, because every one
-of them is useful on its own and the dashboard's Live panel reads several already. This
+of them is useful on its own and the dashboard's Trading panel reads several already. This
 module exists only to serve the HTML.
 
 **Why it is its own page rather than another dashboard panel.** The log is a scrollback:

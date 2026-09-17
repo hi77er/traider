@@ -250,7 +250,7 @@ The portal is the whole interface:
   Yahoo Finance: a preset screener, the whole US market, top gainers, highest
   volume, top losers and the small-cap gainers/volume lists. The two long tables
   are collapsible and start collapsed so the page opens as an overview
-- **Live panel** (left column, directly under Backtest; click the header to expand) - whether
+- **Trading panel** (left column, directly under Backtest; click the header to expand) - whether
   a loop is running the active strategy, what it last did and when, whether anything open is
   actually **protected** by a resting exit, and whether the **exchange is open** —
   with the time it next changes. That last line is read from Alpaca's clock rather
@@ -270,7 +270,7 @@ The portal is the whole interface:
   more), and the broker's payload is never proxied to the browser.
 
 **The dashboard does not reload itself, and what it does refresh is deliberate.**
-The Live panel polls only while it is expanded *and* the tab is in the foreground:
+The Trading panel polls only while it is expanded *and* the tab is in the foreground:
 the loop's own records every 5 s (local files) and the account plus the exchange
 clock every 60 s (broker calls). Opening it, or coming back to the tab, refreshes at
 once. A poll that changes nothing rewrites nothing, so the panel does not churn

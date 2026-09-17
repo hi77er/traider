@@ -5,7 +5,7 @@ for. They are worth having because the two failures they catch are silent: a pan
 into the wrong column is a panel nobody finds, and a duplicated id (from moving one) leaves two
 elements answering to the same name while every test that reads the file keeps passing.
 
-The move that prompted this: the Live panel left the right-hand column for a place under the
+The move that prompted this: the Trading panel left the right-hand column for a place under the
 Backtest panel it belongs to.
 """
 
@@ -80,14 +80,45 @@ def test_the_live_panel_says_when_arming_has_nothing_to_run_it():
 
 
 # ---------------------------------------------------------------------------
-# the Live panel moved
+# the Trading panel moved
 # ---------------------------------------------------------------------------
-def test_the_live_panel_is_in_the_left_column_under_the_backtest():
+def test_the_panels_are_named_uniquely_and_the_account_panel_is_trading():
+    """The panel that reports the account and the loop is titled "Trading" — and only one is.
+
+    Two headings with the same word on one screen is a panel nobody can refer to, and the
+    switch at the top was already called "Trading", so it is the switch that takes the longer
+    name. (The element ids stay ``live-*``: they are internal, and renaming them would churn
+    the CSS and the JS for nothing anyone can see.)
+    """
+    headings = re.findall(r"<h2>([^<]*)</h2>", HTML)
+
+    assert headings.count("Trading") == 1, f"exactly one panel is 'Trading': {headings}"
+    assert "Live" not in headings, "the account panel is not called Live any more"
+    assert "Trading switch" in headings, "and the switch is nameable apart from it"
+
+
+def test_both_panels_report_the_account_being_traded_and_not_the_others_faults():
+    """A 401 on the account this run never touches must not read like a fault in this run.
+
+    Both panels answer about the account the trading MODE points at. The switch panel still
+    lists the other account's POSITIONS — something open over there is real whatever mode we
+    are in, and it is what stops the bot being armed on top of it — but not its unreadability.
+    That verdict is not hidden: it stays on the credential badge, in the Account popup, and on
+    the log page, which shows both accounts side by side.
+    """
+    assert "const traded = String((exec && exec.env)" in APP_JS
+    assert "account.known === false && (!traded || env === traded)" in APP_JS
+    assert "row.env === accounts.env || row.known" not in APP_JS, (
+        "the account panel must not warn about the other environment any more"
+    )
+
+
+def test_the_trading_panel_is_in_the_left_column_under_the_backtest():
     assert _column('id="live-card"') == "left"
 
     backtest = HTML.index('id="backtest"')
     live = HTML.index('id="live-card"')
-    assert backtest < live, "the Live panel sits under the Backtest panel"
+    assert backtest < live, "the Trading panel sits under the Backtest panel"
 
 
 def test_the_live_panel_is_not_hidden_with_the_chart():

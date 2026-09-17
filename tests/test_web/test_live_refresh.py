@@ -42,7 +42,7 @@ def _function(source: str, name: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# the Live panel
+# the Trading panel
 # ---------------------------------------------------------------------------
 def test_the_live_poll_is_gated_on_the_panel_being_open_and_the_tab_being_visible():
     body = _function(APP_JS, "livePanelVisible")
@@ -151,7 +151,7 @@ def test_the_log_page_polls_only_while_today_is_showing():
 
 
 def test_the_live_poll_is_decided_before_the_timer_is_created():
-    """Same property on the Live panel: the visibility check is what prevents the poll, not
+    """Same property on the Trading panel: the visibility check is what prevents the poll, not
     a callback that happens to return early."""
     body = _function(APP_JS, "scheduleLivePoll")
 
@@ -233,13 +233,33 @@ def test_a_zero_balance_and_an_unreadable_account_render_differently():
         "the unknown case has to be decided before any number is formatted"
 
 
-def test_the_panel_leads_with_the_account_being_traded():
-    """The other account appears only when it cannot be read: that is a warning, while a
-    healthy one's numbers are context the log page already shows side by side."""
+def test_the_panel_reports_only_the_account_being_traded():
+    """The panel follows the trading MODE: the account orders would go to, and no other.
+
+    It used to add a warning when the OTHER environment could not be read. Trading on paper
+    then showed a 401 for the live account — a fault of an account the run never touches,
+    which reads like a fault in this run. That verdict is not hidden: it is on the credential
+    badge, in the Account popup, and on the log page, which shows both accounts side by side.
+    """
     body = _function(APP_JS, "renderLiveDetail")
 
     assert "accounts.env" in body, "the row picked out is the environment being traded"
-    assert "row.env === accounts.env || row.known" in body
+    assert "row.env === accounts.env || row.known" not in body, (
+        "no warning about the other environment"
+    )
+    assert "for (const row of accounts.accounts" not in body, (
+        "and the list is not walked for warnings at all"
+    )
+
+
+def test_the_switch_panel_reports_faults_only_for_the_account_being_traded():
+    """Same rule in the panel that holds the switch: the other account's POSITIONS are listed
+    (something open there is real whatever mode we are in, and it is what stops arming on top
+    of it) but not its unreadability."""
+    body = _function(APP_JS, "renderTradingPanel")
+
+    assert "account.known === false && (!traded || env === traded)" in body
+    assert "for (const p of account.positions || [])" in body, "its positions are still listed"
 
 
 # ---------------------------------------------------------------------------
