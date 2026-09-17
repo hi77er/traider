@@ -1633,51 +1633,107 @@ function addPriceOverlays(chart) {
    curve must show the SAME PERIOD at the same zoom: moving or zooming any of them
    moves all the others with it.
 
-   They are synced by LOGICAL range (bar indices), with a per-chart OFFSET, not by
-   time range. Two things a time range cannot do:
+   They are synced by LOGICAL range (bar indices), not by time range. Two things a
+   time range cannot do:
 
    * it cannot express the empty space before the first bar or after the last one.
      The library clamps such a request to the data, so dragging a pane past the end
      of its series left the price chart standing still ("the main chart stays
      unchanged"), and a price chart scrolled into whitespace clipped every pane;
-   * an indicator's series is the price series minus a PREFIX (RSI drops its
-     warm-up rows), so its indices are the price chart's shifted by a constant.
-     One number describes that mapping exactly, and shifting a logical range by it
-     needs no date arithmetic and is never clamped.
+   * it cannot express a range that no chart's data covers at all.
 
-   The offset is DERIVED, never assumed: the first and last bar of the series are
-   located in the price chart's bars, and a series that does not line up on both
-   ends is left out of the sync rather than moved to the wrong bars. */
-const _rangeOffsets = new WeakMap(); // chart -> its bar 0 in the price chart's indices
+   Which BARS of the price chart each other chart is drawn on is DERIVED from the
+   two time axes, never assumed: one entry per bar of the series, holding the price
+   chart's index of that bar. A single offset is NOT enough, because a series is not
+   always a shifted copy of the price series:
+
+   * an indicator pane IS the price series minus a PREFIX (RSI drops its warm-up
+     rows), which one offset describes exactly;
+   * the equity curve the panel draws is a SUBSAMPLE of the run — the backtest
+     service thins it to 600 points — and for most run lengths its final point is
+     then appended on its own, because the last value must stay exact. Its bars are
+     therefore 2, 2, 2, … price bars apart and finally 1: no constant offset, and
+     not even a constant step. Requiring one is why the curve never joined the
+     other charts.
+
+   Listing every bar's position describes any monotonic series, including that one.
+   A series is placed only when every one of its bars is found, in order, in the
+   price chart's bars; otherwise it is left out of the sync rather than moved to
+   the wrong bars. */
+const _rangeMaps = new WeakMap(); // chart -> its bars' indices in the price chart
 const _rangeTimes = new WeakMap(); // chart -> its bar times (until it is registered)
 const _pushedRanges = new WeakMap(); // chart -> the range we just asked it for
+// The price chart's own bars ARE the reference: its index is the index, whatever
+// its bars turn out to be. A constant, so nothing can go stale — it is registered
+// while the chart is still empty, before its bars are set.
+const IDENTITY_BARS = { identity: true };
 
 function _priceBarTimes() {
   return state.chartTimes || [];
 }
 
-// Where this series' bar 0 sits in the price chart's bars, or null when the two
-// share no bar we can locate (then that chart is not synced at all).
-function _rangeOffset(times) {
+// Where each bar of this series sits in the price chart's bars, or null when the
+// series cannot be placed on them (then that chart is not synced at all).
+function _barPlacement(times) {
   const main = _priceBarTimes();
-  if (!times || !times.length || !main.length) return null;
-  const first = main.indexOf(times[0]);
-  if (first < 0) return null;
-  const last = main.indexOf(times[times.length - 1]);
-  if (last !== first + times.length - 1) return null; // not a prefix-aligned subset
-  return first;
+  if (!times || times.length < 2 || main.length < 2) return null;
+  const at = new Map();
+  main.forEach((t, i) => { if (!at.has(t)) at.set(t, i); });
+  const map = [];
+  for (let i = 0; i < times.length; i++) {
+    const index = at.get(times[i]);
+    if (index === undefined) return null; // a bar the price chart does not have
+    if (map.length && index <= map[map.length - 1]) return null; // out of order
+    map.push(index);
+  }
+  return map;
+}
+
+// An index among the price chart's bars read as an index among this chart's own
+// bars — and back again below. Between two neighbouring bars the two axes are
+// linear, so a range is converted by locating the bars it falls between; beyond
+// either end the nearest segment is extended, which is what keeps the empty space
+// the user panned into part of the view.
+function _ownIndexOf(map, priceIndex) {
+  if (map.identity) return priceIndex;
+  const n = map.length;
+  if (n === 1) return 0;
+  if (priceIndex <= map[0]) return (priceIndex - map[0]) / ((map[1] - map[0]) || 1);
+  if (priceIndex >= map[n - 1]) {
+    return (n - 1) + (priceIndex - map[n - 1]) / ((map[n - 1] - map[n - 2]) || 1);
+  }
+  let lo = 0;
+  let hi = n - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (map[mid] <= priceIndex) lo = mid; else hi = mid;
+  }
+  return lo + (priceIndex - map[lo]) / ((map[hi] - map[lo]) || 1);
+}
+
+function _priceIndexOf(map, ownIndex) {
+  if (map.identity) return ownIndex;
+  const n = map.length;
+  if (n === 1) return map[0];
+  if (ownIndex <= 0) return map[0] + ownIndex * ((map[1] - map[0]) || 1);
+  if (ownIndex >= n - 1) {
+    return map[n - 1] + (ownIndex - (n - 1)) * ((map[n - 1] - map[n - 2]) || 1);
+  }
+  const lo = Math.floor(ownIndex);
+  return map[lo] + (ownIndex - lo) * (map[lo + 1] - map[lo]);
 }
 
 // Join the sync: remember the mapping, then adopt the price chart's current view.
 function registerRangeSync(chart, times) {
   if (!chart || !state.chart) return;
   const isPrice = chart === state.chart;
-  const offset = isPrice ? 0 : _rangeOffset(times || _rangeTimes.get(chart));
-  if (offset === null) return;
-  _rangeOffsets.set(chart, offset);
+  // The price chart IS the reference: its own bar i is price bar i.
+  const map = isPrice ? IDENTITY_BARS : _barPlacement(times || _rangeTimes.get(chart));
+  if (!map) return;
+  _rangeMaps.set(chart, map);
   chart.timeScale().subscribeVisibleLogicalRangeChange((r) => _onRangeChanged(chart, r));
   const adopt = () => {
-    if (chart !== state.chart && !_rangeOffsets.has(chart)) return; // disposed
+    if (chart !== state.chart && !_rangeMaps.has(chart)) return; // disposed
     const main = state.chart && state.chart.timeScale().getVisibleLogicalRange();
     if (main) _mirrorRange(state.chart, main);
   };
@@ -1690,16 +1746,18 @@ function registerRangeSync(chart, times) {
 
 // Push a range onto every other chart, converted into ITS indices.
 function _mirrorRange(source, range) {
-  const srcOffset = _rangeOffsets.get(source);
-  if (srcOffset === undefined || !range) return;
+  const src = _rangeMaps.get(source);
+  if (!src || !range) return;
+  const from = _priceIndexOf(src, range.from);
+  const to = _priceIndexOf(src, range.to);
   [state.chart].concat(_satelliteCharts()).forEach((other) => {
     if (!other || other === source) return;
-    const off = _rangeOffsets.get(other);
-    if (off === undefined) return;
-    const moved = {
-      from: range.from + srcOffset - off,
-      to: range.to + srcOffset - off,
-    };
+    const map = _rangeMaps.get(other);
+    if (!map) return;
+    const moved = { from: _ownIndexOf(map, from), to: _ownIndexOf(map, to) };
+    // A range the library cannot accept would throw inside the gesture that caused
+    // it, so a chart that cannot express this range is left alone instead.
+    if (!isFinite(moved.from) || !isFinite(moved.to)) return;
     _pushedRanges.set(other, moved);
     other.timeScale().setVisibleLogicalRange(moved);
   });
@@ -1732,7 +1790,7 @@ function _onRangeChanged(chart, range) {
 function subscribeMainToOscTime() {
   // Idempotent per chart instance: a rebuild makes a new chart, which subscribes once.
   if (!state.chart) return;
-  _rangeOffsets.set(state.chart, 0); // the price chart IS the reference
+  _rangeMaps.set(state.chart, IDENTITY_BARS); // the reference itself
   const ts = state.chart.timeScale();
   ts.unsubscribeVisibleLogicalRangeChange(_mainRangeHandler);
   ts.subscribeVisibleLogicalRangeChange(_mainRangeHandler);
@@ -3675,7 +3733,7 @@ function renderBacktest(d, delta) {
     renderBtMetrics(r.metrics, r.gate);
     const notes = $("bt-notes");
     if (notes) notes.textContent = (r.notes || []).join(" · ");
-    drawBtCurve(r.equity_curve);
+    drawBtCurve(r.equity_curve, r.bar_size);
     return;
   }
 
@@ -3751,9 +3809,31 @@ function renderBtMetrics(m, gate) {
   ].join("");
 }
 
-function drawBtCurve(points) {
+/* Runs are stored, so the one on show can predate a change of bar size — and then
+   its bars share no time with the chart's at all, which means the curve cannot be
+   placed on the chart's bars and cannot move with it. Say why, instead of leaving a
+   curve that silently ignores every gesture made on the chart. */
+function noteCurveBarSize(runBarSize) {
+  const note = $("bt-curve-note");
+  if (!note) return;
+  const chartBar = (state.status && state.status.interval) || "";
+  const runBar = String(runBarSize || "");
+  if (!chartBar || !runBar || chartBar === runBar) {
+    note.hidden = true;
+    note.textContent = "";
+    return;
+  }
+  note.textContent =
+    `⚠ This run used ${barSizeLabel(runBar)} bars while the chart shows ` +
+    `${barSizeLabel(chartBar)} bars, so the two have no bars in common and the ` +
+    "curve cannot follow the chart. Run the backtest again to sync them.";
+  note.hidden = false;
+}
+
+function drawBtCurve(points, runBarSize) {
   const host = $("bt-curve");
   if (!host) return;
+  noteCurveBarSize(runBarSize);
   host.innerHTML = "";
   if (btChart) {
     forgetCrosshairAnchor(btChart);
