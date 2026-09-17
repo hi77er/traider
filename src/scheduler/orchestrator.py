@@ -87,6 +87,20 @@ LOGGED_ACTIONS = frozenset({"decided", "refused"})
 #: place the instant it closes, and one tick is cheap while a missed bar is not.
 PROVIDER_LAG_SECONDS = 5.0
 
+#: How often a SLEEPING loop re-reads the switch, on a wait short enough to allow it. A bar
+#: boundary can be an hour away and the wait used to be one uninterruptible call, so turning
+#: trading off left a process that still said "running" in the panel until the bar closed — a
+#: switch that works, looking broken. The wait is the same length; it is just no longer one
+#: block.
+STOP_CHECK_SECONDS = 1.0
+
+#: ...and a ceiling on how many times one wait may be cut up. An hourly wait gets a check
+#: every second — the switch feels instant, which is the point — while a daily or weekly one
+#: gets a coarser slice, so a long wait is not a hundred thousand wake-ups to answer a
+#: question nobody asked that precisely. All that matters operationally is that this is
+#: capped: the cost of a slice is a file read, and it must not scale with the bar size.
+MAX_WAIT_SLICES = 3600
+
 #: The loop's own source: the files that decide what to trade and how. Watched by mtime so a
 #: loop running older code than these refuses to OPEN anything new (see ``src/config/
 #: freshness``), which is the one failure a process cannot see from the inside — every test
@@ -485,6 +499,28 @@ def _default_clock(settings) -> Callable[[], Dict[str, Any]]:
     return call
 
 
+def _wait_for_the_boundary(seconds: float, sleep: Callable[[float], None], settings) -> bool:
+    """Sleep ``seconds``, returning False when trading was turned OFF while waiting.
+
+    Sliced rather than one call, so the switch can stop the loop between ticks as well as
+    during one. Nothing else about the wait changes: the total is the same, the lease was
+    already refreshed with the boundary it committed to, and a loop that wakes late still
+    skips the bar it missed rather than replaying it.
+    """
+    remaining = float(seconds)
+    # Fixed from the TOTAL, not recomputed as it shrinks: a step that shrank with the remainder
+    # would decay towards nothing and take far more slices than the ceiling allows.
+    step = max(STOP_CHECK_SECONDS, remaining / MAX_WAIT_SLICES)
+    while remaining > 0:
+        # Checked BEFORE sleeping, so the first slice of an already-off switch costs nothing.
+        if not is_trading_on(settings):
+            return False
+        now = min(step, remaining)
+        sleep(now)
+        remaining -= now
+    return True
+
+
 def run(
     settings,
     *,
@@ -530,6 +566,15 @@ def run(
         except Exception:  # noqa: BLE001 - nothing may kill the loop
             logger.exception("Tick raised outside its own handling; continuing")
 
+        # The switch OWNS this process. Turning trading off is meant to stop the loop, not to
+        # leave it idling until someone notices the chip still says "running" — and a stopped
+        # loop must not be restarted by hand either, because arming starts it
+        # (``src/web/services/loop_control``). Checked here as well as during the sleep, so a
+        # run whose switch is already off costs one tick and not one bar.
+        if not is_trading_on(current):
+            logger.info("Trading is OFF — stopping the loop")
+            break
+
         if ticks is not None and len(records) >= int(ticks):
             break
 
@@ -546,7 +591,9 @@ def run(
         wait = (boundary - at).total_seconds() + PROVIDER_LAG_SECONDS
         logger.info("Next bar closes at %s — sleeping %.0fs", boundary, max(0.0, wait))
         if wait > 0:
-            sleep(wait)
+            if not _wait_for_the_boundary(wait, sleep, current):
+                logger.info("Trading is OFF — stopping the loop")
+                break
         else:
             # Behind the boundary: do not catch up, just move on to the next one. Replaying
             # the bar we are late for would place an order at a price that no longer exists.

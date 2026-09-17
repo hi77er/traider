@@ -52,7 +52,7 @@ from src.execution import credentials, positions
 from src.execution.alpaca_client import AlpacaError
 from src.execution.alpaca_executor import OrderRefused
 from src.execution.config import ExecutionConfigError, execution_status
-from src.web.services import config_service
+from src.web.services import config_service, loop_control
 
 logger = logging.getLogger(__name__)
 
@@ -280,11 +280,28 @@ def turn_on(settings, *, confirm_live: bool = False) -> dict:
     }
     _write(settings, state)
     logger.warning("TRADING TURNED ON (%s, %s, strategy %s)", state["env"].upper(), state["broker"], state["strategy"])
+
+    # ARMING STARTS THE LOOP. The switch is the lifecycle of the bot in both directions: the
+    # loop re-reads it every tick and while it sleeps, so turning trading off stops the process
+    # by itself, and starting it is the other half of the same idea. A failure here is
+    # reported rather than fatal — the operator's decision is the switch, it is already
+    # written, and undoing it would be this code overruling something it does not own.
+    loop = loop_control.start(settings)
+    if not loop["running"]:
+        logger.error("TRADING IS ON BUT THE LOOP DID NOT START: %s", loop["reason"])
     result = {
         "ok": True,
-        "message": f"Trading is ON — orders route to {state['env'].upper()}",
+        "message": (
+            f"Trading is ON — orders route to {state['env'].upper()} · {loop['message']}"
+            if loop["running"]
+            else (
+                f"Trading is ON — orders route to {state['env'].upper()}, but the loop did not "
+                f"start ({loop['reason']}), so nothing will tick or trade until it is running"
+            )
+        ),
         "state": state,
         "execution": status_info,
+        "loop": loop,
     }
     # The gate may have been served from the cache a moment ago; an arming is exactly the
     # point at which a stale view of the account stops being acceptable.

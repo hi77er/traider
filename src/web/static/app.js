@@ -2011,6 +2011,7 @@ const LIVE_STATE = {
 // `title` — the embedded browser renders no native tooltip, which is how this stayed
 // invisible.
 const LOOP_COMMAND = "python -m src.main";
+const LOOP_LOG = "data/loop.log";
 
 function shortAge(seconds) {
   if (seconds === null || seconds === undefined) return "never";
@@ -2231,11 +2232,18 @@ function renderLive(loop, orders, market, accounts) {
   // here is how "trading is ON" became a promise this screen could not keep: the operator
   // flips the switch, the chip keeps saying "stopped", and the reasonable reading is that the
   // switch did nothing.
+  // Arming STARTS the loop (``src/web/services/loop_control``), so this is no longer "you forgot
+  // to start it" — it means the start failed, or the loop started and exited, and either way
+  // the reason is in the loop's own log. Naming the file is the difference between a dead end
+  // and a next step. It covers both cases on purpose: a loop that exits at once (a refusal in
+  // the tick, code older than the files on disk) is not a start that failed, and claiming it
+  // was would send the operator looking in the wrong place.
   const armed = !!(state.tradingState && state.tradingState.on);
   if (armed && (loop.state === "stopped" || loop.state === "never")) {
     lines.push(
       `<span class="warn">trading is armed, but no loop is running — nothing will tick or `
-      + `trade until one is started (<code>${escapeHtml(LOOP_COMMAND)}</code>)</span>`
+      + `trade. Arming starts one, so why it is not up is in <code>${escapeHtml(LOOP_LOG)}</code>; `
+      + `you can also run <code>${escapeHtml(LOOP_COMMAND)}</code> by hand</span>`
     );
   }
   if (loop.has_run) {
