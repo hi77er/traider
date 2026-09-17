@@ -197,9 +197,11 @@ Endpoints:
 - `GET /api/v1/loop` — is a loop running, when it next wakes, its last tick and last refusal
 - `GET /api/v1/clock` — whether the exchange is open, and when it next opens or closes
   (Alpaca's clock, cached a minute — the session only moves at the boundaries)
+- `GET /api/v1/accounts` — what each account is worth: equity, the day's change, cash,
+  buying power and status, for paper AND live (cached 30 s; the account number is masked
+  and the broker's payload is never proxied)
 - `GET /api/v1/positions` · `GET /api/v1/orders` · `GET /api/v1/trades` — what is held, what
-  is working (plus the resting exit legs), and the round trips that closed
-- `GET /api/v1/log?day=YYYY-MM-DD` — one day of ticks + submitted orders, from the live store,
+  is working (plus the resting exit legs), and the round trips that closed- `GET /api/v1/log?day=YYYY-MM-DD` — one day of ticks + submitted orders, from the live store,
   plus the exchange's own `today` so the page knows whether it is worth refreshing
 - `GET /api/v1/dataset/status` — dataset summary + backfill job state
 - `GET /api/v1/dataset/data?start=&end=&limit=&offset=` — paginated OHLCV rows (`limit=0` = all for the chart)

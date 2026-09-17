@@ -2075,6 +2075,56 @@ function marketLine(market) {
     escapeHtml(exchangeClock(when)), escapeHtml(untilWhen(when))].filter(Boolean).join(" ");
 }
 
+// Money, as the account block needs it. ``signed`` is for the day's change, where the
+// difference between "+$0.00" and "-$0.00" is the whole point of the line.
+function money(value, signed) {
+  if (value === null || value === undefined || value === "") return "—";
+  const number = Number(value);
+  if (!Number.isFinite(number)) return String(value);
+  const body = Math.abs(number).toLocaleString(undefined, {
+    minimumFractionDigits: 2, maximumFractionDigits: 2,
+  });
+  return `${number < 0 ? "-" : (signed && number > 0 ? "+" : "")}$${body}`;
+}
+
+function signedPercent(value) {
+  if (value === null || value === undefined) return "";
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "";
+  return `${number > 0 ? "+" : ""}${number.toFixed(2)}%`;
+}
+
+// The account this panel leads with is the one being TRADED. The other one appears only when
+// it could not be read, because that is a warning worth having here; when it is healthy its
+// numbers are context, and the log page shows both side by side for exactly that. The reason
+// text differs for a key that was rejected and one that was never configured, so a deliberate
+// paper-only setup does not read as a fault.
+function accountRows(payload) {
+  if (!payload) return [];
+  const rows = [];
+  for (const account of payload.accounts || []) {
+    const traded = account.env === payload.env;
+    if (!account.known) {
+      if (!traded && !account.reason) continue;
+      rows.push([`${account.env} account`,
+        `<span class="warn">${escapeHtml(account.reason || "could not be read")}</span>`]);
+      continue;
+    }
+    if (!traded) continue;
+    const who = [account.env, account.account, account.status].filter(Boolean).join(" · ");
+    rows.push(["account", `${escapeHtml(who)}${account.blocked ? ' <span class="bad">⚠ blocked</span>' : ""}`]);
+    const change = [];
+    if (account.day_pl !== null && account.day_pl !== undefined) {
+      change.push(`day ${money(account.day_pl, true)}`);
+      const pct = signedPercent(account.day_pl_pct);
+      if (pct) change.push(`(${pct})`);
+    }
+    rows.push(["equity", [money(account.equity), change.join(" ")].filter(Boolean).join(" · ")]);
+    rows.push(["cash", `${money(account.cash)} · buying power ${money(account.buying_power)}`]);
+  }
+  return rows;
+}
+
 function livePanelVisible() {
   const body = $("live-body");
   return !!body && !body.hidden && !document.hidden;
@@ -2124,6 +2174,7 @@ async function loadLive(includeOrders, options) {
   }
   let orders = null;
   let market = null;
+  let accounts = null;
   if (includeOrders) {
     try {
       orders = await api("/api/v1/orders");
@@ -2135,13 +2186,18 @@ async function loadLive(includeOrders, options) {
     } catch (err) {
       market = { ok: false, message: err.message };
     }
+    try {
+      accounts = await api("/api/v1/accounts");
+    } catch (err) {
+      accounts = { ok: false, message: err.message, accounts: [] };
+    }
   }
   if (generation !== _livePoll.token) return false;
-  renderLive(loop, orders, market);
+  renderLive(loop, orders, market, accounts);
   return true;
 }
 
-function renderLive(loop, orders, market) {
+function renderLive(loop, orders, market, accounts) {
   const info = LIVE_STATE[loop.state] || LIVE_STATE.never;
   const chip = $("live-chip");
   if (chip) {
@@ -2150,9 +2206,10 @@ function renderLive(loop, orders, market) {
     chip.title = info.note;
   }
 
-  // The market line is kept across the fast polls, which do not fetch it: the session moves
-  // at 09:30 and 16:00 and nowhere else, so re-asking every five seconds would buy nothing.
+  // The market line and the account numbers are kept across the fast polls, which fetch
+  // neither: the session moves at 09:30 and 16:00, and equity is a broker call.
   if (market) state.liveMarket = market;
+  if (accounts) state.liveAccounts = accounts;
 
   const who = loop.holder ? loop.holder_text : (loop.claim ? loop.holder_text : "");
   const lines = [];
@@ -2225,6 +2282,9 @@ function renderLiveDetail(loop, orders) {
   const host = $("live-detail");
   if (!host) return;
   const rows = [];
+  // What the account is WORTH, first: it is the number an operator checks when they open
+  // this panel, and the account it belongs to is the one being traded.
+  for (const line of accountRows(state.liveAccounts)) rows.push(line);
   const position = (orders && orders.protection && orders.protection.position)
     || (loop.last_tick && loop.last_tick.position)
     || null;

@@ -201,3 +201,60 @@ def test_the_exchange_time_is_read_from_the_clock_not_converted_from_it():
     assert "ET" in body
     assert "toLocaleTimeString" in body, "the reader's own time is offered alongside"
     assert "Date" in body, "and it is what the comparison is made against"
+
+
+# ---------------------------------------------------------------------------
+# the account numbers
+# ---------------------------------------------------------------------------
+def test_the_panel_fetches_the_accounts_only_on_the_slow_poll():
+    """/api/v1/accounts is a broker call, so it belongs with the orders and the clock rather
+    than with the five-second file read."""
+    body = _function(APP_JS, "loadLive")
+    accounts_at = body.index("/api/v1/accounts")
+    assert body.index("if (includeOrders)") < accounts_at, "inside the slow branch"
+    assert accounts_at < body.index("return true;"), "and awaited before the render"
+
+
+def test_the_panel_keeps_the_accounts_across_the_fast_polls():
+    """The fast poll does not fetch them, which only works if the last answer is remembered."""
+    assert "state.liveAccounts" in APP_JS
+    assert "accountRows" in _function(APP_JS, "renderLiveDetail")
+
+
+def test_a_zero_balance_and_an_unreadable_account_render_differently():
+    """The distinction the whole read is built around: "$0.00" is a claim about a balance and
+    an unreadable account is the absence of one."""
+    body = _function(APP_JS, "accountRows")
+
+    assert "account.known" in body
+    assert "account.reason" in body, "the reason goes in place of the numbers"
+    assert body.index("!account.known") < body.index("money(account.equity)"), \
+        "the unknown branch has to be reached before any number is formatted"
+
+
+def test_the_panel_leads_with_the_account_being_traded():
+    """The other account appears only when it cannot be read: that is a warning, while a
+    healthy one's numbers are context the log page already shows side by side."""
+    body = _function(APP_JS, "accountRows")
+
+    assert "payload.env" in body
+    assert "if (!traded) continue;" in body
+
+
+def test_the_log_page_reads_and_renders_the_accounts():
+    assert "/api/v1/accounts" in LOG_JS
+    assert 'setIfChanged($("lg-accounts")' in LOG_JS
+    assert "lg-accounts" in LOG_HTML
+
+
+def test_the_day_percentage_is_not_divided_by_a_hundred_twice():
+    """``day_pl_pct`` arrives as a percentage, while the page's ``percent()`` helper multiplies
+    a FRACTION by a hundred — using that helper here would report a 1% day as 100%."""
+    body = _function(LOG_JS, "renderAccounts")
+
+    assert "percentText(" in body
+    assert "percent(" not in body.replace("percentText(", ""), \
+        "the fraction helper must not touch a value that is already a percentage"
+
+    formatter = _function(LOG_JS, "percentText")
+    assert "* 100" not in formatter and "percent(" not in formatter.replace("percentText(", "")

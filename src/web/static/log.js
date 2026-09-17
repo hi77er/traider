@@ -17,6 +17,7 @@
     loop: null,
     log: null,
     positions: null,
+    accounts: null,
     orders: null,
     trades: null,
   };
@@ -63,6 +64,23 @@
     if (value === null || value === undefined || value === "") return "—";
     const number = Number(value);
     return Number.isFinite(number) ? number.toFixed(2) : String(value);
+  }
+
+  // A day's change is only readable WITH its sign: "0.00" and "+0.00" look like a missing
+  // value and a flat day respectively.
+  function signedMoney(value) {
+    if (value === null || value === undefined || value === "") return "—";
+    const text = money(value);
+    return Number(value) > 0 ? `+${text}` : text;
+  }
+
+  // ``day_pl_pct`` arrives as a percentage already, so it does NOT go through ``percent()`` —
+  // that one multiplies a FRACTION by a hundred, and using it here would report a 1% day as
+  // 100%.
+  function percentText(value) {
+    if (value === null || value === undefined || value === "") return "—";
+    const number = Number(value);
+    return Number.isFinite(number) ? `${number > 0 ? "+" : ""}${number.toFixed(2)}%` : String(value);
   }
 
   function percent(value) {
@@ -127,6 +145,8 @@
 
     $("lg-env").textContent = `${positions.env || orders.env || ""} · ${positions.instrument || ""}`;
 
+    renderAccounts();
+
     const verdict = orders.protection;
     const protection = $("lg-protection");
     if (!verdict) {
@@ -184,6 +204,39 @@
           ${cell(money(order.filled_avg_price))}${cell(money(order.stop_price))}
           ${cell(money(order.limit_price))}${cell(order.status)}</tr>`
       ) || empty("no orders are working")));
+  }
+
+  // Both environments, in the order the payload gives them, so a paper account and a live one
+  // can be compared on one screen. An account that could not be read gets its REASON in place
+  // of the numbers rather than a row of dashes: "unknown" and "$0.00" are different answers
+  // and the difference is the whole point of showing this at all.
+  function renderAccounts() {
+    const payload = state.accounts || { accounts: [] };
+    const rows = payload.accounts || [];
+    const note = payload.ok === false
+      ? empty(`the accounts could not be read (${payload.message || "no reason given"})`)
+      : empty("no account could be read");
+    setIfChanged($("lg-accounts"), rows.length
+      ? table(
+        ["account", "equity", "day", "day %", "cash", "buying power", "status"],
+        rows,
+        (row) => {
+          if (!row.known) {
+            return `<tr><td>${esc(row.env)}</td><td colspan="6" class="muted">
+              ${esc(row.reason || "could not be read")}</td></tr>`;
+          }
+          const change = Number(row.day_pl);
+          const cls = row.blocked ? "bad" : (change < 0 ? "bad" : (change > 0 ? "good" : ""));
+          // Environment FIRST: it is what distinguishes the rows, and it is the same order
+          // the positions table below uses for the same reason.
+          const who = [row.env, row.account].filter(Boolean).join(" ");
+          const status = [row.status, row.blocked ? "BLOCKED" : ""].filter(Boolean).join(" ");
+          return `<tr>${cell(who || row.env, cls)}${cell(money(row.equity))}
+            ${cell(signedMoney(row.day_pl), cls)}${cell(percentText(row.day_pl_pct), cls)}
+            ${cell(money(row.cash))}${cell(money(row.buying_power))}${cell(status)}</tr>`;
+        }
+      )
+      : note);
   }
 
   function renderTicks() {
@@ -256,15 +309,18 @@
     // The broker half last, and independently: its failure must not blank the local log,
     // which is the half that still works when the account is unreachable.
     try {
-      const [positions, orders, trades] = await Promise.all([
-        api("/api/v1/positions"), api("/api/v1/orders"), api("/api/v1/trades"),
+      const [positions, accounts, orders, trades] = await Promise.all([
+        api("/api/v1/positions"), api("/api/v1/accounts"), api("/api/v1/orders"),
+        api("/api/v1/trades"),
       ]);
       state.positions = positions;
+      state.accounts = accounts;
       state.orders = orders;
       state.trades = trades;
     } catch (err) {
       fail(`could not read the account: ${err.message}`);
       state.positions = { positions: [] };
+      state.accounts = { ok: false, message: err.message, accounts: [] };
       state.orders = { ok: false, message: err.message, open: [], resting: [], closed: [] };
       state.trades = { trades: [] };
     }

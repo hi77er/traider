@@ -4,6 +4,7 @@ Three read-only endpoints for the header pill, the Live panel and the trading lo
 
 ``GET /api/v1/loop``       -> the loop's own state: holder, next wake, last tick, last refusal
 ``GET /api/v1/clock``      -> whether the exchange is open, and when it next changes
+``GET /api/v1/accounts``   -> what each account is worth: equity, the day's change, cash
 ``GET /api/v1/positions``  -> what the account holds (both environments)
 ``GET /api/v1/orders``     -> open orders, the resting exit legs, and recent fills
 
@@ -25,7 +26,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, Query
 
 from src.config.effective import get_effective_settings_dep
-from src.execution import positions
+from src.execution import accounts, positions
 from src.execution.config import execution_status
 from src.web.auth import require_auth
 from src.web.services import clock_service, loop_service
@@ -81,6 +82,22 @@ def get_clock(settings=Depends(get_effective_settings_dep)) -> dict:
     return clock_service.state(settings)
 
 
+@router.get("/accounts")
+def get_accounts(settings=Depends(get_effective_settings_dep)) -> dict:
+    """What each account is worth: equity, the day's change, cash and buying power.
+
+    Both environments, like ``/positions`` and for the same reason — a strategy trades one at
+    a time, but a person can be wrong about which. The numbers are projected and the account
+    number is masked (see ``src/execution/accounts``); the broker's payload is never proxied.
+    """
+    rows = accounts.snapshots(settings)
+    return {
+        "ok": True,
+        "env": str(getattr(settings, "execution_env", "paper") or "paper").lower(),
+        "accounts": [row.as_dict() for row in rows],
+    }
+
+
 @router.get("/positions")
 def get_positions(settings=Depends(get_effective_settings_dep)) -> dict:
     """What the accounts hold — the same cached read the trading panel gates on.
@@ -89,16 +106,19 @@ def get_positions(settings=Depends(get_effective_settings_dep)) -> dict:
     a position in the one this screen is not pointed at is exactly the thing an operator
     needs to be told about.
     """
-    accounts = positions.snapshots(settings)
+    rows = positions.snapshots(settings)
     status_info = execution_status(settings)
     return {
         "ok": True,
         "env": status_info.get("env"),
         "instrument": settings.instrument,
-        "positions": [account.as_dict() for account in accounts],
-        "open_count": positions.total(accounts),
-        "unknown_count": len(positions.unknown(accounts)),
-        "describe": positions.describe(accounts),
+        # Named ``rows`` rather than ``accounts``: that name is now the module this file
+        # imports, and a local of the same name inside this function would shadow it for
+        # anything added below.
+        "positions": [row.as_dict() for row in rows],
+        "open_count": positions.total(rows),
+        "unknown_count": len(positions.unknown(rows)),
+        "describe": positions.describe(rows),
     }
 
 
