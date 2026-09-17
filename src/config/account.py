@@ -5,8 +5,8 @@ TRAIDER's configuration has three layers, and this module owns the middle one:
 | Layer | Lives in | Answers |
 |-------|----------|---------|
 | **Global** | ``.env`` | how this *machine* reaches the outside world (data provider + keys) |
-| **Account** | ``settings/account/account.json`` (this module) | what is true of *this trading account* — broker (Trading Account), backtest defaults, where data and results are stored |
-| **Strategy** | ``settings/strategies/store.json`` | how *this strategy* trades — instrument, bar size, features, model, gates, risk, schedule |
+| **Account** | ``data/account/account.json`` (this module) | what is true of *this trading account* — broker (Trading Account), backtest defaults, where data and results are stored |
+| **Strategy** | ``data/strategies/store.json`` | how *this strategy* trades — instrument, bar size, features, model, gates, risk, schedule |
 
 The account document is a flat ``KEY -> value`` map so the SAME overlay
 machinery as a strategy's ``config`` can merge it (see ``effective.py``):
@@ -37,7 +37,7 @@ from src.config.settings import Settings
 logger = logging.getLogger(__name__)
 
 # Default location; override with ACCOUNT_SETTINGS_FILE in .env.
-DEFAULT_ACCOUNT_FILE = "settings/account/account.json"
+DEFAULT_ACCOUNT_FILE = "data/account/account.json"
 ACCOUNT_VERSION = 1
 
 

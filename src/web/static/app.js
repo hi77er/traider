@@ -268,7 +268,7 @@ function buildMainChart() {
   // makes lightweight-charts reject the whole payload and draw NOTHING, so one
   // blank row would leave the entire chart empty. The data layer filters these
   // out as well — this is the last line of defence.
-  series.setData((state.datasetRows || [])
+  const bars = (state.datasetRows || [])
     .map((r) => ({
       // unix seconds for intraday, 'YYYY-MM-DD' for daily bars
       time: r.time != null ? r.time : r.date,
@@ -276,7 +276,11 @@ function buildMainChart() {
       low: toNum(r.low), close: toNum(r.close),
     }))
     .filter((b) => b.time != null && b.open !== null && b.high !== null
-      && b.low !== null && b.close !== null));
+      && b.low !== null && b.close !== null);
+  series.setData(bars);
+  // How many bars there are to show. The zoom stops at exactly this many, so
+  // "zoom out as far as it goes" means "the whole history is on screen".
+  state.chartBarCount = bars.length;
 
   // Crosshair anchor: the close at each bar, so hovering an indicator pane can
   // place THIS chart's horizontal line on the price of that instant.
@@ -371,15 +375,30 @@ function onMainChartWheel(ev) {
   if (!chart) return;
   const ts = chart.timeScale();
   const range = ts.getVisibleLogicalRange();
-  if (!range || range.to <= range.from) return;
+  if (!range || !(range.to > range.from)) return;
   const box = $("chart-canvas").getBoundingClientRect();
   if (!box.width) return;
   const x = Math.max(0, Math.min(box.width, ev.clientX - box.left));
   const anchor = range.from + (x / box.width) * (range.to - range.from);
   const span = range.to - range.from;
   const factor = Math.exp(-ev.deltaY * 0.005); // pinch out (negative delta) -> zoom in
-  const newSpan = Math.max(1, span / factor);
-  const newFrom = anchor - (anchor - range.from) * (newSpan / span);
+  // BOTH ends of the zoom stop at the data. One logical unit IS one bar, so the
+  // whole history occupies [0, barCount): asking for a wider window than that is
+  // asking for something the chart cannot draw — the library clamps what it
+  // reports back, and re-deriving the next step from ITS answer made the zoom
+  // jump (the reported range collapsed, so the view snapped to a handful of bars
+  // — "the zoom restarts at maximum zoom" — as soon as a pinch-out went past the
+  // end of the data). The inward stop is one bar; the library's own maximum bar
+  // spacing is reached long before that and holds the zoom-in end.
+  const bars = state.chartBarCount || 0;
+  const maxSpan = bars > 1 ? bars : span * 10;
+  const newSpan = Math.min(maxSpan, Math.max(1, span / factor));
+  let newFrom = anchor - (anchor - range.from) * (newSpan / span);
+  // ...and the window itself stays inside the data, so maximum zoom-out really
+  // shows every bar instead of scrolling empty space into view.
+  if (bars > 1) {
+    newFrom = Math.min(Math.max(0, newFrom), Math.max(0, bars - newSpan));
+  }
   ts.setVisibleLogicalRange({ from: newFrom, to: newFrom + newSpan });
 }
 
@@ -960,7 +979,7 @@ function confirmDialog(opts) {
   });
 }
 
-/* ---------- Account settings dialog (settings/account/account.json) ---------- */
+/* ---------- Account settings dialog (data/account/account.json) ---------- */
 async function loadAccount(silent) {
   try {
     const c = await api("/api/v1/account");
@@ -1683,11 +1702,38 @@ function subscribeMainToOscTime() {
 }
 
 function subscribeOscToMainTime(chart) {
-  // Panning/zooming inside a pane also moves the main chart (two-way sync).
+  // Panning/zooming inside a pane also moves the main chart (two-way sync) — but
+  // ONLY when the user is the one doing it. A satellite's range changes for a
+  // second reason: we just pushed the main chart's range into it, and when its own
+  // data cannot span that range the library CLAMPS what it applies. The change it
+  // reports then is not the one it was asked for, and pushing that clamped window
+  // back into the main chart is what made zooming out snap to a few bars the
+  // moment the pinch went past the pane's data (an endless push/clamp/echo cycle).
+  // A real gesture is what marks a pane as the source: the wheel/pointer/touch
+  // events land on the pane first, and the range change they cause arrives while
+  // they are still being delivered.
   chart.timeScale().subscribeVisibleTimeRangeChange((range) => {
     if (!range || !state.chart || chart === state.chart) return;
+    if (!_userTouchedPane(chart)) return; // an echo of our own push, not the user
     _syncTimeRange(state.chart, range);
   });
+}
+
+// Marks a satellite (oscillator pane / equity curve) as user-driven for a moment,
+// so its range changes are traced back to the gesture that caused them.
+const _paneTouchedAt = new WeakMap();
+const PANE_TOUCH_WINDOW_MS = 400;
+
+function watchPaneInteraction(chart, el) {
+  if (!chart || !el) return;
+  const mark = () => _paneTouchedAt.set(chart, Date.now());
+  ["wheel", "pointerdown", "pointermove", "touchstart", "touchmove"].forEach((type) =>
+    el.addEventListener(type, mark, { passive: true })
+  );
+}
+
+function _userTouchedPane(chart) {
+  return Date.now() - (_paneTouchedAt.get(chart) || 0) <= PANE_TOUCH_WINDOW_MS;
 }
 
 /* ---------- Crosshair sync (vertical time line + horizontal value) ----------
@@ -1820,6 +1866,7 @@ function drawOscPanes() {
         // horizontal line is not snapped to a bar's extremes.
         crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
       });
+      watchPaneInteraction(chart, canvas); // gestures here drive the main chart
       let anchorSeries = null;
       o.lines.forEach((line) => {
         // A line may carry its own kind / colour / price format: MACD draws its
@@ -3197,20 +3244,22 @@ async function saveStrategyFull(kind) {
     });
     if (!ok) { revert(); localMsg("Save cancelled — instrument unchanged."); return; }
   } else if (historyChanged) {
-    // ── Historical window / bar size change → delete old data & re-download ──
+    // ── Historical window / bar size change → download the new window ──────
     const parts = [];
     if (newBar !== oldBar) parts.push(`bar size <b>${barSizeLabel(oldBar) || "—"}</b> → <b>${barSizeLabel(newBar) || "—"}</b>`);
     if (periodChanged) parts.push(`history <b>${periodLabel(oldPeriod)}</b> → <b>${periodLabel(newPeriod)}</b>`);
     const ok = await confirmDialog({
-      title: "Re-download historical data?",
+      title: "Download the new historical window?",
       messageHtml:
         `<p>You changed the ${parts.join(" and ")}.</p>` +
-        `<p>The existing historical data will be <b>deleted</b> and the new window will be ` +
-        `<b>downloaded automatically</b> for <b>${escapeHtml(newInstrument || oldInstrument)}</b> ` +
+        `<p>The new window will be <b>downloaded automatically</b> for ` +
+        `<b>${escapeHtml(newInstrument || oldInstrument)}</b> ` +
         `(<b>${escapeHtml(periodLabel(newPeriod) || "2 years")}</b> at <b>${escapeHtml(barSizeLabel(newBar || oldBar))}</b>).</p>` +
-        `<p class="muted">A progress message is shown while this runs. Your rules are kept and are ` +
-        `re-applied to the new dataset afterwards.</p>`,
-      confirmText: "Save & re-download",
+        `<p class="muted">Existing history is <b>kept and merged</b> — bars already downloaded ` +
+        `(including those of other bar sizes and other strategies on this instrument) stay on disk, ` +
+        `and only the new window is added. Your rules are kept and are ` +
+        `re-applied to the dataset afterwards.</p>`,
+      confirmText: "Save & download",
       cancelText: "Cancel",
     });
     if (!ok) { revert(); localMsg("Save cancelled — historical window unchanged."); return; }
@@ -3340,8 +3389,11 @@ function openDeleteStrategy() {
   if (chk) chk.checked = false;
   if (chkText) {
     const instr = String(rs.instrument || (rs.config && rs.config.INSTRUMENT) || "").trim();
+    const bar = String((rs.config && rs.config.HISTORICAL_BAR_SIZE) || "").trim();
+    const bars = bar ? ` (${escapeHtml(barSizeLabel(bar))})` : "";
     chkText.innerHTML = instr
-      ? `Also delete the historical data file(s) for <code>${escapeHtml(instr)}</code>.`
+      ? `Also delete the historical data file(s) for <code>${escapeHtml(instr)}</code>${bars}. ` +
+        `Files another live strategy is still using are kept.`
       : "Also delete this strategy's historical data file(s).";
   }
   if (backdrop) backdrop.hidden = false;
@@ -3686,6 +3738,7 @@ function drawBtCurve(points) {
     const curve = points.map((p) => ({ time: p.time, value: p.equity }));
     line.setData(curve);
     btChart = chart;
+    watchPaneInteraction(chart, host); // gestures here drive the main chart
     // The equity curve joins the crosshair sync too (its zoom already follows
     // the main chart), anchored on the equity value at each time.
     const anchor = _crosshairValues(curve);

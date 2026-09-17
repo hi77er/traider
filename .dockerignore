@@ -37,8 +37,11 @@ tmp/
 *.sqlite3
 *.log
 
-# The live strategy store is your own data; the container creates its own.
-strategies/store.json
+# The live strategy/account JSON files are your own data; the container creates
+# its own. (They sit inside data/, which is already excluded - listed to keep the
+# intent obvious, and in step with STRATEGY_RULES_FILE / ACCOUNT_SETTINGS_FILE.)
+data/strategies/
+data/account/
 
 # --- Python caches -------------------------------------------------------
 __pycache__/

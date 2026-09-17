@@ -57,8 +57,13 @@ def start_rebuild(
     old_bar_size: Optional[str] = Query(default=None, description="Bar size the dataset previously used"),
     _: Settings = Depends(get_settings),
 ) -> dict:
-    """Delete the old dataset and download the newly configured window.
+    """Download the newly configured window and merge it into the dataset.
 
-    Refused while trading is on — it deletes the data a strategy is using.
+    Nothing is deleted: dataset files are keyed by instrument AND bar size and are
+    shared with the other strategies, so a re-download only adds bars. The old bar
+    size is passed for the log only.
+
+    Refused while trading is on — replacing the candles a strategy is running on
+    would change its decisions under it.
     """
     return dataset_service.start_rebuild(old_bar_size=old_bar_size)

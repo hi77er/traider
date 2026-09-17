@@ -80,32 +80,77 @@ def test_delete_dataset_removes_local_file(tmp_path):
     assert ds.delete_dataset(s, "AAPL", "1d") is False  # already gone
 
 
-# The table the whole feature is: which periods a bar size may be fetched for.
+# The table the whole feature is: which periods a bar size may be fetched for
+# FROM THE DEFAULT PROVIDER (yfinance). The static offer is the ceiling; what the
+# configured provider can actually fill decides the list the panel shows.
 EXPECTED_PERIODS = {
-    "1m": ("15d", "30d"),
-    "2m": ("30d", "60d"),
+    "1m": ("6d",),  # Yahoo serves 5 sessions of 1-minute bars -> 15d/30d/7d are all out
+    "2m": ("30d",),  # yfinance stops at ~31 sessions, so 60d came back 43 days short
     "5m": ("30d", "60d"),
     "15m": ("30d", "60d"),
     "1h": ("1y", "2y"),
     "2h": ("1y", "2y"),
-    "4h": ("1y", "2y", "3y"),
-    "8h": ("1y", "2y", "3y"),
-    "12h": ("1y", "2y", "3y"),
+    "4h": ("1y", "2y"),  # fetched as 1h -> 730-day limit drops 3y
+    "8h": ("1y", "2y"),
+    "12h": ("1y", "2y"),
     "1d": ("2y", "3y", "4y", "5y"),
 }
 
 
 def test_each_bar_size_offers_exactly_its_periods():
-    assert history.PERIODS_BY_BAR_SIZE == EXPECTED_PERIODS
     for bar, periods in EXPECTED_PERIODS.items():
-        assert history.allowed_periods(bar) == periods, bar
+        assert history.allowed_periods(bar, "yfinance") == periods, bar
+
+
+def test_a_period_the_provider_cannot_fill_is_never_offered():
+    """The whole point of the table: a "30 days" of 1-minute bars request came back
+    as five trading days because the provider stops serving 1m after a week, and a
+    60-day 2-minute request came back 43 days because yfinance stops at 31 sessions.
+    The dropdown must not offer a window that silently arrives short."""
+    assert history.allowed_periods("1m", "yfinance") == ("6d",)
+    periods = {o["value"] for o in history.periods_for_options("1m", "yfinance")}
+    assert periods == {"6d"}
+    assert "60d" not in history.allowed_periods("2m", "yfinance")
+
+
+def test_the_cap_is_the_window_the_provider_serves_whole():
+    """The caps are measurements, not the provider's published limits: Yahoo's
+    "last 60 days" starts 60 days back from NOW, so a window starting exactly there
+    asks for a session it has already dropped. Where that costs one session out of
+    ~40 the published limit stands (5m/15m/1h-2y); where it costs a fifth of the
+    window (1m: the 7th day back is 1 of 5 sessions) the cap goes below it."""
+    assert history.provider_max_days("yfinance", "1m") == 6
+    assert history.provider_max_days("yfinance", "2m") == 40
+    assert history.provider_max_days("yfinance", "5m") == 60
+    assert history.provider_max_days("yfinance", "1h") == 730
+    assert history.provider_max_days("yfinance", "1d") is None  # decades of daily bars
+
+
+def test_a_resampled_bar_size_inherits_its_base_intervals_limit():
+    """4h bars are fetched as 1h bars, so the provider's 1h limit binds on them —
+    otherwise a 3-year request would be silently truncated to 2."""
+    assert history.fetch_interval("4h") == "1h"
+    assert history.provider_max_days("yfinance", "4h") == 730
+    assert "3y" in history.PERIODS_BY_BAR_SIZE["4h"], "the static offer still lists it"
+    assert "3y" not in history.allowed_periods("4h", "yfinance")
+
+
+def test_a_provider_whose_limits_are_unknown_filters_nothing():
+    """No cap is invented for a provider this module has no numbers for: a guess
+    would hide history the provider really does serve."""
+    assert history.allowed_periods("1m", "some-broker") == history.PERIODS_BY_BAR_SIZE["1m"]
+    assert history.allowed_periods("1m", None) == history.PERIODS_BY_BAR_SIZE["1m"]
+
+
+def test_the_provider_is_matched_case_insensitively():
+    assert history.allowed_periods("1m", "YFinance") == ("6d",)
 
 
 def test_every_offered_bar_size_has_a_period_list():
     """A bar size in the dropdown with no periods would render an empty select,
     which a browser resolves by silently choosing something for the operator."""
     for code, _ in history.BAR_SIZES:
-        assert history.allowed_periods(code), code
+        assert history.allowed_periods(code, "yfinance"), code
 
 
 def test_an_unknown_bar_size_falls_back_to_every_period():
@@ -119,8 +164,10 @@ def test_bar_size_and_period_are_select_options():
     codes = [c for c, _ in history.BAR_SIZES]
     assert codes[:4] == ["1m", "2m", "5m", "15m"], "the minute bars the user asked for"
     assert "1d" in codes
-    labels = {o["value"]: o["label"] for o in history.periods_for_options("1m")}
-    assert labels == {"15d": "15 days", "30d": "30 days"}
+    labels = {o["value"]: o["label"] for o in history.periods_for_options("1d", "yfinance")}
+    assert labels == {"2y": "2 years", "3y": "3 years", "4y": "4 years", "5y": "5 years"}
+    minute = {o["value"]: o["label"] for o in history.periods_for_options("1m", "yfinance")}
+    assert minute == {"6d": "6 days"}
 
 
 def test_period_and_bar_size_are_strategy_scoped():

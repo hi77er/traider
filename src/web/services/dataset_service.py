@@ -20,7 +20,6 @@ from src.data.dataset import (
     bar_label,
     chart_time,
     dataset_path,
-    delete_dataset,
     load_dataset,
     save_dataset,
 )
@@ -122,13 +121,22 @@ def start_backfill(settings: Optional[Settings] = None) -> dict:
 
 
 def _run_backfill(settings: Settings) -> None:
-    """Fetch + persist the configured historical window (same path as backfill CLI)."""
+    """Fetch + persist the configured historical window (same path as backfill CLI).
+
+    The window comes from the resolved PERIOD (``HISTORICAL_LOOKBACK`` — what the
+    "History" dropdown in the panel sets), not from the legacy
+    ``HISTORICAL_START_DATE``: passing that free-text date here ignored the period
+    the operator had just chosen, so a strategy set to "30 days" still fetched
+    from 2022-01-01. ``resolve_history_window`` falls back to the start/end dates
+    only when no period is set, which is what makes both settings coherent.
+    """
     try:
+        start, end = resolve_history_window(settings)
         df = fetch_candles(
             settings,
             symbol=settings.instrument,
-            start_date=settings.historical_start_date,
-            end_date=settings.historical_end_date,
+            start_date=start,
+            end_date=end,
             bar_size=settings.historical_bar_size,
         )
         with _JOB_LOCK:
@@ -161,8 +169,9 @@ def _job_state() -> dict:
 
 
 # Separate background job for the "history window / bar size changed" flow:
-# the old dataset file is deleted and the new window is downloaded, then the
-# chart is refreshed. Rules are untouched (they live in the strategy file).
+# the new window is fetched and MERGED into the strategy's dataset file (nothing
+# is deleted - see _run_rebuild), then the chart is refreshed. Rules are
+# untouched (they live in the strategy file).
 _REBUILD_LOCK = threading.Lock()
 _REBUILD: Dict[str, object] = {
     "running": False, "last_error": None, "last_run": None, "rows": 0, "label": "",
@@ -182,10 +191,12 @@ def rebuild_status() -> dict:
 
 
 def start_rebuild(settings: Optional[Settings] = None, old_bar_size: Optional[str] = None) -> dict:
-    """Delete the old dataset and download the strategy's new history window.
+    """Fetch the strategy's new history window and merge it into its dataset.
 
     ``old_bar_size`` is the bar size the dataset previously used (when it
-    changed). Runs in a background thread; poll ``rebuild_status``.
+    changed); it is recorded in the log and NOT deleted — a file named for
+    another bar size may belong to a different live strategy. Runs in a
+    background thread; poll ``rebuild_status``.
     """
     settings = settings or get_effective_settings()
     symbol = settings.instrument
@@ -219,7 +230,21 @@ def _run_rebuild(
     end: Optional[str],
     old_bar_size: Optional[str],
 ) -> None:
-    """Fetch the new window into memory, then swap it in for the old dataset."""
+    """Fetch the new window into memory, then MERGE it into the dataset.
+
+    Nothing is deleted here, and that is the point of this function's shape. A
+    dataset file is keyed by instrument AND bar size (``NVDA_1d.parquet``), and it
+    is SHARED: the file this strategy is moving away from may be the one another
+    live strategy (or a backtest) is reading right now. Deleting it is how a
+    strategy that switched from 1d to 1m silently destroyed the daily history of a
+    second strategy on the same instrument.
+
+    A re-download therefore only ADDS: the fetched window is merged into the
+    target file, deduped on the bar timestamp (last write wins), so the newest
+    bars are refreshed and older ones already on disk are kept. Files are removed
+    only when the operator opts in while DELETING a strategy, and even then only
+    the ones no other live strategy references (see ``rules_service``).
+    """
     try:
         df = fetch_candles(
             settings,
@@ -229,11 +254,6 @@ def _run_rebuild(
             bar_size=bar,
             persist=False,  # hold in memory until the whole window is fetched
         )
-        # Replace the target bar's file; also drop the previous bar-size file
-        # (e.g. AAPL_1d) when the bar size changed.
-        if old_bar_size and old_bar_size != bar:
-            delete_dataset(settings, symbol, old_bar_size)
-        delete_dataset(settings, symbol, bar)
         if df is not None and not df.empty:
             save_dataset(settings, df, symbol, bar)
         with _REBUILD_LOCK:

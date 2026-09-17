@@ -15,6 +15,7 @@ from typing import List, Optional
 
 import pandas as pd
 
+from src.config import history
 from src.config.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -37,10 +38,9 @@ _SUPPORTED_INTERVALS = {
 }
 
 # Target interval -> finer base interval to fetch, then resample.
-_INTERVAL_BASE = {
-    "2h": "1h", "4h": "1h", "8h": "1h", "12h": "1h",
-    "3d": "1d", "2W": "1W", "2M": "1M",
-}
+# The map itself lives in ``config.history`` (``FETCH_INTERVAL``): the provider's
+# history limit binds on the interval actually FETCHED, so the settings schema has
+# to know what each bar size is made of, and two copies would drift apart.
 
 # Target interval -> pandas resample rule.
 _PANDAS_RULE = {
@@ -132,8 +132,8 @@ class OpenBBClient:
         """
         if interval in _SUPPORTED_INTERVALS:
             return interval, None
-        base = _INTERVAL_BASE.get(interval)
-        if base:
+        base = history.fetch_interval(interval)
+        if base != interval:
             return base, interval
         return interval, None  # unknown -> let the provider decide / raise
 

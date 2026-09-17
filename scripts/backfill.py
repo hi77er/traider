@@ -19,7 +19,7 @@ if str(ROOT) not in sys.path:
 
 from src.config.settings import get_settings  # noqa: E402
 from src.data.dataset import dataset_path, load_dataset  # noqa: E402
-from src.data.historical import fetch_candles  # noqa: E402
+from src.data.historical import fetch_candles, resolve_history_window  # noqa: E402
 
 
 def main() -> int:
@@ -33,8 +33,14 @@ def main() -> int:
     settings = get_settings()
     symbol = args.symbol or settings.instrument
     bar_size = args.bar_size or settings.historical_bar_size
-    start = args.start or settings.historical_start_date
-    end = args.end or settings.historical_end_date
+    # The configured PERIOD is the window; HISTORICAL_START_DATE is only the
+    # fallback when no period is set (``resolve_history_window`` decides, and also
+    # clamps to what the provider can actually serve). Using the raw start date
+    # here ignored the period the operator had just chosen in the panel: a
+    # strategy set to "30 days" was fetched from 2022-01-01.
+    start, end = resolve_history_window(settings)
+    start = args.start or start
+    end = args.end or end
 
     print(f"Backfilling {symbol} {bar_size} bars from {start} -> {end or 'now'}...")
     try:

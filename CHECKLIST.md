@@ -123,7 +123,7 @@ Track your progress through all 41 tasks across 9 phases.
 
 ### Model Development
 - [x] **model-simple** (18) — Create signal model (rule-based path)
-  - [x] src/model/simple_model.py (+ rules.py, settings/strategies/store.json store)
+  - [x] src/model/simple_model.py (+ rules.py, data/strategies/store.json store)
   - [x] Rule-based model (the logistic-regression path is NOT implemented — see Phase 5)
   - [x] Input: candle row + engineered features
   - [x] Output: {signal: BUY/SELL/HOLD, confidence: 0-1}

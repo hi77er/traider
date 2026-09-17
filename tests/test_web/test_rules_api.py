@@ -254,6 +254,90 @@ def test_delete_then_recreate_resurrects(tmp_path):
     assert p["active"] == "alpha"
 
 
+def _one_bar_df() -> pd.DataFrame:
+    return pd.DataFrame(
+        {"open": [1.0], "high": [2.0], "low": [0.5], "close": [1.5], "volume": [10]},
+        index=pd.DatetimeIndex([pd.Timestamp("2024-01-02", tz="UTC")]),
+    )
+
+
+def _set_strategy_config(st, name, config: dict) -> None:
+    rs = rules_mod.empty_strategy(name, config.get("INSTRUMENT", ""))
+    rs.config = config
+    assert rules_service.update_strategy(st, name, rs.model_dump())["ok"] is True
+
+
+def test_delete_data_keeps_the_bar_size_a_sibling_still_uses(tmp_path):
+    """A dataset file is keyed by instrument AND bar size, so the reference check
+    must be per pair: deleting the daily NVDA strategy removes NVDA_1d.parquet and
+    leaves the minute file a sibling is running on untouched."""
+    hist = tmp_path / "hist"
+    hist.mkdir(exist_ok=True)
+    st = Settings(
+        strategy_rules_file=str(tmp_path / "active.json"),
+        instrument="NVDA",
+        historical_data_dir=str(hist),
+    )
+    save_dataset(st, _one_bar_df(), "NVDA", "1d")
+    save_dataset(st, _one_bar_df(), "NVDA", "1m")
+    rules_service.create_strategy(st, "alpha")  # NVDA, global bar size (1d)
+    rules_service.create_strategy(st, "beta")
+    _set_strategy_config(st, "beta", {"INSTRUMENT": "NVDA", "HISTORICAL_BAR_SIZE": "1m"})
+
+    res = rules_service.delete_strategy(st, "alpha", delete_data=True)
+
+    assert res["ok"] is True
+    assert res["removed"] == ["NVDA_1d"]
+    assert not (hist / "NVDA_1d.parquet").exists()
+    assert (hist / "NVDA_1m.parquet").exists(), "a sibling's dataset file was deleted"
+
+
+def test_delete_data_reports_the_pair_it_kept(tmp_path):
+    """When every file under the instrument is in use, nothing is deleted and the
+    message names the strategy AND the bar size that is holding it."""
+    hist = tmp_path / "hist"
+    hist.mkdir(exist_ok=True)
+    st = Settings(
+        strategy_rules_file=str(tmp_path / "active.json"),
+        instrument="NVDA",
+        historical_data_dir=str(hist),
+    )
+    save_dataset(st, _one_bar_df(), "NVDA", "1m")
+    rules_service.create_strategy(st, "alpha")
+    rules_service.create_strategy(st, "beta")
+    for who in ("alpha", "beta"):
+        _set_strategy_config(st, who, {"INSTRUMENT": "NVDA", "HISTORICAL_BAR_SIZE": "1m"})
+
+    res = rules_service.delete_strategy(st, "alpha", delete_data=True)
+
+    assert res["removed"] == []
+    assert res["skipped"] and "beta" in res["skipped"] and "1m" in res["skipped"]
+    assert (hist / "NVDA_1m.parquet").exists()
+
+
+def test_delete_data_leftover_bar_sizes_go_when_nothing_uses_them(tmp_path):
+    """Files a strategy left behind by changing bar size are still cleaned up on
+    delete — deleting is the opt-in the operator just made, and no live strategy
+    references those pairs any more."""
+    hist = tmp_path / "hist"
+    hist.mkdir(exist_ok=True)
+    st = Settings(
+        strategy_rules_file=str(tmp_path / "active.json"),
+        instrument="NVDA",
+        historical_data_dir=str(hist),
+    )
+    save_dataset(st, _one_bar_df(), "NVDA", "1d")  # left over from an earlier bar size
+    save_dataset(st, _one_bar_df(), "NVDA", "1m")
+    rules_service.create_strategy(st, "alpha")
+    _set_strategy_config(st, "alpha", {"INSTRUMENT": "NVDA", "HISTORICAL_BAR_SIZE": "1m"})
+
+    res = rules_service.delete_strategy(st, "alpha", delete_data=True)
+
+    assert sorted(res["removed"]) == ["NVDA_1d", "NVDA_1m"]
+    assert not (hist / "NVDA_1d.parquet").exists()
+    assert not (hist / "NVDA_1m.parquet").exists()
+
+
 # ---------------------------------------------------------------------------
 # service: rename
 # ---------------------------------------------------------------------------

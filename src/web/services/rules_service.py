@@ -12,7 +12,7 @@ JSON document.
 from __future__ import annotations
 
 import logging
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from pydantic import ValidationError
 
@@ -117,8 +117,12 @@ def delete_strategy(settings: Settings, name: str, delete_data: bool = False) ->
     none are left).
 
     When ``delete_data`` is true the strategy's canonical dataset file(s) are
-    also deleted — unless another LIVE strategy still references the same
-    instrument (then the file is kept and ``skipped`` explains why).
+    also deleted — but only the ones no other LIVE strategy still references.
+    A dataset file is keyed by instrument AND bar size, so the reference check is
+    per (instrument, bar size) pair: a strategy on ``NVDA`` 1-minute bars keeps
+    ``NVDA_1m.parquet`` alive, and must NOT keep ``NVDA_1d.parquet`` alive for a
+    sibling that has moved on to minute bars. ``skipped`` explains the pairs that
+    were kept because something else is still using them.
     """
     path = rules_mod.rules_file_path(settings)
     name = (name or "").strip()
@@ -137,20 +141,30 @@ def delete_strategy(settings: Settings, name: str, delete_data: bool = False) ->
     removed: List[str] = []
     skipped: Optional[str] = None
     if delete_data:
-        symbol = str(rs.instrument or (rs.config or {}).get("INSTRUMENT", "") or "").strip().upper()
+        symbol = _strategy_instrument(rs)
         if not symbol:
             skipped = "no instrument recorded for this strategy — no data deleted"
         else:
-            users = sorted(
-                n
-                for n, other in store.live_strategies().items()
-                if n != name
-                and str(other.instrument or (other.config or {}).get("INSTRUMENT", "") or "").strip().upper() == symbol
+            # (instrument, bar size) pairs the OTHER live strategies are pinned to.
+            # Everything else under this instrument is fair game: that covers the
+            # strategy's own file and the files it left behind when it changed bar
+            # size, while a file any live strategy still reads survives.
+            users_by_bar: Dict[str, List[str]] = {}
+            for who, other in store.live_strategies().items():
+                if who == name or _strategy_instrument(other) != symbol:
+                    continue
+                users_by_bar.setdefault(_strategy_bar_size(other, settings), []).append(who)
+            removed, kept = _delete_symbol_datasets(
+                settings, symbol, keep_intervals=set(users_by_bar)
             )
-            if users:
-                skipped = f"{symbol} dataset kept — still used by: {', '.join(users)}"
-            else:
-                removed = _delete_symbol_datasets(settings, symbol)
+            if not removed:
+                if kept:
+                    who = ", ".join(
+                        f"{', '.join(sorted(users_by_bar[bar]))} ({bar})" for bar in sorted(kept)
+                    )
+                    skipped = f"{symbol} dataset kept — still used by: {who}"
+                else:
+                    skipped = f"no dataset file found for {symbol}"
 
     return {
         "ok": True,
@@ -163,31 +177,58 @@ def delete_strategy(settings: Settings, name: str, delete_data: bool = False) ->
     }
 
 
-def _delete_symbol_datasets(settings: Settings, symbol: str) -> List[str]:
-    """Delete every canonical parquet dataset for ``symbol`` (any bar size).
+def _strategy_instrument(rs) -> str:
+    """A strategy's instrument, upper-cased ('' when it records none)."""
+    raw = rs.instrument or (rs.config or {}).get("INSTRUMENT", "")
+    return str(raw or "").strip().upper()
 
-    Returns the deleted ``SYMBOL_INTERVAL`` keys.
+
+def _strategy_bar_size(rs, settings: Settings) -> str:
+    """A strategy's bar size; the global setting is the fallback.
+
+    ``HISTORICAL_BAR_SIZE`` is per-strategy, and a store written before that was
+    true (or a strategy created before the key existed) has no value of its own —
+    such a strategy runs on the global default, so that is what its dataset file
+    is named after.
+    """
+    raw = (rs.config or {}).get("HISTORICAL_BAR_SIZE")
+    return str(raw or "").strip() or str(getattr(settings, "historical_bar_size", "") or "")
+
+
+def _delete_symbol_datasets(
+    settings: Settings, symbol: str, keep_intervals: Optional[set] = None
+) -> tuple:
+    """Delete ``symbol``'s canonical parquet datasets except the kept intervals.
+
+    ``keep_intervals`` are the bar sizes a live strategy still references (any
+    strategy, not just this one). Returns ``(removed, kept)``: the deleted
+    ``SYMBOL_INTERVAL`` keys, and the intervals that survived for that reason.
     """
     from pathlib import Path
 
     from src.data.dataset import delete_dataset as _delete_dataset
 
     removed: List[str] = []
+    kept: List[str] = []
+    keep = {str(i) for i in (keep_intervals or set())}
     data_dir = Path(settings.historical_data_dir)
     if not data_dir.is_dir():
-        return removed
+        return removed, kept
     prefix = f"{symbol}_"
     files = sorted(p for p in data_dir.iterdir() if p.is_file() and p.name.startswith(prefix) and p.suffix == ".parquet")
     for path in files:
         interval = path.name[len(prefix):-len(".parquet")]
         if not interval:
             continue
+        if interval in keep:
+            kept.append(interval)
+            continue
         try:
             if _delete_dataset(settings, symbol, interval):
                 removed.append(f"{symbol}_{interval}")
         except Exception as exc:  # noqa: BLE001 - one bad file shouldn't abort the rest
             logger.warning("Could not delete dataset %s: %s", path, exc)
-    return removed
+    return removed, kept
 
 
 def rename_strategy(settings: Settings, name: str, new_name: str) -> dict:

@@ -58,9 +58,11 @@ env/
 # hold your own strategies (rules + per-strategy settings) and your broker /
 # storage configuration, and are written by the portal on every save. Missing
 # files are fine - the app starts with defaults and the portal creates them.
-# Keep these rules in step with STRATEGY_RULES_FILE / ACCOUNT_SETTINGS_FILE.
-settings/strategies/*.json
-settings/account/*.json
+# Both live INSIDE data/ (so the "Runtime data" rule above already covers them) -
+# the explicit lines keep the intent obvious and in step with
+# STRATEGY_RULES_FILE / ACCOUNT_SETTINGS_FILE.
+data/strategies/*.json
+data/account/*.json
 
 # Database
 *.db

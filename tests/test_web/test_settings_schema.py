@@ -1,8 +1,8 @@
 """The two settings layers the portal still edits, and what is no longer there.
 
 Tools to configure the bot without hand-editing JSON: the per-strategy settings
-(``settings/strategies/store.json``, rendered by the strategy panel) and the
-per-account settings (``settings/account/account.json``, the 🏦 popup).
+(``data/strategies/store.json``, rendered by the strategy panel) and the
+per-account settings (``data/account/account.json``, the 🏦 popup).
 
 The global ``.env`` form used to be a third surface. It is gone — global settings are
 edited in ``.env`` itself — and the tests that pinned its behaviour went with it. What
@@ -157,7 +157,7 @@ def test_the_scheduler_section_is_gone():
 
 
 # ---------------------------------------------------------------------------
-# account settings (settings/account/account.json)
+# account settings (data/account/account.json)
 # ---------------------------------------------------------------------------
 def test_account_schema_groups_and_derived_folders():
     groups = config_service.account_sections(S(_env_file=None))
@@ -166,7 +166,7 @@ def test_account_schema_groups_and_derived_folders():
     by_key = {f["key"]: f for g in groups for f in g["fields"]}
     # All four Alpaca credential fields are secrets, and a secret is never echoed
     # back through the schema — this machine may or may not have keys configured
-    # (settings/account/account.json is local data), so the assertion is about the
+    # (data/account/account.json is local data), so the assertion is about the
     # MASK, not about the value being absent.
     for key in ("ALPACA_PAPER_API_KEY", "ALPACA_PAPER_API_SECRET",
                 "ALPACA_LIVE_API_KEY", "ALPACA_LIVE_API_SECRET"):

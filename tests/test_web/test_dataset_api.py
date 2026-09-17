@@ -173,6 +173,111 @@ def test_backfill_blocks_second_start(tmp_path, monkeypatch):
         time.sleep(0.05)
 
 
+def test_backfill_uses_the_period_not_the_legacy_start_date(tmp_path, monkeypatch):
+    """The window comes from HISTORICAL_LOOKBACK ("30 days") even when the legacy
+    free-text HISTORICAL_START_DATE is set: passing that date through ignored the
+    period the operator had just picked in the panel."""
+    st = Settings(
+        historical_data_dir=str(tmp_path),
+        instrument="NVDA",
+        historical_bar_size="15m",
+        historical_lookback="30d",
+        historical_start_date="2022-01-01",
+    )
+    seen = {}
+
+    def recording_fetch(settings, **kwargs):
+        seen.update(kwargs)
+        return _make_df(2)
+
+    monkeypatch.setattr(dataset_service, "fetch_candles", recording_fetch)
+    dataset_service.start_backfill(st)
+    for _ in range(100):
+        if not dataset_service._job_state()["running"]:
+            break
+        time.sleep(0.05)
+
+    assert seen["start_date"] != "2022-01-01"
+    expected = (
+        pd.Timestamp.now(tz=st.market_timezone).normalize() - pd.DateOffset(days=30)
+    ).strftime("%Y-%m-%d")
+    assert seen["start_date"] == expected
+
+
+def test_a_window_the_provider_cannot_fill_is_clamped_to_its_limit(tmp_path, monkeypatch):
+    """A stored pair that outlives the rule (here 30 days of 1-minute bars, which
+    yfinance serves for 7) is clamped instead of requested in full — asking for it
+    is what returned five trading days while the panel said "30 days"."""
+    st = Settings(
+        historical_data_dir=str(tmp_path),
+        instrument="NVDA",
+        historical_bar_size="1m",
+        historical_lookback="30d",
+    )
+    seen = {}
+    monkeypatch.setattr(
+        dataset_service, "fetch_candles", lambda settings, **kw: (seen.update(kw), _make_df(2))[1]
+    )
+    dataset_service.start_backfill(st)
+    for _ in range(100):
+        if not dataset_service._job_state()["running"]:
+            break
+        time.sleep(0.05)
+
+    expected = (
+        pd.Timestamp.now(tz=st.market_timezone).normalize() - pd.DateOffset(days=6)
+    ).strftime("%Y-%m-%d")
+    assert seen["start_date"] == expected
+
+
+# ---------------------------------------------------------------------------
+# service: re-download (window / bar size changed) — merge only, never delete
+# ---------------------------------------------------------------------------
+def _run_rebuild_sync(monkeypatch, settings, rows, bar, old_bar_size):
+    """Run the re-download to completion against a fake fetch."""
+    monkeypatch.setattr(
+        dataset_service, "fetch_candles", lambda settings, **kwargs: _make_df(rows)
+    )
+    dataset_service._run_rebuild(settings, settings.instrument, bar, "2024-01-01", None, old_bar_size)
+    assert dataset_service.rebuild_status()["last_error"] is None
+
+
+def test_rebuild_keeps_the_previous_bar_sizes_file(tmp_path, monkeypatch):
+    """Changing the bar size must not delete the file it is leaving behind.
+
+    A dataset file is named for instrument AND bar size and is SHARED with the
+    other strategies: a sibling on NVDA daily bars kept reading NVDA_1d.parquet
+    after this strategy switched to minute bars, so the file has to stay.
+    """
+    st = Settings(historical_data_dir=str(tmp_path), instrument="NVDA", historical_bar_size="1m")
+    save_dataset(st, _make_df(3), "NVDA", "1d")
+
+    _run_rebuild_sync(monkeypatch, st, 5, "1m", "1d")
+
+    assert (tmp_path / "NVDA_1d.parquet").exists(), "the previous bar size's history was deleted"
+    assert (tmp_path / "NVDA_1m.parquet").exists()
+
+
+def test_rebuild_merges_instead_of_replacing(tmp_path, monkeypatch):
+    """Re-downloading a window ADDS to the file: bars already on disk from an
+    earlier, longer download survive, and the overlapping ones are refreshed."""
+    st = Settings(historical_data_dir=str(tmp_path), instrument="NVDA", historical_bar_size="1d")
+    save_dataset(st, _make_df(3), "NVDA", "1d")  # 2024-01-01..03
+
+    _run_rebuild_sync(monkeypatch, st, 5, "1d", "1d")
+
+    assert dataset_service.dataset_status(st)["rows"] == 5, "the merge lost bars"
+
+
+def test_rebuild_leaves_other_instruments_alone(tmp_path, monkeypatch):
+    st = Settings(historical_data_dir=str(tmp_path), instrument="NVDA", historical_bar_size="1d")
+    save_dataset(st, _make_df(3), "AAPL", "1d")
+
+    _run_rebuild_sync(monkeypatch, st, 4, "1d", "1d")
+
+    assert (tmp_path / "AAPL_1d.parquet").exists()
+
+
 # ---------------------------------------------------------------------------
 # endpoints (TestClient; service mocked to avoid real state)
 # ---------------------------------------------------------------------------

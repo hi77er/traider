@@ -5,8 +5,8 @@ Three layers are merged into the ONE ``Settings`` object every module consumes:
 | Layer | File | Example keys |
 |-------|------|--------------|
 | Global | ``.env`` | ``OPENBB_PROVIDER``, ``OPENBB_API_KEY`` |
-| Account | ``settings/account/account.json`` | ``DATA_DIR``, ``ALPACA_PAPER_API_KEY``, ``BACKTEST_SLIPPAGE_PERCENT`` |
-| Strategy | ``settings/strategies/store.json`` | ``INSTRUMENT``, ``FEATURE_*``, ``MODEL_*``, ``GATE_*``, ``RISK_*`` |
+| Account | ``data/account/account.json`` | ``DATA_DIR``, ``ALPACA_PAPER_API_KEY``, ``BACKTEST_SLIPPAGE_PERCENT`` |
+| Strategy | ``data/strategies/store.json`` | ``INSTRUMENT``, ``FEATURE_*``, ``MODEL_*``, ``GATE_*``, ``RISK_*`` |
 
 **Precedence: strategy > account > .env > schema default.** Both JSON files are
 flat ``KEY -> raw value`` maps, so one loop overlays them onto the model:

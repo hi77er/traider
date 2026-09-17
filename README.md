@@ -83,7 +83,7 @@ flowchart LR
     subgraph dash["process 2 — python -m src.web.app"]
         W[FastAPI + dashboard]
     end
-    loop -.-> F[("settings/ · data/ · trading.json")]
+    loop -.-> F[("data/ · trading.json")]
     dash -.-> F
 ```
 
@@ -327,8 +327,8 @@ src/
   web/         FastAPI app, routes, services (incl. the trading lock), templates, static assets
   main.py      THE LOOP's entry point (the other process)
 tests/         pytest suite (offline)
-settings/      LOCAL DATA (gitignored): strategies/store.json + account/account.json
-data/          generated at runtime: historical Parquet, backtest results, the live tree,
+data/          generated at runtime (gitignored): the two JSON stores (account,
+               strategies), historical Parquet, backtest results, the live tree,
                and loop.lock (the lease)
 ```
 
@@ -341,6 +341,10 @@ Runtime data is not in the repository:
 
 ```
 data/historical/<SYMBOL>_<bar>.parquet         canonical OHLCV
+data/account/account.json                      the account file (broker keys, data folder,
+                                               backtest costs; written by the popup)
+data/strategies/store.json                     the strategy store (all strategies, active,
+                                               per-strategy settings; written by the portal)
 data/backtest_results/<strategy>/latest.json   trimmed view the panel reads
 data/backtest_results/<strategy>/runs/<id>.json full, self-describing run
 data/backtest_results/<strategy>/index.json    run-menu index
@@ -362,12 +366,14 @@ Three layers, two editors in the dashboard:
 | Layer | File | Edited from | Holds |
 |-------|------|-------------|-------|
 | **Global** | `.env` | by hand | data provider + keys, the paths of the two JSON stores, cloud storage (read by the dataset sync, off by default) and state persistence (unbuilt) |
-| **Account** | `settings/account/account.json` | 🏦 Account Settings | the Alpaca key pairs (paper + live), the data folder, backtest costs |
-| **Strategy** | `settings/strategies/store.json` | Strategy Configuration / Rules / Risk panels, plus the header dropdown for `EXECUTION_ENV` | instrument, bar size + history period, trading hours + exchange, features, gates, schedule, risk limits, rules, paper/live |
+| **Account** | `data/account/account.json` | 🏦 Account Settings | the Alpaca key pairs (paper + live), the data folder, backtest costs |
+| **Strategy** | `data/strategies/store.json` | Strategy Configuration / Rules / Risk panels, plus the header dropdown for `EXECUTION_ENV` | instrument, bar size + history period, trading hours + exchange, features, gates, schedule, risk limits, rules, paper/live |
 
 Precedence is **strategy > account > .env**, and the process environment still
 wins over `.env` (which is why a stray exported variable can silently override
-it). Both JSON files are LOCAL DATA: gitignored, and created on first save.
+it). Both JSON files are LOCAL DATA: gitignored, and created on first save. Both
+sit under `data/` (one rule ignores the whole runtime tree), so a new strategy or
+account file is never staged by accident.
 
 One key is stored per strategy but edited outside the panels: `EXECUTION_ENV`
 comes from the header dropdown. Saving a panel preserves it (the panel never

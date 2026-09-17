@@ -31,11 +31,31 @@ def resolve_history_window(settings: Settings) -> tuple:
     when no period is set. A day-based period is what intraday bar sizes use:
     the provider only serves a short trailing window of minute bars, so the
     window is measured in days there and in years for the coarser bars.
+
+    The window is CLAMPED to what the configured provider can actually serve (see
+    ``config.history.PROVIDER_MAX_DAYS``). A period longer than that is not a
+    slower download, it is a fetch that silently returns what exists:
+    ``30d`` of 1-minute bars came back as five trading days while the panel still
+    said "30 days". The panel no longer offers such a pair, so this only bites a
+    stored config, a hand-edited ``.env`` or a provider whose limits are unknown
+    here — and it says so in the log rather than quietly shortening the window.
     """
     end = settings.historical_end_date or None
     parts = history.period_parts(settings.historical_lookback)
     if parts:
         n, unit = parts
+        cap = history.provider_max_days(settings.openbb_provider, settings.historical_bar_size)
+        days = history.period_days(settings.historical_lookback)
+        if cap is not None and days is not None and days > cap:
+            logger.warning(
+                "%s serves at most %d days of %s bars — clamping the %s window to %dd",
+                settings.openbb_provider,
+                cap,
+                settings.historical_bar_size,
+                settings.historical_lookback,
+                cap,
+            )
+            n, unit = cap, history.UNIT_DAYS
         today = pd.Timestamp.now(tz=settings.market_timezone).normalize()
         offset = pd.DateOffset(days=n) if unit == history.UNIT_DAYS else pd.DateOffset(years=n)
         start = (today - offset).strftime("%Y-%m-%d")

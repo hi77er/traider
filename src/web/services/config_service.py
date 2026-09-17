@@ -2,10 +2,10 @@
 
 Two JSON layers, one popup each:
 
-- ``settings/account/account.json`` — what is true of this trading ACCOUNT: the
+- ``data/account/account.json`` — what is true of this trading ACCOUNT: the
   broker it trades through, where its data and backtest results live, the backtest
   defaults. Shared by every strategy (``GET/POST /api/v1/account``).
-- ``settings/strategies/store.json`` — anything a STRATEGY needs (see
+- ``data/strategies/store.json`` — anything a STRATEGY needs (see
   ``rules_service``).
 
 Global, infrastructure-level settings are no longer editable in the portal: they are
@@ -89,7 +89,7 @@ _LABELS: Dict[str, str] = {
     "MAX_EXPOSURE_PERCENT": "Max exposure (% of account)",
     "MAX_LOSS_PERCENT": "Max daily loss before halt (%)",
     "MAX_CONSECUTIVE_LOSSES": "Max consecutive losses",
-    # ── Account settings (settings/account/account.json) ──────────
+    # ── Account settings (data/account/account.json) ──────────
     "DATA_DIR": "Data folder",
     "HISTORICAL_DATA_DIR": "Historical data subfolder",
     "BACKTEST_DIR": "Backtest data subfolder",
@@ -376,7 +376,7 @@ STRATEGY_SCOPED_KEYS = (
     frozenset(k for _, keys in _STRATEGY_SCOPE for k in keys) | PANEL_HIDDEN_STRATEGY_KEYS
 )
 
-# ── Account settings (settings/account/account.json) ──────────────────────
+# ── Account settings (data/account/account.json) ──────────────────────
 # What is true of this trading ACCOUNT: the broker it trades through, where its
 # data and backtest runs are stored, and the backtest defaults. One file shared
 # by every strategy; precedence is strategy > account > .env.
@@ -458,6 +458,9 @@ def strategy_config_groups(settings: Settings, overrides: Optional[Dict[str, str
     bar_size = str((overrides or {}).get("HISTORICAL_BAR_SIZE") or "").strip() or getattr(
         settings, "historical_bar_size", ""
     )
+    # ...and the provider that will answer the request, because a period the
+    # provider cannot fill is not offered at all (it would come back short).
+    provider = getattr(settings, "openbb_provider", None)
     groups: List[dict] = []
     for name, keys in _STRATEGY_SCOPE:
         fields: List[dict] = []
@@ -491,11 +494,12 @@ def strategy_config_groups(settings: Settings, overrides: Optional[Dict[str, str
                 ]
             elif key == "HISTORICAL_LOOKBACK":
                 # The periods on offer are the ones THIS bar size may be fetched
-                # for, and the table travels with the field so the browser can
-                # repopulate the list the moment the bar size changes — the panel
-                # can then never show (or submit) a combination the rule forbids.
-                fields[-1]["options"] = history.periods_for_options(bar_size)
-                fields[-1]["options_by"] = history.periods_by_bar_size()
+                # for from the configured PROVIDER, and the table travels with the
+                # field so the browser can repopulate the list the moment the bar
+                # size changes — the panel can then never show (or submit) a
+                # combination the rule forbids.
+                fields[-1]["options"] = history.periods_for_options(bar_size, provider)
+                fields[-1]["options_by"] = history.periods_by_bar_size(provider)
                 fields[-1]["depends_on"] = "HISTORICAL_BAR_SIZE"
         groups.append({"name": name, "fields": fields})
     return groups
@@ -577,7 +581,7 @@ def _verify_spec(key: str) -> Optional[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Account settings (settings/account/account.json)
+# Account settings (data/account/account.json)
 # ---------------------------------------------------------------------------
 def account_sections(settings: Optional[Settings] = None) -> List[dict]:
     """Sections/fields of the account settings, with the value in force for each.

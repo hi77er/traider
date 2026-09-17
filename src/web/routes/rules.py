@@ -110,8 +110,9 @@ def select_strategy(body: StrategyCreate, settings: Settings = Depends(get_effec
 )
 def delete_strategy(body: StrategyDelete, settings: Settings = Depends(get_effective_settings_dep)) -> dict:
     """Soft-delete a named strategy (kept in the file, hidden from the panel).
-    When ``delete_data`` is set the instrument's dataset file(s) are removed too
-    (unless still referenced by another live strategy)."""
+    When ``delete_data`` is set the strategy instrument's dataset file(s) are
+    removed too — except the ones another live strategy still references, which
+    is decided per (instrument, bar size) pair."""
     return rules_service.delete_strategy(settings, body.name, delete_data=body.delete_data)
 
 

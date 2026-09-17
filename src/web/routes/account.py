@@ -1,4 +1,4 @@
-"""Account settings (``settings/account/account.json``) API endpoints.
+"""Account settings (``data/account/account.json``) API endpoints.
 
 These are the settings that belong to the trading ACCOUNT rather than to one
 strategy: the broker it trades through (Trading Account), where its data and

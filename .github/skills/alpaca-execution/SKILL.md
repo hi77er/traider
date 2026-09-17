@@ -67,7 +67,7 @@ Behaviour worth not re-litigating (each is asserted by a test):
 - **Resolution lives in `src/execution/config.py`** and nowhere else. It returns
   an `ExecutionTarget` (broker, env, base_url, key_id, secret, live) or raises
   `ExecutionConfigError`. Never re-derive the environment anywhere else.
-- Config split — **account-wide** (`settings/account/account.json`):
+- Config split — **account-wide** (`data/account/account.json`):
   `ALPACA_PAPER_API_KEY`, `ALPACA_PAPER_API_SECRET`,
   `ALPACA_LIVE_API_KEY`, `ALPACA_LIVE_API_SECRET`.
   **Per strategy** (stored in the strategy's `config`, edited from the **header

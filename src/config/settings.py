@@ -5,10 +5,10 @@ of them (see ``account.py``, ``effective.py`` and ``model/rules.py``):
 
 1. **Global** (``.env``) — how this machine reaches the outside world: the data
    provider and its keys, plus internal file paths.
-2. **Account** (``settings/account/account.json``) — what is true of this trading
+2. **Account** (``data/account/account.json``) — what is true of this trading
    account: broker credentials (Trading Account), backtest defaults and where
    data/results are stored.
-3. **Strategy** (``settings/strategies/store.json``) — how each strategy trades:
+3. **Strategy** (``data/strategies/store.json``) — how each strategy trades:
    instrument, bar size, features, model, gates, risk limits and schedule.
 
 Precedence: **strategy > account > .env > schema default**. Every module reads a
@@ -185,11 +185,11 @@ class Settings(BaseSettings):
     model_sell_threshold: float = Field(default=0.6, ge=0.0, le=1.0)
     model_retrain_interval_days: int = Field(default=30, ge=1)
     strategy_rules_file: str = Field(
-        default="settings/strategies/store.json",
+        default="data/strategies/store.json",
         description="JSON file holding the strategy store (all strategies + which one is active; MODEL_TYPE=rule_based)",
     )
     account_settings_file: str = Field(
-        default="settings/account/account.json",
+        default="data/account/account.json",
         description="JSON file holding the account-wide settings (broker, backtest defaults, data folder)",
     )
 
@@ -263,7 +263,7 @@ class Settings(BaseSettings):
     # with a different base URL and key pair, so switching between them is a
     # single triple swap (src/execution/config.py).
     # Credentials describe this trading ACCOUNT, so they live in the account
-    # layer (settings/account/account.json) — one file shared by every strategy.
+    # layer (data/account/account.json) — one file shared by every strategy.
     # The MODE (paper vs live) is per-STRATEGY, so a strategy still being
     # developed can run against the paper account while a proven one trades live.
     alpaca_paper_api_key: Optional[str] = Field(default=None, description="Alpaca PAPER API key id")

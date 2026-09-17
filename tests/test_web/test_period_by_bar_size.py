@@ -2,9 +2,11 @@
 
 A window is only useful if the bar size can fill it: a finer candle cannot reach
 as far back, because the data provider stops serving intraday bars after a short
-trailing window. So the period is offered as a function of the bar size —
-1-minute bars reach 15–30 days, hourly bars 1–2 years, daily bars 2–5 years — and
-the pair must be chosen in that order.
+trailing window — and how short depends on the provider answering. So the period
+is offered as a function of the bar size AND the configured provider: with the
+default yfinance, 1-minute bars reach 7 days (not the 15/30 the static table
+lists), hourly bars 1–2 years, daily bars 2–5 years, and the pair must be chosen
+in that order.
 
 The server sends the list for the current bar size AND the whole table, and the
 real blocks are lifted out of `app.js` and run under node so the assertions are
@@ -34,17 +36,18 @@ pytestmark = pytest.mark.skipif(
     shutil.which("node") is None, reason="node is required to exercise the period dropdown"
 )
 
-# The table the feature is: what the server offers for each bar size.
+# The table the feature is: what the server offers for each bar size, for the
+# configured provider (yfinance by default — see history.PROVIDER_MAX_DAYS).
 PERIODS_BY_BAR_SIZE = {
-    "1m": ["15d", "30d"],
-    "2m": ["30d", "60d"],
+    "1m": ["6d"],
+    "2m": ["30d"],
     "5m": ["30d", "60d"],
     "15m": ["30d", "60d"],
     "1h": ["1y", "2y"],
     "2h": ["1y", "2y"],
-    "4h": ["1y", "2y", "3y"],
-    "8h": ["1y", "2y", "3y"],
-    "12h": ["1y", "2y", "3y"],
+    "4h": ["1y", "2y"],
+    "8h": ["1y", "2y"],
+    "12h": ["1y", "2y"],
     "1d": ["2y", "3y", "4y", "5y"],
 }
 BAR_LABELS = {
@@ -123,14 +126,14 @@ const window = {};
 // A dependent field's schema: the list for the CURRENT bar size (what the server
 // sends as `options`), plus the whole table, plus the fact that an unlisted bar
 // size falls back to every period rather than to none.
+// Derived from the table itself, so adding or capping a period cannot leave this
+// list (and the test that uses it) asserting a window no bar size offers.
 const ALL_OPTIONS = (function () {
   const seen = {};
   Object.keys(OPTIONS_BY_BAR_SIZE).forEach(function (bar) {
     OPTIONS_BY_BAR_SIZE[bar].forEach(function (o) { seen[o.value] = o; });
   });
-  return ["15d", "30d", "60d", "1y", "2y", "3y", "4y", "5y"].map(function (v) {
-    return seen[v];
-  });
+  return Object.keys(seen).map(function (v) { return seen[v]; });
 })();
 const FIELD = {
   key: "HISTORICAL_LOOKBACK",
@@ -194,8 +197,8 @@ w.bar.change();
 out.narrowed = { selected: w.period.value, values: plainValues(w.period),
                  labels: plainLabels(w.period) };
 
-// 4. A VALUE THE NEW BAR SIZE STILL ALLOWS is left alone (4h -> 8h keeps 3 years).
-w = wire("4h", "3y");
+// 4. A VALUE THE NEW BAR SIZE STILL ALLOWS is left alone (4h -> 8h keeps 2 years).
+w = wire("4h", "2y");
 w.bar.value = "8h";
 w.bar.change();
 out.preserved = { selected: w.period.value };
@@ -272,9 +275,9 @@ def test_the_periods_offered_are_the_bar_sizes_own(period_results):
 def test_changing_the_bar_size_swaps_the_periods(period_results):
     """No round trip: the whole table travels with the field."""
     got = period_results["afterMinute"]
-    assert got["values"] == ["15d", "30d"]
-    assert got["labels"] == ["15 days", "30 days"]
-    assert got["selected"] == "15d"
+    assert got["values"] == ["6d"]
+    assert got["labels"] == ["6 days"]
+    assert got["selected"] == "6d"
 
 
 def test_a_period_the_new_bar_size_cannot_use_moves_onto_the_list(period_results):
@@ -287,7 +290,7 @@ def test_a_period_the_new_bar_size_cannot_use_moves_onto_the_list(period_results
 
 
 def test_a_period_that_is_still_allowed_is_left_alone(period_results):
-    assert period_results["preserved"]["selected"] == "3y"
+    assert period_results["preserved"]["selected"] == "2y"
 
 
 def test_a_bar_size_the_table_does_not_describe_keeps_every_period(period_results):
