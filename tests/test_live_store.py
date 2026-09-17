@@ -261,7 +261,16 @@ def test_a_record_of_numpy_and_timestamp_values_still_writes(tmp_path):
 
 def test_a_tick_record_carries_the_core_keys_and_the_day(tmp_path):
     settings = _s(tmp_path)
-    record = _record(settings, bar="2026-09-16T13:00:00-04:00", signal="BUY", order_ids=["o1"])
+    # The moment is passed in rather than defaulted to "now": asserting the day that the
+    # wall clock happens to be on makes the test pass until midnight and then fail forever,
+    # which is what this line did the first time the date rolled over.
+    record = _record(
+        settings,
+        at=datetime(2026, 9, 16, 13, 0, tzinfo=timezone.utc),
+        bar="2026-09-16T13:00:00-04:00",
+        signal="BUY",
+        order_ids=["o1"],
+    )
     for key in (
         "at", "day", "strategy", "env", "action", "reason", "bar", "signal",
         "intents", "adopted", "position", "order_ids",
