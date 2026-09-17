@@ -25,6 +25,7 @@ Three things this driver owns, because they are genuinely live-only:
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -49,9 +50,36 @@ from src.strategy.state import StrategyState
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["LiveDriver", "NotEnoughHistory"]
+__all__ = ["LiveDriver", "NotEnoughHistory", "order_id_for"]
 
 STATE_FILE = "strategy_state.json"
+
+#: Alpaca caps a client order id at 48 characters. Ours is 31, with room to spare.
+ORDER_ID_PREFIX = "traider"
+ORDER_ID_NAME_CHARS = 12
+ORDER_ID_DIGEST_CHARS = 10
+
+
+def order_id_for(name: str, env: str, bar_key: str, index: int) -> str:
+    """The broker's name for one order: the SAME string every time this bar is decided.
+
+    This is an idempotency key, and the reason it is derived rather than generated is the
+    crash in the middle of a tick. The driver saves its state LAST, deliberately, so a tick
+    that dies after submitting leaves the bar undecided and retryable — but "retryable" is
+    only safe if the retry is the SAME order. Alpaca deduplicates on the client order id, so
+    a fixed id turns a possible second position into a refused duplicate, and a fresh uuid
+    would do the opposite. It also makes an order in the broker's own dashboard traceable
+    back to a strategy and a bar without the local log, which is the one thing a deleted
+    log cannot otherwise tell you.
+
+    ``hashlib`` rather than ``hash()``: the latter is randomised per process, so it would
+    produce a different id after a restart — exactly when the id has to be stable.
+    """
+    digest = hashlib.sha256(
+        f"{name}|{env}|{bar_key}|{int(index)}".encode("utf-8")
+    ).hexdigest()[:ORDER_ID_DIGEST_CHARS]
+    label = artifacts.slug(name)[:ORDER_ID_NAME_CHARS]
+    return f"{ORDER_ID_PREFIX}-{label}-{digest}"
 
 
 class NotEnoughHistory(RuntimeError):
@@ -274,8 +302,13 @@ class LiveDriver:
 
         intents = self.engine.step(self.state, fill_bar, act)
         done = []
-        for intent in intents:
-            done.append(self._act(fill_bar, intent))
+        for index, intent in enumerate(intents):
+            # Named from the SIGNAL bar, not the fill bar: it is the bar a reader will look
+            # the order up against, and it is the one the local record names too. The index
+            # separates the orders one bar can produce — a close followed by an open.
+            done.append(
+                self._act(fill_bar, intent, order_id_for(self.name, self.env, bar_key, index))
+            )
 
         self.state.bar_index = fill_bar.index
         self.state.last_decided_bar = bar_key
@@ -286,13 +319,13 @@ class LiveDriver:
             report["adopted"] = adopted
         return report
 
-    def _act(self, bar: Bar, intent: Intent) -> Dict[str, Any]:
+    def _act(self, bar: Bar, intent: Intent, client_order_id: str = "") -> Dict[str, Any]:
         """Submit one intent and book what came back."""
         if intent.action == SKIP:
             self.engine.settle(self.ledger, self.state, bar, intent)
             return {"intent": intent.action, "reason": intent.reason, "skipped": True}
 
-        fill = self._submit(intent)
+        fill = self._submit(intent, client_order_id)
         # What the broker really paid wins over the expected price. For the simulated
         # broker they are the same by construction; for a real one they can differ, and
         # that difference is the honest cost of trading rather than a modelling choice.
@@ -322,14 +355,14 @@ class LiveDriver:
             }
         return {"intent": intent.action, "reason": intent.reason}
 
-    def _submit(self, intent: Intent) -> Fill:
+    def _submit(self, intent: Intent, client_order_id: str = "") -> Fill:
         if self.broker is None:
             # No broker wired (a dry run that only wants decisions): the expectation is
             # the fill, which is exactly what the simulated broker would say.
             return Fill(price=intent.expected_price, detail="no broker wired")
         if self.dry_run and intent.action == CLOSE and intent.reason == "signal":
             logger.info("[dry run] would close %s", self.name)
-        return self.broker.submit(intent)
+        return self.broker.submit(intent, client_order_id=client_order_id or None)
 
     def _reprice_entry(self, price: float) -> None:
         """Adopt the real fill price, and re-derive the levels from it.

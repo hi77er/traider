@@ -116,8 +116,18 @@ class Broker(Protocol):
     def position(self) -> BrokerPosition:
         """The position the broker holds right now."""
 
-    def submit(self, intent: Intent) -> Fill:
-        """Place the order ``intent`` describes and report the fill."""
+    def submit(self, intent: Intent, client_order_id: Optional[str] = None) -> Fill:
+        """Place the order ``intent`` describes and report the fill.
+
+        ``client_order_id`` is the driver's name for this order, derived from what the
+        order IS — the strategy, the account, the bar and its position among that bar's
+        intents (see ``LiveDriver.order_id_for``). A real broker uses it as an idempotency
+        key, which is what makes re-deciding a bar after a crash safe rather than a way to
+        double a position; a simulated one has nothing to deduplicate against and ignores
+        it. It is on the interface rather than read off the intent because naming an order
+        is a broker's concern, and because the engine's intents are the same in a backtest,
+        where no such id exists.
+        """
 
     def close(self, reason: str = "") -> Fill:
         """Flatten whatever is held (used when trading is switched off)."""
@@ -160,7 +170,10 @@ class SimulatedBroker:
             short=self.quantity < 0,
         )
 
-    def submit(self, intent: Intent) -> Fill:
+    def submit(self, intent: Intent, client_order_id: Optional[str] = None) -> Fill:
+        # ``client_order_id`` is deliberately unused: there is no order to deduplicate, and
+        # a simulated fill is a function of the intent alone.
+        del client_order_id
         if intent.skipped or intent.expected_price is None:
             return Fill(status=NO_FILL, detail="nothing to fill")
         price = float(intent.expected_price)

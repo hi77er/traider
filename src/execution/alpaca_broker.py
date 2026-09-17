@@ -194,13 +194,19 @@ class AlpacaBroker:
         """What the broker holds. Raises if it cannot be asked — see the module docstring."""
         return broker_position(self.executor.position(self.symbol))
 
-    def submit(self, intent: Intent) -> Fill:
-        """Place the order an intent describes. Never raises; reports instead."""
+    def submit(self, intent: Intent, client_order_id: Optional[str] = None) -> Fill:
+        """Place the order an intent describes. Never raises; reports instead.
+
+        ``client_order_id``, when given, is the driver's idempotency key for this order —
+        the same string every time the same bar is decided. Alpaca deduplicates on it, so a
+        tick that crashed between sending an order and recording it cannot place a second
+        one: the retry is the SAME order, not another one.
+        """
         if intent is None or intent.skipped or intent.action in (SKIP, NONE):
             return Fill(status=NO_FILL, detail="nothing to submit")
         try:
             if intent.action == OPEN:
-                return self._open(intent)
+                return self._open(intent, client_order_id=client_order_id)
             if intent.action == CLOSE:
                 return self._close(intent)
         except OrderRefused as exc:
@@ -269,7 +275,7 @@ class AlpacaBroker:
         return report
 
     # -- entries and exits -------------------------------------------------
-    def _open(self, intent: Intent) -> Fill:
+    def _open(self, intent: Intent, *, client_order_id: Optional[str] = None) -> Fill:
         price = _to_float(intent.expected_price)
         if not price:
             return Fill(status=REJECTED, detail="no price on the intent to size against")
@@ -305,6 +311,7 @@ class AlpacaBroker:
             stop_loss_price=stop if bracket else None,
             take_profit_price=take if bracket else None,
             reference_price=price,
+            client_order_id=client_order_id,
         )
         return self._record(result, side="SHORT" if intent.short else "LONG", quantity=quantity)
 

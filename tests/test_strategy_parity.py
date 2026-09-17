@@ -422,7 +422,7 @@ def test_a_broker_that_fills_elsewhere_moves_the_stop_with_it(tmp_path):
     class Worse(SimulatedBroker):
         """Fills 1% below the expectation on entries — a plausible bad fill."""
 
-        def submit(self, intent):
+        def submit(self, intent, client_order_id=None):
             fill = super().submit(intent)
             if fill.filled and intent.action == "open":
                 return Fill(status="filled", price=float(fill.price) * 0.99, quantity=1.0)
@@ -458,7 +458,7 @@ def test_the_resting_exits_are_moved_to_the_levels_the_real_fill_implies(tmp_pat
             super().__init__()
             self.asked = None
 
-        def submit(self, intent):
+        def submit(self, intent, client_order_id=None):
             fill = super().submit(intent)
             if fill.filled and intent.action == "open":
                 return Fill(status="filled", price=float(fill.price) * 1.01, quantity=1.0)

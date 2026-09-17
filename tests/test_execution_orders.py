@@ -731,12 +731,107 @@ def test_a_live_tick_places_a_bracketed_order_through_the_shared_engine(tmp_path
     assert payload["side"] == "buy"
     assert payload["order_class"] == "bracket", "the protection travels with the entry"
     assert "stop_loss" in payload and "take_profit" in payload
+    assert payload["client_order_id"].startswith("traider-TEST-"), payload["client_order_id"]
 
     # The position is recorded from the FILL, not from the expectation.
     assert driver.state.position is not None
     assert driver.state.position.entry_price == 110.50
     assert (tmp_path / "state.json").exists(), "the tick is remembered, so a restart cannot re-fire it"
     assert driver.on_bar_closed(frame.iloc[: need + 1], next_bar=candles[need + 1])["action"] == "noop"
+
+
+# ---------------------------------------------------------------------------
+# the name a broker deduplicates on
+# ---------------------------------------------------------------------------
+def test_the_order_id_is_stable_and_says_what_it_is():
+    """Derived, not generated — and readable enough to find in Alpaca's own dashboard."""
+    from src.strategy.live import order_id_for
+
+    bar = "2026-09-17T13:30:00+00:00"
+    base = order_id_for("Epsilon", "paper", bar, 0)
+
+    assert base == order_id_for("Epsilon", "paper", bar, 0), "stable across processes"
+    assert base != order_id_for("Epsilon", "paper", "2026-09-17T14:30:00+00:00", 0)
+    assert base != order_id_for("Epsilon", "paper", bar, 1), "one bar can produce two orders"
+    assert base != order_id_for("Beta", "paper", bar, 0)
+    assert base != order_id_for("Epsilon", "live", bar, 0), "paper and live are different accounts"
+    assert "Epsilon" in base, "an order in the broker's list should say whose it was"
+
+
+def test_the_order_id_stays_inside_alpacas_limit():
+    """48 characters, which a strategy name alone can blow through."""
+    from src.strategy.live import order_id_for
+
+    long_name = "Alpha - SXR8.DE with a really very long descriptive name indeed"
+    for index in range(4):
+        identifier = order_id_for(long_name, "paper", "2026-09-17T13:30:00+00:00", index)
+        assert len(identifier) <= 48, identifier
+        assert identifier.startswith("traider-")
+
+
+def test_a_bar_decided_again_after_a_crash_names_the_SAME_order(tmp_path):
+    """Why the id is derived rather than a fresh uuid, in one test.
+
+    The driver saves its state LAST so a tick that dies mid-way leaves the bar undecided
+    and retryable — but retryable is only SAFE if the retry is the same order. Alpaca
+    deduplicates on the client order id, so a derived id turns the second submission into a
+    refused duplicate, where a generated one would open a second position.
+
+    The two drivers here are two processes: the first crashed without saving anything, so
+    the second has no memory of the bar and decides it again.
+    """
+    import pandas as pd
+
+    from src.data import dataset
+    from src.strategy import StrategyConfig, StrategyEngine
+    from src.strategy.broker import SimulatedBroker
+    from src.strategy.live import LiveDriver, order_id_for
+
+    class AlwaysBuy:
+        def evaluate_frame(self, df):
+            return df.assign(signal="BUY")
+
+    class Recording(SimulatedBroker):
+        def __init__(self):
+            super().__init__()
+            self.names = []
+
+        def submit(self, intent, client_order_id=None):
+            self.names.append(client_order_id)
+            return super().submit(intent)
+
+    settings = _settings(instrument="AAPL", historical_bar_size="1h")
+    engine_settings = StrategyConfig.from_settings(settings, slippage=0.0, commission=0.0)
+    need = LiveDriver(settings=settings, engine=StrategyEngine(engine_settings), generator=None).required_bars
+    frame = pd.DataFrame(
+        {
+            "open": [100.0 + i for i in range(need + 2)],
+            "high": [101.0 + i for i in range(need + 2)],
+            "low": [99.0 + i for i in range(need + 2)],
+            "close": [100.5 + i for i in range(need + 2)],
+            "volume": [1_000] * (need + 2),
+        },
+        index=pd.date_range("2026-09-14 09:30", periods=need + 2, freq="1h"),
+    )
+
+    brokers = []
+    for attempt in range(2):
+        broker = Recording()
+        brokers.append(broker)
+        LiveDriver(
+            settings=settings,
+            engine=StrategyEngine(engine_settings),
+            generator=AlwaysBuy(),
+            broker=broker,
+            state_path=tmp_path / f"state-{attempt}.json",
+            name="Epsilon",
+        ).on_bar_closed(frame.iloc[: need + 1])
+
+    first, second = brokers
+    assert first.names and first.names == second.names, "the retry is the same order, not another"
+    assert first.names[0] is not None, "the driver named the order rather than leaving it to the executor"
+    signal_bar = dataset.bar_key(settings, frame.index[need])
+    assert first.names[0] == order_id_for("Epsilon", "paper", signal_bar, 0)
 
 
 # ---------------------------------------------------------------------------
