@@ -78,12 +78,13 @@ def create_strategy(body: StrategyCreate, settings: Settings = Depends(get_effec
         # environment, and miss the position entirely. Blocking the switch is what keeps
         # "flatten first" reachable from the screen where the position is actually visible.
         #
-        # ``active_only``: the position that matters is one in the account BEING TRADED. A
-        # key for the other account that the broker rejects is not a reason to freeze the
-        # picker — that account is not touched by a switch, and refusing for it locked
-        # strategy changes permanently with the remedy nowhere in the message.
+        # ``unreadable_blocks=False``: a 401 is a verdict about a KEY, not about a
+        # position, and a switch places no order anywhere. A dead key must never freeze
+        # the picker — it cannot be the reason an order lands somewhere unreadable, its
+        # remedy is elsewhere, and arming is already refused while an account is blind.
         Depends(trading_service.require_flat(
-            "The active strategy cannot be changed while a position is open", active_only=True,
+            "The active strategy cannot be changed while a position is open",
+            unreadable_blocks=False,
         )),
     ],
 )
@@ -97,11 +98,13 @@ def select_strategy(body: StrategyCreate, settings: Settings = Depends(get_effec
     dependencies=[
         Depends(require_trading_off),
         # Deleting the strategy that owns a position would leave nothing that knows how to
-        # close it — the instrument and the environment go with the strategy. ``active_only``
-        # for the same reason as the switch: a position in the account being traded is the
-        # one that would be abandoned, and an unreadable account elsewhere is not.
+        # close it — the instrument and the environment go with the strategy.
+        # ``unreadable_blocks=False`` for the same reason as the switch: a rejected key for
+        # an account we cannot see into is not evidence of a position, and it is not
+        # something the delete can fix or worsen.
         Depends(trading_service.require_flat(
-            "A strategy cannot be deleted while a position is open", active_only=True,
+            "A strategy cannot be deleted while a position is open",
+            unreadable_blocks=False,
         )),
     ],
 )

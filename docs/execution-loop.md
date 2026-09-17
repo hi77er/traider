@@ -120,19 +120,22 @@ Consequences:
   closed by its bracket is simply gone by the next attempt; nothing has to tick while
   trading is OFF for that to be true.
 - **`require_flat` guards the three orphan-prone actions** — `/execution/env`,
-  `/rules/select`, `/rules/delete` — with a 5–10s positions cache. An unreachable
-  broker is a refusal **with the reason**, never treated as flat.
-- **Which account has to be proven flat depends on the action.** A position that can be
-  **seen** blocks all three, in either account: it is what would be orphaned, and which
-  account it sits in does not change that. What differs is the account that must be
-  **readable**. Changing or deleting a strategy only ever moves a strategy, so it asks
-  about the environment being **traded** (`active_only=True`); it refuses a position in
-  either account, but a rejected key for the *other* account is not a reason to freeze the
-  strategy picker — that account is not touched by a switch, and the remedy was nowhere on
-  the screen that reported it. Arming (`/trading/on`) and **`/execution/env` keep the
-  strict rule**, because they can put orders in the other account, so "we could not look"
-  has to stay a refusal for them. The degraded state is never hidden: the header pill keeps
-  saying `live unreadable` while the switch is allowed.
+  `/rules/select`, `/rules/delete` — with a 5–10s positions cache.
+- **A seen position blocks all three, in either account.** A position that can be seen is
+  what would be orphaned; which account it sits in does not change that, and it is reported
+  first because it is the actionable one.
+- **A 401 is a verdict about a key, not about a position, and it does not block a strategy
+  change.** `/rules/select` and `/rules/delete` pass `unreadable_blocks=False`: they place
+  no orders in any account, so "we could not look" is not the hazard there that it is for
+  arming. A switch cannot be the reason an order lands somewhere unreadable; the remedy for
+  a dead key is elsewhere; **arming is refused anyway** while an account is blind, so
+  nothing is made safe by blocking the switch too; and a rejected key never fixes itself,
+  so a false positive never clears on retry.
+- **Arming and `/execution/env` keep the strict rule** and treat an unreadable account as a
+  refusal **with the reason**, because those two DO reach an account whose contents are
+  unknown. The honest cost of the split: if a position really is sitting behind a dead key,
+  a switch leaves it unmanaged — but it was already unmanaged the moment the key stopped
+  working, and the pill says `… unreadable` either way, so the condition stays on screen.
 ### When is an account flat? Three answers, and only three
 
 The gate fails closed, but not blindly. "Unreachable" and "empty" look identical from the
@@ -142,12 +145,14 @@ outside, so the distinction is made from the **configuration** rather than from 
 | --- | --- | --- |
 | No credentials for that environment | no order could have been placed there | **allow** — flat by construction |
 | Credentials configured, broker answers | what is actually held | allow if flat, refuse if not |
-| Credentials configured, broker unreachable | nothing | **refuse**, with the reason¹ |
+| Credentials configured, broker unreachable | nothing | **refuse** for arming and `/execution/env`¹; **allow** for a strategy change or delete |
 | Credentials half-configured (key, no secret) | nothing | **refuse**, with the reason |
 
-¹ Except for the **other** account when the action is a strategy change or delete: a switch
-moves a strategy, not an order into that account, so it asks only about the environment
-being traded. Arming and the environment switch ask about both.
+¹ A 401 says the key does not work, not that a position exists. Arming and the environment
+switch act on the account, so they refuse. Changing or deleting a strategy places no order,
+so a dead key must not freeze the picker — it cannot be the reason an order lands somewhere
+unreadable, and refusing would never clear on retry. A position that can be **seen** blocks
+every one of these actions, in either account.
 
 "Flat by construction" is a proof, not an assumption: it is what keeps a data-only install
 (the README's default) able to switch strategies without Alpaca keys at all. Everything

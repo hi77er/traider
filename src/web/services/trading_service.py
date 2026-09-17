@@ -71,37 +71,43 @@ __all__ = [
 
 
 # -- the exposure gate -----------------------------------------------------
-def flat_blocker(settings, *, action: str, active_only: bool = False) -> Optional[str]:
+def flat_blocker(settings, *, action: str, unreadable_blocks: bool = True) -> Optional[str]:
     """Why this action must not proceed, or ``None`` when nothing is in the way.
 
     ``action`` leads the message because the same check guards four different things, and
     "Trading cannot start" is the wrong sentence for a strategy switch.
 
-    It refuses on exactly two things: a position that is open, and an account that could
-    not be read. Both are decisions not to trade blind — see
-    ``src/execution/positions`` for why "no credentials" is provably flat while
-    "unreachable" is not.
+    It refuses on two things: a position that is open, and — for the actions that can
+    reach an account — an account that could not be read. The second is a decision not to
+    trade blind; see ``src/execution/positions`` for why "no credentials" is provably flat
+    while "unreachable" is not.
 
-    ``active_only`` narrows the SECOND of those to the environment being traded, and it
-    exists because a broken key for an account this screen is not pointed at is not a
-    reason to freeze it. Changing the active strategy and deleting a strategy cannot strand
-    a position in an account the bot is not trading: the danger there is a position in the
-    account in play, whose flatten button would follow the switch. Refusing because the
-    OTHER account could not be read blocked those actions permanently, with the remedy
-    (fix or clear the other account's keys) nowhere in the message — a false positive that
-    locked the picker for good.
+    ``unreadable_blocks=False`` drops the second rule and keeps only the first. Two
+    actions use it — changing the active strategy and deleting one — because **a 401 is a
+    verdict about a key, not about a position**, and those two actions place no orders in
+    any account:
 
-    ⚠️ It does NOT narrow the held rule, and it must not: a position you can see, in either
-    account, is exactly what the switch would leave behind. Arming (``turn_on``) and
-    switching the environment keep the strict rule, because both of those DO reach an
-    account whose contents are unknown.
+    * they cannot be the reason an order goes somewhere unreadable, so "we could not look"
+      is not the hazard it is for arming;
+    * the operator's remedy is the same either way (repair or clear the keys), and refusing
+      does not make an invisible position visible or manageable — it only adds a second
+      problem to the first;
+    * arming is *already* refused while an account is unreadable, so the bot cannot open or
+      close anything in the meantime. The position is not made safe by the refusal.
+    * and refusing is permanent until someone edits credentials: a rejected key never fixes
+      itself, so a false positive here does not clear on retry.
+
+    The honest cost: if a position really is sitting in an account whose key is dead, a
+    switch leaves it unmanaged. It was already unmanaged the moment the key stopped
+    working, and the pill says ``… unreadable`` so the condition stays on screen.
+
+    ⚠️ Neither flag narrows the HELD rule, and nothing may: a position that can be seen, in
+    EITHER account, is exactly what the switch or delete would leave behind — the flatten
+    button follows the strategy. Arming (``turn_on``) and switching the environment keep the
+    strict rule, because both of those DO reach an account whose contents are unknown.
     """
     states = positions.snapshots(settings)
     held = positions.held(states)
-    blind = positions.unknown(states)
-    if active_only:
-        active = str(getattr(settings, "execution_env", "paper") or "paper").strip().lower()
-        blind = [state for state in blind if state.env == active]
 
     if held:
         # The tail gives the operator both ways out, and both are real: flattening is
@@ -112,16 +118,19 @@ def flat_blocker(settings, *, action: str, active_only: bool = False) -> Optiona
             "(Stop trading & flatten), or wait: a resting bracket may close the position "
             "on its own."
         )
-    if blind:
-        why = "; ".join(p.reason for p in blind)
-        return (
-            f"{action} — {why}, so what the account holds is unknown. Refusing rather "
-            "than assuming it is flat."
-        )
+
+    if unreadable_blocks:
+        blind = positions.unknown(states)
+        if blind:
+            why = "; ".join(p.reason for p in blind)
+            return (
+                f"{action} — {why}, so what the account holds is unknown. Refusing rather "
+                "than assuming it is flat."
+            )
     return None
 
 
-def require_flat(action: str, *, active_only: bool = False):
+def require_flat(action: str, *, unreadable_blocks: bool = True):
     """A FastAPI dependency refusing ``action`` while a position is open.
 
     A factory rather than a plain function so each route can say what it is refusing —
@@ -133,13 +142,13 @@ def require_flat(action: str, *, active_only: bool = False):
     strand a position. The lock follows EXPOSURE, not the switch: it is holding something
     that matters, not whether trading is armed.
 
-    ``active_only`` is passed on to :func:`flat_blocker`: true for the actions that cannot
-    strand a position in an account they do not touch (changing or deleting a strategy),
-    false for the ones that can (arming, changing the environment).
+    ``unreadable_blocks`` is passed on to :func:`flat_blocker`: false for the two actions
+    that place no orders anywhere (changing or deleting a strategy), true for the ones that
+    reach an account (arming, changing the environment).
     """
 
     def dependency(settings=Depends(get_effective_settings_dep)) -> None:
-        blocker = flat_blocker(settings, action=action, active_only=active_only)
+        blocker = flat_blocker(settings, action=action, unreadable_blocks=unreadable_blocks)
         if blocker:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=blocker)
 
