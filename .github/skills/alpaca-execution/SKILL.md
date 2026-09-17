@@ -128,7 +128,7 @@ read, keep `credentials.keys_for()` the single place that maps an environment to
 key pair — the check and the executor must never disagree about which key is in
 play.
 
-**A stale process is a silent gate failure.** `src/web/services/freshness.py` watches
+**A stale process is a silent gate failure.** `src/config/freshness.py` watches
 `credentials.py` and `trading_service.py` by mtime and the trading payload reports
 whether the running server is older than them. Trust it: a server started before an
 edit enforces the previous rules while every test passes, because tests import the

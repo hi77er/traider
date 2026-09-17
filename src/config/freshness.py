@@ -1,4 +1,4 @@
-"""Is the running server still the code that is on disk?
+"""Is the running process still the code that is on disk?
 
 Python loads a module once. Edit `credentials.py` or `trading_service.py`, forget to
 restart uvicorn, and the process keeps serving the PREVIOUS gate while the dashboard,
@@ -12,6 +12,14 @@ state, and says so when they have moved on without it. The check is deliberately
 narrow — it covers the gate, not the whole tree — because that is the part where
 "the code I am running is not the code I wrote" has consequences beyond a stale
 button label.
+
+This lives in ``src/config``, below both layers, for the same reason
+``trading_state`` does: it has two readers. The dashboard asks whenever it builds
+the trading payload; the **execution loop** asks before a tick, because a loop whose
+source has moved on is running a strategy nobody is looking at. The watched paths
+are an argument, so a second reader adds its own set without disturbing the first —
+and the default set may name a file in ``src/web`` because those are *paths*, not
+imports. This module must keep importing nothing from the project.
 
 This is a development affordance, not a security boundary: it tells the operator to
 restart. It cannot make an old process run new code.
@@ -29,8 +37,8 @@ WATCHED: tuple = (
     "src/web/services/trading_service.py",
 )
 
-# src/web/services/freshness.py -> src/web/services -> src/web -> src -> repo root
-ROOT = Path(__file__).resolve().parents[3]
+# src/config/freshness.py -> src/config -> src -> repo root
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def _mtime(path: Path) -> Optional[float]:

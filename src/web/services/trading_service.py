@@ -38,6 +38,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import Depends, HTTPException, status
 
+from src.config import freshness
 from src.config.effective import active_strategy_name, get_effective_settings_dep
 from src.config.trading_state import (
     STATE_FILENAME,  # noqa: F401  (re-exported for existing callers)
@@ -51,7 +52,7 @@ from src.execution import credentials, positions
 from src.execution.alpaca_client import AlpacaError
 from src.execution.alpaca_executor import OrderRefused
 from src.execution.config import ExecutionConfigError, execution_status
-from src.web.services import config_service, freshness
+from src.web.services import config_service
 
 logger = logging.getLogger(__name__)
 

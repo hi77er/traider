@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import os
 
-from src.web.services import freshness
+from src.config import freshness
 
 
 def _touch(path, when: float) -> None:

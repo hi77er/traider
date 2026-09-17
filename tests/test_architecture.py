@@ -167,6 +167,23 @@ def test_the_artefact_helpers_are_below_every_layer() -> None:
     )
 
 
+def test_the_freshness_check_is_below_both_layers() -> None:
+    """``src/config/freshness`` imports nothing from the project, at all.
+
+    It lived in ``src/web/services`` until the loop needed to ask the same question
+    ("is the code on disk still the code I am running?") before a tick — and
+    ``test_nothing_outside_the_web_layer_imports_the_web_layer`` forbids that import,
+    correctly, since the answer is a handful of ``stat`` calls and needs no web server.
+
+    A project import here would put it back inside one of its two readers. It may still
+    *name* files in ``src/web`` in ``WATCHED``: those are paths it stats, not imports,
+    and that distinction is the whole trick.
+    """
+    assert GRAPH["src.config.freshness"] == set(), (
+        f"freshness.py must stay dependency-free, found: {sorted(GRAPH['src.config.freshness'])}"
+    )
+
+
 def test_the_output_helpers_are_the_same_objects_everywhere() -> None:
     """Both stores must call the SAME functions, not equal-looking copies.
 
