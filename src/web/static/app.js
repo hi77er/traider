@@ -1036,6 +1036,10 @@ async function loadTrading() {
   renderEnvSelect(d);
   renderTradingControls(d);
   renderTradingPanel(d);
+  renderOpenPill(d);
+  // Local files only — see the Live section for why the broker half waits for the panel
+  // to be opened.
+  loadLive(false);
   applyConfigLock();
   // Said once per page load, not on every poll: a server that is older than the files
   // it was started from will keep answering with the gate it loaded, and only a
@@ -1960,6 +1964,209 @@ function escapeHtml(str) {
   return String(str).replace(/[&<>"']/g, (c) => (
     { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
   ));
+}
+
+/* ---------- Live: what the loop is doing, and is the position protected ----------
+   Two reads with different costs, so they are loaded differently. /api/v1/loop is
+   local files and is refreshed with everything else; /api/v1/orders asks ALPACA, so it
+   is fetched when the panel is opened or refreshed by hand — the dashboard must not
+   generate broker traffic merely by being open. */
+const LIVE_STATE = {
+  never: { text: "never ran", cls: "muted", note: "no loop has ever run for this strategy" },
+  stopped: { text: "stopped", cls: "muted", note: "nothing is running the loop now" },
+  overdue: { text: "OVERDUE", cls: "bad", note: "a loop claimed this and then stopped without releasing it" },
+  running: { text: "running", cls: "good", note: "a loop is running" },
+};
+
+function shortAge(seconds) {
+  if (seconds === null || seconds === undefined) return "never";
+  const s = Math.max(0, Math.round(Number(seconds)));
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.round(s / 60)}m ago`;
+  if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+  return `${Math.round(s / 86400)}d ago`;
+}
+
+function renderOpenPill(payload) {
+  const pill = $("open-count");
+  if (!pill) return;
+  const accounts = (payload && payload.positions) || [];
+  const active = (payload && payload.execution && payload.execution.env) || "paper";
+  const forEnv = (env) => accounts.filter((a) => String(a.env) === env);
+  const count = (env) => forEnv(env).reduce((total, a) => total + Number(a.count || 0), 0);
+  const mine = count(active);
+  const others = [["live", "paper"], ["paper", "live"]]
+    .filter(([env]) => env !== active && count(env) > 0)
+    .map(([env]) => `${count(env)} in ${env}`);
+  // "It refused" and "it could not be asked" are different facts, and only the second one
+  // makes the count a floor. Naming the account is what makes it actionable — a rejected
+  // live key is a thing to fix, not a mystery.
+  const blind = accounts.filter((a) => a.known === false).map((a) => a.env);
+  const unknown = Number((payload && payload.unknown_count) || 0);
+
+  pill.textContent = `${mine} open`
+    + (others.length ? ` · ${others.join(", ")}` : "")
+    + (blind.length ? ` · ${blind.join("+")} unreadable` : (unknown ? ` · ${unknown} unknown` : ""));
+  pill.classList.toggle("has-positions", mine > 0 || others.length > 0);
+  pill.title = (mine
+    ? `${mine} position(s) in the ${active} account` + (others.length ? ` — and ${others.join(", ")}` : "")
+    : "nothing is held in the account being traded")
+    + (blind.length
+      ? ` — the ${blind.join(" and ")} account(s) could not be read, so this count is a floor rather than the truth`
+      : "");
+}
+
+function showLiveError(message) {
+  const state_ = $("live-state");
+  if (state_) state_.textContent = message;
+  const chip = $("live-chip");
+  if (chip) { chip.textContent = "?"; chip.className = "chip bad"; }
+}
+
+async function loadLive(includeOrders) {
+  let loop = null;
+  try {
+    loop = await api("/api/v1/loop");
+  } catch (err) {
+    showLiveError(`could not read the loop's records: ${err.message}`);
+    return;
+  }
+  let orders = null;
+  if (includeOrders) {
+    try {
+      orders = await api("/api/v1/orders");
+    } catch (err) {
+      orders = { ok: false, message: err.message };
+    }
+  }
+  renderLive(loop, orders);
+}
+
+function renderLive(loop, orders) {
+  const info = LIVE_STATE[loop.state] || LIVE_STATE.never;
+  const chip = $("live-chip");
+  if (chip) {
+    chip.textContent = info.text;
+    chip.className = `chip ${info.cls}`;
+    chip.title = info.note;
+  }
+
+  const who = loop.holder ? loop.holder_text : (loop.claim ? loop.holder_text : "");
+  const lines = [];
+  lines.push(`<b>${escapeHtml(loop.strategy || "")}</b> · ${escapeHtml(loop.env || "")}`);
+  if (loop.state === "overdue") {
+    lines.push(`<span class="bad">last claimed by ${escapeHtml(who)} — that process is gone, so nothing will tick until the loop is started again</span>`);
+  } else if (loop.state === "running") {
+    lines.push(`held by ${escapeHtml(who)}, next wake ${escapeHtml(loop.next_wake || "not scheduled yet")}`);
+  } else if (loop.claim) {
+    lines.push(`last held by ${escapeHtml(who)}`);
+  }
+  if (loop.has_run) {
+    const action = loop.last_action || "?";
+    const reason = loop.last_reason ? ` — ${escapeHtml(loop.last_reason)}` : "";
+    lines.push(`last tick <b>${escapeHtml(action)}</b>${reason} (${shortAge(loop.last_tick_age_seconds)})`);
+    if (loop.last_tick && loop.last_tick.bar) {
+      lines.push(`bar ${escapeHtml(loop.last_tick.bar)}`);
+    }
+  } else {
+    lines.push("no tick has ever been recorded for this strategy");
+  }
+  if (loop.last_refusal && loop.last_refusal.reason) {
+    lines.push(`<span class="warn">last refusal: ${escapeHtml(loop.last_refusal.reason)}</span>`);
+  }
+  // A refusal can still have booked a trade, so what the last tick CLOSED is worth a line.
+  const closed = (loop.last_tick && loop.last_tick.trades) || [];
+  for (const trade of closed) {
+    lines.push(`closed a ${escapeHtml(trade.direction || "position")} at ${escapeHtml(trade.exit_price)} (${escapeHtml(trade.reason || "")})`);
+  }
+  $("live-state").innerHTML = lines.map((line) => `<div>${line}</div>`).join("");
+
+  renderProtection(orders ? orders.protection : null);
+  renderLiveDetail(loop, orders);
+}
+
+function renderProtection(verdict) {
+  const host = $("live-protection");
+  if (!host) return;
+  if (!verdict) {
+    host.className = "muted";
+    host.textContent = "Open the panel to check the broker's resting exits (that one asks Alpaca).";
+    return;
+  }
+  host.className = verdict.state === "unprotected" ? "bad" : "muted";
+  if (verdict.state === "none") {
+    host.textContent = "Nothing is held, so there is nothing to protect.";
+    return;
+  }
+  if (verdict.state === "protected") {
+    const levels = verdict.levels || {};
+    const bits = Object.entries(levels)
+      .filter(([, v]) => v && v.wanted)
+      .map(([kind, v]) => `${kind} ${Number(v.wanted).toFixed(2)}`);
+    host.textContent = `Protected: ${bits.join(", ")} — resting at the broker.`;
+    return;
+  }
+  if (verdict.state === "naked") {
+    host.textContent = verdict.message;
+    host.className = "muted";
+    return;
+  }
+  host.innerHTML = `<b>⚠ ${escapeHtml(verdict.message)}</b><br>`
+    + "A level was set for this position and no order is resting at it. Either the exit was "
+    + "cancelled or an amendment was rejected — check the broker before assuming this is protected.";
+}
+
+function renderLiveDetail(loop, orders) {
+  const host = $("live-detail");
+  if (!host) return;
+  const rows = [];
+  const position = (orders && orders.protection && orders.protection.position)
+    || (loop.last_tick && loop.last_tick.position)
+    || null;
+  if (position) {
+    rows.push(["position", `${position.short ? "short" : "long"} @ ${Number(position.entry_price).toFixed(2)}`
+      + ` · stop ${position.stop === null || position.stop === undefined ? "none" : Number(position.stop).toFixed(2)}`
+      + ` · target ${position.take === null || position.take === undefined ? "none" : Number(position.take).toFixed(2)}`]);
+  }
+  if (orders) {
+    if (!orders.ok) {
+      rows.push(["broker", `<span class="warn">${escapeHtml(orders.message || "could not be read")}</span>`]);
+    } else {
+      rows.push(["working orders", `${orders.open.length} open · ${orders.resting.length} exit leg(s) resting`]);
+      if (orders.closed && orders.closed.length) {
+        const newest = orders.closed[0];
+        rows.push(["last fill", `${escapeHtml(newest.side || "")} ${escapeHtml(newest.filled_qty || newest.qty || "")}`
+          + ` @ ${escapeHtml(newest.filled_avg_price || "—")} (${escapeHtml(newest.status || "")})`]);
+      }
+    }
+  }
+  rows.push(["trades closed", String(((loop.last_tick && loop.last_tick.trades) || []).length)]);
+  host.innerHTML = rows.map(([key, value]) =>
+    `<div class="live-row"><span class="live-key">${escapeHtml(key)}</span><span>${value}</span></div>`
+  ).join("");
+}
+
+function toggleLivePanel(ev) {
+  if (ev && ev.stopPropagation) ev.stopPropagation();
+  const body = $("live-body");
+  const btn = $("toggle-live");
+  if (!body) return;
+  body.hidden = !body.hidden;
+  if (btn) {
+    btn.textContent = body.hidden ? "+" : "−";
+    btn.title = body.hidden ? "Expand the live view" : "Collapse the live view";
+  }
+  // Opening it is what asks the broker: the panel is the only thing here that wants
+  // Alpaca's order list, so it pays for it rather than the page load doing so.
+  if (!body.hidden) loadLive(true);
+}
+
+function openLivePanel() {
+  const body = $("live-body");
+  if (body && body.hidden) toggleLivePanel();
+  else loadLive(true);
+  const card = $("live-card");
+  if (card && card.scrollIntoView) card.scrollIntoView({ behavior: "smooth", block: "nearest" });
 }
 
 /* ---------- Strategy bar + Rules + per-strategy Configuration ---------- */

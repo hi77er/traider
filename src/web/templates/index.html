@@ -19,6 +19,11 @@
               title="Which Alpaca account this strategy's orders go to"></select>
       <button id="trading-toggle" class="exec-pill exec-toggle" onclick="toggleTrading()"
               title="Start or stop sending orders for the active strategy">▶ Turn trading on</button>
+      <!-- What is OPEN, which is not the same question as whether trading is armed.
+           A position held while OFF is the one moment this matters most, so the count
+           sits beside the switch and names the account it is counting. -->
+      <button id="open-count" class="exec-pill exec-positions" onclick="openLivePanel()"
+              title="Positions open in the account being traded">0 open</button>
     </div>
     <!-- Right: everything that configures or navigates away. -->
     <div class="header-actions">
@@ -219,6 +224,32 @@
               backtest replays the same rules so the Gate describes the system that will actually trade.
               Stored with the strategy.</p>
             <div id="risk-groups"></div>
+          </div>
+        </section>
+
+        <!-- What the loop is doing right now, and whether what it holds is protected.
+             Every line here is read from the loop's own records or from the broker;
+             nothing here can change either. The state chip leads because "is a bot
+             running" is the first question, and a quiet market and a dead loop look
+             identical without it. -->
+        <section class="card collapsible" id="live-card">
+          <div class="card-head" onclick="toggleLivePanel(event)" title="Collapse / expand the live view">
+            <button id="toggle-live" class="ghost small" onclick="toggleLivePanel(event)"
+                    title="Expand the live view">+</button>
+            <h2>Live</h2>
+            <div class="settings-actions" onclick="event.stopPropagation()">
+              <span id="live-chip" class="chip">…</span>
+              <button id="live-refresh" class="ghost small" onclick="loadLive(true)"
+                      title="Re-read the loop's records and the broker">↻</button>
+            </div>
+          </div>
+          <div class="collapse-body" id="live-body" hidden>
+            <p id="live-state" class="muted">Checking…</p>
+            <p id="live-protection" class="muted"></p>
+            <div id="live-detail"></div>
+            <p class="muted note">Read from the loop's own records and from Alpaca. Nothing
+              on this panel can place, change or cancel an order — the trading controls are
+              at the top of the page. <a href="/log">Open the trading log →</a></p>
           </div>
         </section>
 

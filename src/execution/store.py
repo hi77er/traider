@@ -42,7 +42,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
-from src.config import artifacts
+from src.config import artifacts, state_files
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +123,18 @@ def trades_path(settings, name: str) -> Path:
 def state_path(settings, name: str, env: str) -> Path:
     """The driver's state file — see ``artifacts.live_state_path`` for why it is keyed."""
     return artifacts.live_state_path(settings, name, env)
+
+
+def load_state(settings, name: str, env: str) -> Dict[str, Any]:
+    """What the driver believes: the position it holds, and the bar it last decided.
+
+    Read-only, and tolerant like every other reader here — a missing or torn file yields an
+    empty dict, which the caller reads as "nothing is held". The dashboard is the reader
+    this exists for: "is the open position protected?" is answered by comparing the levels
+    the machine RECORDED on the position against the exits the broker is actually resting,
+    and a position nobody can read is not a position.
+    """
+    return state_files.read_json(state_path(settings, name, env), default={})
 
 
 def trading_day(settings, when: Any = None) -> str:

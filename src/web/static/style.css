@@ -1380,3 +1380,21 @@ td.mkt-sym { font-weight: 600; }
 .mkt-filters input:focus,
 .mkt-filters select:focus { outline: none; border-color: var(--accent); }
 
+
+/* ---------- Live panel: what the loop is doing ----------
+
+   The state is carried by WORDS in the chip and by the colour of the text beside it, not
+   by restyling the header pills: an `.exec-pill.<state>` rule anywhere is what a test
+   forbids, and the pair of header controls has to keep looking like one control in every
+   state. `.chip.good`/`.chip.bad` are deliberately scoped to chips. */
+#live-state { line-height: 1.5; }
+#live-state .bad { color: var(--red); font-weight: 600; }
+#live-state .warn { color: #f0b429; }
+#live-protection { margin: 10px 0 6px; line-height: 1.5; }
+#live-protection.bad { color: var(--red); }
+#live-detail { border-top: 1px solid var(--border); margin-top: 8px; padding-top: 6px; }
+.live-row { display: flex; gap: 10px; font-size: 13px; padding: 2px 0; }
+.live-key { color: var(--muted); min-width: 110px; }
+.live-row .warn { color: #f0b429; }
+.chip.good { color: var(--green); border-color: rgba(38, 166, 154, 0.5); }
+.chip.bad { color: var(--red); border-color: rgba(239, 83, 80, 0.55); }

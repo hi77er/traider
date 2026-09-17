@@ -276,3 +276,153 @@ def test_the_trades_endpoint_returns_the_newest_first(api_settings):
 
     assert body["strategy"] == "Alpha" and body["count"] == 2
     assert [t["reason"] for t in body["trades"]] == ["r1", "r0"], "newest first"
+
+
+# ---------------------------------------------------------------------------
+# is the open position protected?
+# ---------------------------------------------------------------------------
+def _hold(settings, *, stop=96.0, take=104.0, name="Alpha", env="paper"):
+    """Write the driver's state file as if a position were open at these levels."""
+    state_files.write_json(
+        store.state_path(settings, name, env),
+        {
+            "position": {
+                "entry_index": 3, "entry_price": 100.0, "raw_entry_price": 100.0,
+                "short": False, "stop": stop, "take": take, "weight": 0.5, "stop_pct": 2.0,
+            },
+            "bar_index": 3, "last_decided_bar": "2026-09-16T17:30:00+00:00",
+        },
+    )
+
+
+def _resting(stop=96.0, take=104.0):
+    legs = []
+    if stop is not None:
+        legs.append({"id": "leg-stop", "type": "stop", "stop_price": f"{stop:.2f}"})
+    if take is not None:
+        legs.append({"id": "leg-take", "type": "limit", "limit_price": f"{take:.2f}"})
+    return legs
+
+
+def test_nothing_held_needs_no_protection(tmp_path, armed):
+    settings = armed()
+
+    verdict = loop_service.protection(settings, env="paper", legs=[])
+
+    assert verdict["state"] == loop_service.NO_POSITION
+    assert verdict["uncovered"] == []
+
+
+def test_a_position_whose_levels_are_resting_is_protected(tmp_path, armed):
+    settings = armed()
+    _hold(settings)
+
+    verdict = loop_service.protection(settings, env="paper", legs=_resting())
+
+    assert verdict["state"] == loop_service.PROTECTED
+    assert verdict["uncovered"] == []
+    assert verdict["levels"]["stop"]["ok"] is True and verdict["levels"]["take"]["ok"] is True
+
+
+def test_a_position_with_NO_exits_configured_is_naked_by_design(tmp_path, armed):
+    """Not a failure: a strategy configured with no stop gets no bracket, deliberately.
+
+    Warning here is how the warning that matters gets ignored.
+    """
+    settings = armed()
+    _hold(settings, stop=None, take=None)
+
+    verdict = loop_service.protection(settings, env="paper", legs=[])
+
+    assert verdict["state"] == loop_service.NAKED
+    assert "asked for" in verdict["message"]
+
+
+def test_a_configured_stop_with_no_leg_resting_is_UNPROTECTED(tmp_path, armed):
+    """The silent one: a local level with no order behind it protects nothing.
+
+    A stop cancelled at the broker, or an amendment that was rejected, leaves exactly this —
+    a position the machine believes is protected and the account does not.
+    """
+    settings = armed()
+    _hold(settings)
+
+    # Only the TARGET is still resting: the stop has gone missing, which is the dangerous
+    # half — an unprotected long has unlimited downside and a finite upside.
+    verdict = loop_service.protection(settings, env="paper", legs=_resting(stop=None))
+
+    assert verdict["state"] == loop_service.UNPROTECTED
+    assert verdict["uncovered"] == ["stop"]
+    assert "NOT protected" in verdict["message"]
+    assert "96.00" in verdict["message"]
+    assert verdict["levels"]["take"]["ok"] is True, "the target is still fine"
+
+
+def test_a_stop_that_DRIFTED_is_not_the_same_level(tmp_path, armed):
+    """A stop that moved is a stop in the wrong place, and the risk per trade is not the one
+    the position was sized for — so "close enough" is the wrong test."""
+    settings = armed()
+    _hold(settings, stop=96.0)
+
+    verdict = loop_service.protection(settings, env="paper", legs=_resting(stop=93.0))
+
+    assert verdict["state"] == loop_service.UNPROTECTED
+    assert verdict["uncovered"] == ["stop"]
+
+
+def test_a_level_that_is_only_rounded_is_still_the_same_level(tmp_path, armed):
+    """The tolerance exists for float noise and broker rounding, not for drift."""
+    settings = armed()
+    _hold(settings, stop=96.0)
+
+    verdict = loop_service.protection(settings, env="paper", legs=_resting(stop=96.001))
+
+    assert verdict["state"] == loop_service.PROTECTED
+
+
+def test_a_stop_limit_leg_classifies_as_a_stop(tmp_path, armed):
+    """It carries both prices, so reading a price field would classify it by accident."""
+    settings = armed()
+    _hold(settings, stop=95.0, take=None)
+
+    verdict = loop_service.protection(
+        settings, env="paper",
+        legs=[{"type": "stop_limit", "stop_price": "95.00", "limit_price": "94.00"}],
+    )
+
+    assert verdict["state"] == loop_service.PROTECTED
+
+
+def test_the_verdict_asks_the_LOCAL_record_not_the_current_configuration(tmp_path, armed):
+    """A configuration edited since the position opened must not make an unprotected
+    position look protected: what matters is the levels this position was SIZED for."""
+    settings = armed()
+    _hold(settings, stop=96.0, take=104.0)
+
+    verdict = loop_service.protection(settings, env="paper", legs=_resting())
+
+    assert verdict["levels"]["stop"]["wanted"] == 96.0, "the levels on the position, not settings"
+
+
+def test_the_position_is_read_for_the_account_the_panel_is_pointed_at(tmp_path, armed):
+    """Paper and live are different accounts holding different things."""
+    settings = armed()
+    _hold(settings, stop=96.0, take=104.0, env="paper")
+
+    paper = loop_service.protection(settings, env="paper", legs=_resting())
+    live = loop_service.protection(settings, env="live", legs=_resting())
+
+    assert paper["state"] == loop_service.PROTECTED
+    assert live["state"] == loop_service.NO_POSITION, "the live account holds nothing here"
+
+
+def test_the_orders_endpoint_reports_the_verdict_even_with_no_broker(api_settings):
+    """An unreachable broker must not blank the one line that says the stop is missing."""
+    write_state(api_settings, {"on": True, "strategy": "Alpha", "env": "paper"})
+    _hold(api_settings)
+
+    body = client.get("/api/v1/orders").json()
+
+    assert body["ok"] is False, "no credentials in this fixture"
+    assert body["protection"]["state"] == loop_service.UNPROTECTED
+    assert body["protection"]["uncovered"] == ["stop", "take"]

@@ -106,12 +106,16 @@ def get_orders(
     env = status_info.get("env")
     payload: Dict[str, Any] = {
         "ok": True, "env": env, "instrument": settings.instrument,
-        "open": [], "resting": [], "closed": [],
+        "open": [], "resting": [], "closed": [], "protection": None,
     }
     if not status_info.get("ok"):
         # No credentials, or credentials for the wrong account type. Reported rather than
         # raised: this is the ordinary state of a fresh install.
         payload.update(ok=False, message=status_info.get("message"))
+        # Still worth answering: "is what I am holding protected?" is a question about the
+        # LOCAL record and needs no broker at all, so an unreachable broker must not blank
+        # the one line that says the stop is missing.
+        payload["protection"] = loop_service.protection(settings, env=env, legs=[])
         return payload
 
     try:
@@ -122,6 +126,10 @@ def get_orders(
     except Exception as exc:  # noqa: BLE001 - a broker outage must render, not 500
         logger.exception("Could not read orders for %s", settings.instrument)
         payload.update(ok=False, message=f"the broker could not be read ({exc})")
+
+    # The verdict the panel leads with: funded by the resting legs already fetched above, so
+    # one broker read answers both "what is working" and "is anything protecting it".
+    payload["protection"] = loop_service.protection(settings, env=env, legs=payload["resting"])
     return payload
 
 

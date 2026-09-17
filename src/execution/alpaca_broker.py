@@ -45,7 +45,13 @@ from src.strategy.engine import CLOSE, FORCED, NONE, OPEN, SKIP, STOP, TAKE, Int
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["AlpacaBroker", "broker_position", "closing_fill_from_history", "shares_for"]
+__all__ = [
+    "AlpacaBroker",
+    "broker_position",
+    "closing_fill_from_history",
+    "exit_leg_level",
+    "shares_for",
+]
 
 # Alpaca says "this order is over and did not fill".
 DEAD_STATUSES = frozenset({"rejected", "canceled", "cancelled", "expired", "stopped"})
@@ -73,6 +79,33 @@ def broker_position(payload: Optional[dict]) -> BrokerPosition:
         entry_price=_to_float(payload.get("avg_entry_price")),
         short=short,
     )
+
+
+def exit_leg_level(leg: Dict[str, Any]) -> Optional[tuple]:
+    """``(kind, level)`` for one resting exit leg — ``"stop"`` or ``"take"``, else ``None``.
+
+    The kind comes from the ORDER TYPE because that is what decides it: a stop_limit carries
+    both a ``stop_price`` and a ``limit_price``, so reading a price field would classify it
+    by accident. The price fields are the fallback, for a payload whose type we do not know.
+
+    Public because the dashboard has to ask the same question the driver does — "is there a
+    leg resting at the level this position was opened with?" — and two classifiers would be
+    free to disagree about the same order.
+    """
+    if not isinstance(leg, dict):
+        return None
+    kind = str(leg.get("type") or "").strip().lower()
+    stop_price = _to_float(leg.get("stop_price"))
+    limit_price = _to_float(leg.get("limit_price"))
+    if kind in _STOP_TYPES:
+        return ("stop", stop_price) if stop_price else None
+    if kind in ("limit", "limit_on_close"):
+        return ("take", limit_price) if limit_price else None
+    if stop_price:
+        return ("stop", stop_price)
+    if limit_price:
+        return ("take", limit_price)
+    return None
 
 
 def shares_for(weight: float, price: float, equity: float) -> int:
