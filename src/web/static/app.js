@@ -1996,6 +1996,14 @@ const LIVE_STATE = {
   running: { text: "running", cls: "good", note: "a loop is running" },
 };
 
+// The loop is a SEPARATE process and this dashboard never starts one — that is the whole
+// point of the two-process split. So "armed" and "trading" are two different facts, and only
+// one of them is a switch: the chip above says "stopped" whether the switch is on or off,
+// which reads like the switch failed. The two are joined below in a visible LINE, not in a
+// `title` — the embedded browser renders no native tooltip, which is how this stayed
+// invisible.
+const LOOP_COMMAND = "python -m src.main";
+
 function shortAge(seconds) {
   if (seconds === null || seconds === undefined) return "never";
   const s = Math.max(0, Math.round(Number(seconds)));
@@ -2210,6 +2218,17 @@ function renderLive(loop, orders, market, accounts) {
     lines.push(`held by ${escapeHtml(who)}, next wake ${escapeHtml(loop.next_wake || "not scheduled yet")}`);
   } else if (loop.claim) {
     lines.push(`last held by ${escapeHtml(who)}`);
+  }
+  // Arming writes trading.json; nothing ticks until a process runs the loop. Saying nothing
+  // here is how "trading is ON" became a promise this screen could not keep: the operator
+  // flips the switch, the chip keeps saying "stopped", and the reasonable reading is that the
+  // switch did nothing.
+  const armed = !!(state.tradingState && state.tradingState.on);
+  if (armed && (loop.state === "stopped" || loop.state === "never")) {
+    lines.push(
+      `<span class="warn">trading is armed, but no loop is running — nothing will tick or `
+      + `trade until one is started (<code>${escapeHtml(LOOP_COMMAND)}</code>)</span>`
+    );
   }
   if (loop.has_run) {
     const action = loop.last_action || "?";

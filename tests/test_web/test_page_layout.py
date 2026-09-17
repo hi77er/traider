@@ -52,6 +52,33 @@ def test_the_tick_table_renders_a_bar_s_notes_with_a_warning_mark():
     assert ".lg-table td.warn" in CSS, "the marker has its own colour (amber, not red)"
 
 
+def test_the_live_panel_says_when_arming_has_nothing_to_run_it():
+    """Two facts, one switch — so the panel has to join them.
+
+    Arming writes ``trading.json``; nothing ticks until a process runs the loop, and this
+    dashboard never starts one (that is the two-process split). The chip says "stopped" whether
+    trading is on or off, so without a line joining the two, flipping the switch looks like it
+    did nothing — which is exactly how it was read.
+
+    A visible LINE rather than a ``title``: the embedded browser renders no native tooltip, and
+    the chip's own explanation is one.
+    """
+    assert "trading is armed, but no loop is running" in APP_JS
+    assert "python -m src.main" in APP_JS, "and it says what to start"
+
+    at = APP_JS.index("trading is armed, but no loop is running")
+    assert "lines.push(" in APP_JS[at - 40:at], "rendered as a visible line, not a tooltip"
+
+    # The guard immediately above it has to require BOTH facts. Either one alone makes the note
+    # a lie in the other case: with the switch off there is nothing armed to warn about, and
+    # while the loop IS running the warning would contradict the chip beside it.
+    guard = APP_JS[APP_JS.rindex("if (", 0, at):at].split("\n", 1)[0]
+    assert "armed" in guard, f"gated on the switch being ON: {guard}"
+    assert 'loop.state === "stopped"' in guard and 'loop.state === "never"' in guard, (
+        f"and on the loop not running: {guard}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # the Live panel moved
 # ---------------------------------------------------------------------------
