@@ -181,18 +181,6 @@ def test_trading_off_refuses_and_nothing_is_sent():
     assert executor.client.calls == [], "an order must not be built, let alone sent"
 
 
-def test_a_risk_veto_refuses_and_nothing_is_sent():
-    class Veto:
-        def validate_signal(self, signal, state, **kwargs):
-            return type("D", (), {"approved": False, "reason": "exposure exceeded"})()
-
-    executor = _executor(validator=Veto())
-    with pytest.raises(OrderRefused) as caught:
-        executor.place_order("AAPL", "BUY", 10, reference_price=100.0)
-    assert "exposure exceeded" in str(caught.value)
-    assert executor.client.calls == []
-
-
 def test_a_naked_entry_is_refused_rather_than_sent_without_its_stop():
     # Fractional sizes are DAY-only at Alpaca and cannot be bracketed. Sending the
     # entry anyway would open an unprotected position, which is worse than no entry.

@@ -309,7 +309,6 @@ class AlpacaExecutor:
         target: Optional[ExecutionTarget] = None,
         client: Optional[AlpacaClient] = None,
         guard=None,
-        validator=None,
         sleep=time.sleep,
     ) -> None:
         self.settings = settings
@@ -321,11 +320,11 @@ class AlpacaExecutor:
             timeout=float(getattr(settings, "execution_order_timeout_seconds", 60) or 60),
         )
         self.guard = guard if guard is not None else _default_guard(settings)
-        # Optional, and off by default: on the strategy path the risk layer is the
-        # ENGINE (the same sizing, stops and breaker the backtest runs, already
-        # reflected in the intent). Wiring a second, separately-stateful validator here
-        # would be a second opinion that drifts from the first.
-        self.validator = validator
+        # The risk layer is the ENGINE — the same sizing, stops and limits a backtest runs,
+        # already reflected in the intent. There used to be a ``validator`` hook here for a
+        # SECOND opinion, and it was removed with ``src/risk/validator.py``: a second,
+        # separately-stateful sizing path behind one order is a second answer that drifts
+        # from the first, and the engine's is the one the backtest validates.
         self._sleep = sleep
 
     # -- facts about the account -------------------------------------------
@@ -404,8 +403,6 @@ class AlpacaExecutor:
         time_in_force: Optional[str] = None,
         client_order_id: Optional[str] = None,
         reference_price: Optional[float] = None,
-        risk_state: Optional[Dict[str, Any]] = None,
-        risk_signal: Optional[Dict[str, Any]] = None,
         wait: bool = True,
         timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
@@ -418,17 +415,6 @@ class AlpacaExecutor:
         silently retried, because by then the order may be live.
         """
         self._check_guard()
-
-        # Two switches in one place, deliberately in this order: nothing is built and
-        # nothing is sent until the risk layer has had its say.
-        if self.validator is not None:
-            decision = self.validator.validate_signal(
-                risk_signal or {"side": side, "price": reference_price},
-                risk_state or {},
-                price=reference_price,
-            )
-            if not decision.approved:
-                raise OrderRefused(f"Vetoed by the risk layer — {decision.reason}")
 
         # Generated once and reused by every retry: Alpaca deduplicates on it, so a
         # submit that timed out and actually landed is never sent twice.

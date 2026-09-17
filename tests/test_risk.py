@@ -1,5 +1,5 @@
-"""Tests for the risk layer: sizing, circuit breaker, validator, and the
-backtest's replay of them (plan tasks 22, 23, 24, 24b).
+"""Tests for the risk layer: the sizing the backtest and a live run share, and the
+backtest's replay of it (plan tasks 22, 23, 24, 24b).
 
 All offline. The engine-level tests use synthetic candles and a temp store.
 """
@@ -16,14 +16,12 @@ from src.backtest.engine import run_backtest, simulate_frame
 from src.backtest.risk_sim import RiskConfig, apply_risk_layer
 from src.config.settings import Settings
 from src.model import rules as rules_mod
-from src.risk.circuit_breaker import CircuitBreaker
 from src.risk.position_sizing import (
     MIN_VOLATILITY_PERCENT,
     realized_volatility_percent,
     size_position,
     target_weight,
 )
-from src.risk.validator import CLOSE, NONE, OPEN_LONG, OPEN_SHORT, RiskValidator
 
 
 # ---------------------------------------------------------------------------
@@ -155,39 +153,13 @@ def test_volatility_target_mode_uses_the_volatility_stop():
     assert sizing.weight == pytest.approx(0.5)
 
 
+
+
 # ---------------------------------------------------------------------------
-# circuit breaker
+# the backtest applies the risk layer (task 24b)
 # ---------------------------------------------------------------------------
-def test_breaker_trips_on_consecutive_losses_and_resets_next_day():
-    cb = CircuitBreaker(max_consecutive_losses=3, max_loss_percent=50.0)
-    assert cb.check("2024-05-01") == (False, "")
-    cb.record_trade(-1.0, day="2024-05-01")
-    cb.record_trade(-1.0, day="2024-05-01")
-    assert cb.tripped("2024-05-01") is False
-    cb.record_trade(-1.0, day="2024-05-01")  # third loss
-    tripped, why = cb.check("2024-05-01")
-    assert tripped is True and "consecutive losses" in why
-    # The next day is a clean slate (the plan's "reset next day").
-    assert cb.check("2024-05-02") == (False, "")
-    assert cb.state.consecutive_losses == 0
-
-
-def test_breaker_trips_on_daily_loss_and_a_win_clears_the_streak():
-    cb = CircuitBreaker(max_consecutive_losses=99, max_loss_percent=5.0)
-    cb.record_trade(-3.0, day="2024-05-01")
-    assert cb.tripped("2024-05-01") is False
-    cb.record_trade(-2.5, day="2024-05-01")  # -5.5% for the day
-    assert cb.tripped("2024-05-01") is True
-
-    cb2 = CircuitBreaker(max_consecutive_losses=2, max_loss_percent=99.0)
-    cb2.record_trade(-1.0, day="d")
-    cb2.record_trade(+2.0, day="d")  # a win resets the streak
-    cb2.record_trade(-1.0, day="d")
-    assert cb2.tripped("d") is False
-
-
-# The repo's .env (and this shell) carry risk values, so a test about having none
-# has to say so explicitly — an init value beats the environment.
+# Every risk field named explicitly rather than left to defaults: a repo ``.env`` or an
+# exported variable overrides a default, so "no risk settings" has to be spelled out.
 _NO_RISK = dict(
     stop_loss_percent=None,
     take_profit_percent=None,
@@ -198,125 +170,6 @@ _NO_RISK = dict(
 )
 
 
-def test_the_trip_count_survives_the_day_roll():
-    """A halt is per-day; the number of halts is a fact about the RUN.
-
-    Rebuilding the breaker state on roll used to drop ``trips`` with it, so the
-    count surfaced in a run's provenance (`inputs.risk.breaker_trips`) and in the
-    report depended on whether the run happened to END inside the tripping day —
-    a run that tripped and then traded the next morning reported zero.
-    """
-    cb = CircuitBreaker(max_consecutive_losses=1)
-    cb.record_trade(-1.0, day="2024-05-01")
-    assert cb.state.tripped is True and cb.state.trips == 1
-
-    # The next day clears the halt...
-    assert cb.check("2024-05-02") == (False, "")
-    assert cb.state.tripped is False
-    # ...but not the history of it.
-    assert cb.state.trips == 1, "the trip count is run-level, not day-level"
-
-    cb.record_trade(-1.0, day="2024-05-02")
-    assert cb.state.trips == 2
-
-
-def test_a_daily_bar_run_cannot_be_protected_by_the_breaker():
-    """Documented limitation, and the reason it is worth documenting.
-
-    With one decision per day the day changes between every entry and the next, so
-    BOTH triggers come to nothing: the streak is reset before it can reach the
-    limit, and a daily-loss halt is cleared by the following day's roll before an
-    entry is ever evaluated against it. A daily run is protected by its stops, not
-    by the breaker.
-    """
-    # The daily-loss trigger does trip...
-    cb = CircuitBreaker(max_consecutive_losses=99, max_loss_percent=1.0)
-    # ...so a -2% day reaches the limit.
-    cb.record_trade(-2.0, day="2024-05-01")
-    assert cb.state.tripped is True
-
-    # ...but the next day's first evaluation — which is also the next ENTRY on
-    # daily bars — clears it before it can refuse anything.
-    tripped, _ = cb.check("2024-05-02")
-    assert tripped is False
-
-
-def test_breaker_disabled_never_trips_and_snapshot_round_trips():
-    cb = CircuitBreaker(max_consecutive_losses=1, enabled=False)
-    cb.record_trade(-99.0, day="d")
-    assert cb.tripped("d") is False
-
-    cb2 = CircuitBreaker(max_consecutive_losses=3)
-    cb2.record_trade(-1.0, day="d")
-    cb2.record_trade(-1.0, day="d")
-    snap = cb2.snapshot()
-    cb3 = CircuitBreaker(max_consecutive_losses=3)
-    cb3.restore(snap)
-    assert cb3.state.consecutive_losses == 2
-    assert cb3.state.daily_pnl_percent == pytest.approx(-2.0)
-
-    cb2.stop_trading_today(day="d", reason="test halt")
-    assert cb2.tripped("d") is True
-
-
-# ---------------------------------------------------------------------------
-# validator
-# ---------------------------------------------------------------------------
-def _validator(tmp_path, **kw):
-    return RiskValidator(_settings(tmp_path, **kw))
-
-
-def test_validator_approves_a_sized_long_and_unpacks_to_the_documented_pair(tmp_path):
-    v = _validator(tmp_path, risk_limit_percent=2.0, stop_loss_percent=4.0)
-    d = v.validate_signal({"side": "BUY", "price": 100.0}, {"equity": 10_000.0, "day": "d"})
-    assert d.approved is True
-    assert d.action == OPEN_LONG
-    assert d.size.quantity == 50
-    assert d.checks["circuit_breaker"] and d.checks["exposure"]
-    approved, reason = d  # the plan's (approved, reason) contract
-    assert approved is True and "open_long" in reason
-
-
-def test_validator_vetoes_short_when_disabled_and_repeats(tmp_path):
-    v = _validator(tmp_path, allow_short=False, risk_limit_percent=1.0, stop_loss_percent=2.0)
-    veto = v.validate_signal({"side": "SELL", "price": 100.0}, {"equity": 10_000.0})
-    assert veto.approved is False and veto.action == OPEN_SHORT
-    assert "short positions are disabled" in veto.reason
-
-    shortable = _validator(tmp_path, allow_short=True, risk_limit_percent=1.0, stop_loss_percent=2.0)
-    assert shortable.validate_signal({"side": "SELL", "price": 100.0}, {"equity": 10_000.0}).approved
-
-    repeat = shortable.validate_signal(
-        {"side": "BUY", "price": 100.0},
-        {"equity": 10_000.0, "position": {"side": "long", "quantity": 10, "notional": 1_000.0}},
-    )
-    assert repeat.approved is False and repeat.action == NONE
-    assert "repeat" in repeat.reason
-
-
-def test_validator_approves_closes_without_sizing(tmp_path):
-    v = _validator(tmp_path)
-    d = v.validate_signal(
-        {"side": "SELL", "price": 100.0},
-        {"equity": 10_000.0, "position": {"side": "long", "quantity": 10, "notional": 1_000.0}},
-    )
-    assert d.approved is True and d.action == CLOSE and d.size is None
-
-
-def test_validator_vetoes_a_bad_stop_and_a_tripped_breaker(tmp_path):
-    v = _validator(tmp_path, stop_loss_percent=0.0)
-    bad = v.validate_signal({"side": "BUY", "price": 100.0}, {"equity": 10_000.0})
-    assert bad.approved is False and bad.checks["stop_loss"] is False
-
-    stopped = _validator(tmp_path, stop_loss_percent=2.0)
-    stopped.breaker.stop_trading_today(day="d", reason="halted for tests")
-    veto = stopped.validate_signal({"side": "BUY", "price": 100.0}, {"equity": 10_000.0, "day": "d"})
-    assert veto.approved is False and veto.checks["circuit_breaker"] is False
-
-
-# ---------------------------------------------------------------------------
-# the backtest applies the risk layer (task 24b)
-# ---------------------------------------------------------------------------
 def test_an_empty_risk_config_reproduces_the_raw_engine(tmp_path):
     """The invariant that stops the two code paths drifting apart.
 
