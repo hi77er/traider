@@ -518,6 +518,14 @@
       grid: { vertLines: { color: "#22262f" }, horzLines: { color: "#22262f" } },
       rightPriceScale: { borderColor: "#333a46" },
       timeScale: { borderColor: "#333a46" },
+      // Same wheel policy as the dashboard (see chart_zoom.js): a plain wheel
+      // pans, only a pinch zooms, and the zoom stops at this chart's own data
+      // rather than being clamped by the library after the fact.
+      handleScroll: { mouseWheel: true },
+      handleScale: {
+        mouseWheel: false,
+        axisPressedMouseMove: { time: false, price: true },
+      },
       // Free-floating crosshair, so the synced horizontal line is not snapped to
       // a sample's extremes (same mode the dashboard uses).
       crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
@@ -526,28 +534,29 @@
     return c;
   }
 
-  /* Keep the report's charts in lock-step: zooming/panning either one applies
-     the same TIME range to the other. Both series are built from the same
-     equity-curve time keys, so dates map 1:1 across them and the ranges are
-     directly comparable (the equity chart merely draws more series). */
-  function linkTimeRanges(charts) {
-    const sync = (target, range) => {
-      if (!target || !range) return;
-      const cur = target.timeScale().getVisibleRange();
-      if (cur && cur.from === range.from && cur.to === range.to) {
-        return; // already equal — this breaks the echo between the charts
-      }
-      try {
-        target.timeScale().setVisibleRange(range);
-      } catch (_) {
-        /* a range outside the other chart's data throws — ignore it */
-      }
-    };
+  /* Keep the report's charts in lock-step: moving or zooming either one moves the
+     other. They are synced by LOGICAL range (bar indices), not by time range: a
+     time range cannot express the empty space before the first bar or after the
+     last one — the library clamps such a request to the data — so dragging one
+     chart past the end of its series left the other standing still. Both series
+     are built from the same equity-curve time keys, so index for index they ARE
+     the same bars and no conversion is needed. */
+  function linkRanges(charts) {
+    const pushed = new WeakMap();
     charts.forEach((chart) => {
-      chart.timeScale().subscribeVisibleTimeRangeChange((range) => {
+      chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
         if (!range) return;
+        const asked = pushed.get(chart);
+        if (asked && Math.abs(asked.from - range.from) < 0.01
+          && Math.abs(asked.to - range.to) < 0.01) {
+          pushed.delete(chart);
+          return; // our own push coming back — never echo it onwards
+        }
         charts.forEach((other) => {
-          if (other !== chart) sync(other, range);
+          if (other === chart) return;
+          const moved = { from: range.from, to: range.to };
+          pushed.set(other, moved);
+          other.timeScale().setVisibleLogicalRange(moved);
         });
       });
     });
@@ -593,6 +602,7 @@
       });
       const eqPoints = equity.map((p) => ({ time: p.time, value: p.equity }));
       strat.setData(eqPoints);
+      ChartZoom.bind(eqHost, () => ({ chart: c, barCount: eqPoints.length }));
       // Anchor the synced horizontal line on the strategy's equity, so hovering
       // the drawdown chart reads the equity of that instant (and vice versa).
       registerCrosshair(c, strat, eqPoints);
@@ -628,6 +638,7 @@
       });
       const ddPoints = dd.map((p) => ({ time: p.time, value: p.dd_pct }));
       area.setData(ddPoints);
+      ChartZoom.bind(ddHost, () => ({ chart: c, barCount: ddPoints.length }));
       registerCrosshair(c, area, ddPoints);
       linked.push(c);
     } else {
@@ -635,8 +646,21 @@
     }
 
     // Link the charts, then fit the first — the others follow it.
-    if (linked.length > 1) linkTimeRanges(linked);
-    if (linked.length) linked[0].timeScale().fitContent();
+    if (linked.length > 1) linkRanges(linked);
+    // Fit it AFTER the layout has given the chart a width. A fitContent() on a
+    // chart that has not been laid out yet does nothing useful and the library
+    // falls back to its default right-aligned view, which then disagrees with the
+    // chart it is linked to — one chart showing the whole run and the other its
+    // last few months. Two frames is the same wait the dashboard uses.
+    if (linked.length) {
+      const fit = linked[0];
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          if (!state.charts.includes(fit)) return; // a newer render superseded us
+          fit.timeScale().fitContent();
+        });
+      });
+    }
 
     const s = rep.drawdown_stats || {};
     $("rp-dd-note").textContent =

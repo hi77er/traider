@@ -226,9 +226,9 @@ function buildMainChart() {
     timeScale: { timeVisible: false, borderColor: "#333a46" },
     rightPriceScale: { borderColor: "#333a46" },
     crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
-    // Zoom happens ONLY on a trackpad/touch pinch (see onMainChartWheel).
-    // A plain mouse wheel must never zoom the chart, and dragging the time
-    // axis must not zoom either — moving the chart left/right only pans it.
+    // Zoom happens ONLY on a trackpad/touch pinch, clamped to the data (see
+    // chart_zoom.js). A plain mouse wheel must never zoom the chart, and dragging
+    // the time axis must not zoom either — moving the chart left/right only pans it.
     handleScroll: { mouseWheel: true }, // horizontal wheel/drag still pans
     handleScale: {
       mouseWheel: false,
@@ -236,7 +236,7 @@ function buildMainChart() {
     },
   });
   state.chart = chart;
-  subscribeMainToOscTime(); // oscillator panes follow the main chart's zoom
+  subscribeMainToOscTime(); // the price chart drives every other chart's range
 
   // Full-height "position held" band. It is drawn FIRST (before the candles)
   // so it paints as background; it is excluded from autoscale, so it can never
@@ -278,9 +278,11 @@ function buildMainChart() {
     .filter((b) => b.time != null && b.open !== null && b.high !== null
       && b.low !== null && b.close !== null);
   series.setData(bars);
-  // How many bars there are to show. The zoom stops at exactly this many, so
-  // "zoom out as far as it goes" means "the whole history is on screen".
+  // How many bars there are to show, and which bars they are: the zoom stops at
+  // exactly this many (so "zoom out as far as it goes" means the whole history is
+  // on screen) and every other chart is placed on the same bars by these times.
   state.chartBarCount = bars.length;
+  state.chartTimes = bars.map((b) => b.time);
 
   // Crosshair anchor: the close at each bar, so hovering an indicator pane can
   // place THIS chart's horizontal line on the price of that instant.
@@ -354,52 +356,18 @@ function drawVolumeBars(chart) {
 
 /* ---------- Main chart wheel: pan vs zoom ---------- */
 // The library treats ANY vertical wheel delta as zoom, so a two-finger swipe
-// that carries even a small vertical component zooms while panning. We turn
-// wheel-zoom OFF on the chart and zoom only on a real trackpad pinch, which
-// the browser reports as a wheel event with ctrlKey set (kept by pinch, and
-// also enabled via handleScale.pinch for touchscreens). Horizontal deltas
-// keep panning through the library's own handler.
-let _mainWheelBound = false;
-
+// that carries even a small vertical component zooms while panning. That is why
+// wheel-zoom is OFF on every chart here (handleScale.mouseWheel: false) and only
+// a real trackpad pinch zooms — the browser reports it as a wheel event with
+// ctrlKey set. The zoom itself, including where it stops, lives in
+// chart_zoom.js and is shared with every pane and the report page.
 function ensureMainChartWheel() {
-  const el = $("chart-canvas");
-  if (!el || _mainWheelBound) return;
-  _mainWheelBound = true;
-  el.addEventListener("wheel", onMainChartWheel, { passive: false });
-}
-
-function onMainChartWheel(ev) {
-  if (!ev.ctrlKey) return; // plain wheel never zooms — leave panning to the library
-  ev.preventDefault(); // stop the browser from zooming the whole page instead
-  const chart = state.chart;
-  if (!chart) return;
-  const ts = chart.timeScale();
-  const range = ts.getVisibleLogicalRange();
-  if (!range || !(range.to > range.from)) return;
-  const box = $("chart-canvas").getBoundingClientRect();
-  if (!box.width) return;
-  const x = Math.max(0, Math.min(box.width, ev.clientX - box.left));
-  const anchor = range.from + (x / box.width) * (range.to - range.from);
-  const span = range.to - range.from;
-  const factor = Math.exp(-ev.deltaY * 0.005); // pinch out (negative delta) -> zoom in
-  // BOTH ends of the zoom stop at the data. One logical unit IS one bar, so the
-  // whole history occupies [0, barCount): asking for a wider window than that is
-  // asking for something the chart cannot draw — the library clamps what it
-  // reports back, and re-deriving the next step from ITS answer made the zoom
-  // jump (the reported range collapsed, so the view snapped to a handful of bars
-  // — "the zoom restarts at maximum zoom" — as soon as a pinch-out went past the
-  // end of the data). The inward stop is one bar; the library's own maximum bar
-  // spacing is reached long before that and holds the zoom-in end.
-  const bars = state.chartBarCount || 0;
-  const maxSpan = bars > 1 ? bars : span * 10;
-  const newSpan = Math.min(maxSpan, Math.max(1, span / factor));
-  let newFrom = anchor - (anchor - range.from) * (newSpan / span);
-  // ...and the window itself stays inside the data, so maximum zoom-out really
-  // shows every bar instead of scrolling empty space into view.
-  if (bars > 1) {
-    newFrom = Math.min(Math.max(0, newFrom), Math.max(0, bars - newSpan));
-  }
-  ts.setVisibleLogicalRange({ from: newFrom, to: newFrom + newSpan });
+  // One listener on the element, re-pointed at whatever chart occupies it now:
+  // a rebuild replaces the chart, not the element.
+  ChartZoom.bind($("chart-canvas"), () => ({
+    chart: state.chart,
+    barCount: state.chartBarCount || 0,
+  }));
 }
 
 /* ---------- Strategy Signals panel (rule-based model test) ---------- */
@@ -1660,63 +1628,118 @@ function addPriceOverlays(chart) {
     });
 }
 
-/* Keep every oscillator pane's time scale in lock-step with the main price
-   chart: zooming/panning the chart zooms/scrolls the indicator panes by the
-   same amount of time, no matter the window (2 years, 3 months, days…).
+/* ---------- Every chart shows the same bars ----------
+   The price chart, each indicator pane drawn separately and the backtest equity
+   curve must show the SAME PERIOD at the same zoom: moving or zooming any of them
+   moves all the others with it.
 
-   We sync by TIME range (not logical/index range): panes hold fewer bars than
-   the main chart (RSI/ATR/momentum drop their warm-up rows), so a logical
-   range would be clamped on the pane and the clamped value pushed back into
-   the main chart — which moved the user's zoom when a pane was toggled on.
-   Dates map 1:1 across every chart, so time-based sync is always exact. */
-function _syncTimeRange(chart, range) {
-  if (!chart || !range) return;
-  const cur = chart.timeScale().getVisibleRange();
-  if (cur && cur.from === range.from && cur.to === range.to) {
-    return; // already in sync — breaks the echo loop between charts
-  }
-  chart.timeScale().setVisibleRange(range);
+   They are synced by LOGICAL range (bar indices), with a per-chart OFFSET, not by
+   time range. Two things a time range cannot do:
+
+   * it cannot express the empty space before the first bar or after the last one.
+     The library clamps such a request to the data, so dragging a pane past the end
+     of its series left the price chart standing still ("the main chart stays
+     unchanged"), and a price chart scrolled into whitespace clipped every pane;
+   * an indicator's series is the price series minus a PREFIX (RSI drops its
+     warm-up rows), so its indices are the price chart's shifted by a constant.
+     One number describes that mapping exactly, and shifting a logical range by it
+     needs no date arithmetic and is never clamped.
+
+   The offset is DERIVED, never assumed: the first and last bar of the series are
+   located in the price chart's bars, and a series that does not line up on both
+   ends is left out of the sync rather than moved to the wrong bars. */
+const _rangeOffsets = new WeakMap(); // chart -> its bar 0 in the price chart's indices
+const _rangeTimes = new WeakMap(); // chart -> its bar times (until it is registered)
+const _pushedRanges = new WeakMap(); // chart -> the range we just asked it for
+
+function _priceBarTimes() {
+  return state.chartTimes || [];
 }
 
-// Every chart that must share the main price chart's zoom: the oscillator
-// panes AND the backtest equity-curve sparkline (when a result is shown).
-// Read lazily each time so a just-created/removed satellite is picked up
-// without needing to (re)subscribe the main chart.
+// Where this series' bar 0 sits in the price chart's bars, or null when the two
+// share no bar we can locate (then that chart is not synced at all).
+function _rangeOffset(times) {
+  const main = _priceBarTimes();
+  if (!times || !times.length || !main.length) return null;
+  const first = main.indexOf(times[0]);
+  if (first < 0) return null;
+  const last = main.indexOf(times[times.length - 1]);
+  if (last !== first + times.length - 1) return null; // not a prefix-aligned subset
+  return first;
+}
+
+// Join the sync: remember the mapping, then adopt the price chart's current view.
+function registerRangeSync(chart, times) {
+  if (!chart || !state.chart) return;
+  const isPrice = chart === state.chart;
+  const offset = isPrice ? 0 : _rangeOffset(times || _rangeTimes.get(chart));
+  if (offset === null) return;
+  _rangeOffsets.set(chart, offset);
+  chart.timeScale().subscribeVisibleLogicalRangeChange((r) => _onRangeChanged(chart, r));
+  const adopt = () => {
+    if (chart !== state.chart && !_rangeOffsets.has(chart)) return; // disposed
+    const main = state.chart && state.chart.timeScale().getVisibleLogicalRange();
+    if (main) _mirrorRange(state.chart, main);
+  };
+  adopt();
+  // ...and once more after the next frame: a freshly created chart is still
+  // settling into its box, and a range applied against a width that then changes
+  // comes out a few bars short of the price chart's.
+  requestAnimationFrame(adopt);
+}
+
+// Push a range onto every other chart, converted into ITS indices.
+function _mirrorRange(source, range) {
+  const srcOffset = _rangeOffsets.get(source);
+  if (srcOffset === undefined || !range) return;
+  [state.chart].concat(_satelliteCharts()).forEach((other) => {
+    if (!other || other === source) return;
+    const off = _rangeOffsets.get(other);
+    if (off === undefined) return;
+    const moved = {
+      from: range.from + srcOffset - off,
+      to: range.to + srcOffset - off,
+    };
+    _pushedRanges.set(other, moved);
+    other.timeScale().setVisibleLogicalRange(moved);
+  });
+}
+
+// Every chart that shares the price chart's view: the oscillator panes AND the
+// backtest equity-curve sparkline (when a result is shown). Read lazily each time,
+// so a just-created/removed satellite is picked up without re-subscribing.
 function _satelliteCharts() {
   const list = (state.oscCharts || []).slice();
   if (btChart) list.push(btChart);
   return list;
 }
 
-function _mainRangeHandler(range) {
+function _onRangeChanged(chart, range) {
   if (!range) return;
-  _satelliteCharts().forEach((oc) => _syncTimeRange(oc, range));
+  const pushed = _pushedRanges.get(chart);
+  if (pushed && Math.abs(pushed.from - range.from) < 0.01
+    && Math.abs(pushed.to - range.to) < 0.01) {
+    _pushedRanges.delete(chart);
+    return; // our own push coming back — never echo it onwards
+  }
+  // The price chart is always the master. A satellite drives the others only while
+  // the user is working in it: its range also changes when the layout catches up
+  // (its first paint, a resize), and that is not the user moving anything.
+  if (chart !== state.chart && !_userTouchedPane(chart)) return;
+  _mirrorRange(chart, range);
 }
 
 function subscribeMainToOscTime() {
-  // The main chart drives the panes. Idempotent per chart instance.
+  // Idempotent per chart instance: a rebuild makes a new chart, which subscribes once.
   if (!state.chart) return;
+  _rangeOffsets.set(state.chart, 0); // the price chart IS the reference
   const ts = state.chart.timeScale();
-  ts.unsubscribeVisibleTimeRangeChange(_mainRangeHandler);
-  ts.subscribeVisibleTimeRangeChange(_mainRangeHandler);
+  ts.unsubscribeVisibleLogicalRangeChange(_mainRangeHandler);
+  ts.subscribeVisibleLogicalRangeChange(_mainRangeHandler);
 }
 
-function subscribeOscToMainTime(chart) {
-  // Panning/zooming inside a pane also moves the main chart (two-way sync) — but
-  // ONLY when the user is the one doing it. A satellite's range changes for a
-  // second reason: we just pushed the main chart's range into it, and when its own
-  // data cannot span that range the library CLAMPS what it applies. The change it
-  // reports then is not the one it was asked for, and pushing that clamped window
-  // back into the main chart is what made zooming out snap to a few bars the
-  // moment the pinch went past the pane's data (an endless push/clamp/echo cycle).
-  // A real gesture is what marks a pane as the source: the wheel/pointer/touch
-  // events land on the pane first, and the range change they cause arrives while
-  // they are still being delivered.
-  chart.timeScale().subscribeVisibleTimeRangeChange((range) => {
-    if (!range || !state.chart || chart === state.chart) return;
-    if (!_userTouchedPane(chart)) return; // an echo of our own push, not the user
-    _syncTimeRange(state.chart, range);
-  });
+function _mainRangeHandler(range) {
+  _onRangeChanged(state.chart, range);
 }
 
 // Marks a satellite (oscillator pane / equity curve) as user-driven for a moment,
@@ -1862,11 +1885,31 @@ function drawOscPanes() {
         grid: { vertLines: { color: "#22262f" }, horzLines: { color: "#22262f" } },
         timeScale: { timeVisible: false, borderColor: "#333a46" },
         rightPriceScale: { borderColor: "#333a46" },
+        // Same wheel policy as the main chart: a plain wheel pans, only a pinch
+        // zooms, and ChartZoom stops it at this pane's own data.
+        handleScroll: { mouseWheel: true },
+        handleScale: {
+          mouseWheel: false,
+          axisPressedMouseMove: { time: false, price: true },
+        },
         // Same free-floating crosshair as the main chart, so the synced
         // horizontal line is not snapped to a bar's extremes.
         crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
       });
       watchPaneInteraction(chart, canvas); // gestures here drive the main chart
+      // The pane's bar count is the UNION of its series' times: a pane's lines can
+      // start at different points (RSI/ATR drop their warm-up rows, MACD draws a
+      // histogram plus two lines), and the time axis holds all of them.
+      const paneTimes = [];
+      const paneSeen = new Set();
+      o.lines.forEach((line) => (line.data || []).forEach((p) => {
+        if (paneSeen.has(p.time)) return;
+        paneSeen.add(p.time);
+        paneTimes.push(p.time);
+      }));
+      paneTimes.sort();
+      ChartZoom.bind(canvas, () => ({ chart: chart, barCount: paneTimes.length }));
+      _rangeTimes.set(chart, paneTimes); // joined to the price chart's bars below
       let anchorSeries = null;
       o.lines.forEach((line) => {
         // A line may carry its own kind / colour / price format: MACD draws its
@@ -1894,25 +1937,18 @@ function drawOscPanes() {
       state.oscCharts.push(chart);
     });
 
-  // Let freshly created panes paint once at their natural width BEFORE we (a)
-  // snap them to the main chart's zoom and (b) attach the reverse sync. If we
-  // do either synchronously, a pane emits its own initial right-aligned
-  // default view during first layout — and because the sync is two-way, that
-  // wrong range gets pushed back into the MAIN chart, resetting the user's
-  // zoom every time an oscillator is toggled on. Waiting two frames lets that
-  // initial emission pass harmlessly (no handler attached yet); only then do
-  // we enable pane->main sync and pin each pane to the chart's current view.
-  // The generation token makes stale callbacks from an earlier toggle a no-op.
+  // Let freshly created panes paint once at their natural width BEFORE we join them
+  // to the price chart's view. A pane emits its own default (right-aligned) range
+  // during first layout, and that emission must not be mistaken for the user moving
+  // it — the touch guard in _onRangeChanged already ignores it, this just keeps the
+  // adopted range from being the one the pane was about to abandon. The generation
+  // token makes stale callbacks from an earlier toggle a no-op.
   const gen = ++_oscPaneGen;
   requestAnimationFrame(() => {
     requestAnimationFrame(() => {
       if (gen !== _oscPaneGen) return; // a newer drawOscPanes superseded us
       if (!state.chart) return;
-      const mainRange = state.chart.timeScale().getVisibleRange();
-      (state.oscCharts || []).forEach((oc) => {
-        subscribeOscToMainTime(oc);
-        if (mainRange) _syncTimeRange(oc, mainRange);
-      });
+      (state.oscCharts || []).forEach((oc) => registerRangeSync(oc));
     });
   });
 }
@@ -3732,6 +3768,12 @@ function drawBtCurve(points) {
       grid: { vertLines: { color: "#22262f" }, horzLines: { color: "#22262f" } },
       rightPriceScale: { borderColor: "#333a46" },
       timeScale: { borderColor: "#333a46", visible: false },
+      // Same wheel policy as the price chart and the panes (see chart_zoom.js).
+      handleScroll: { mouseWheel: true },
+      handleScale: {
+        mouseWheel: false,
+        axisPressedMouseMove: { time: false, price: true },
+      },
       crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
     });
     const line = chart.addLineSeries({ color: "#4c8dff", lineWidth: 2, priceLineVisible: false, lastValueVisible: true });
@@ -3739,29 +3781,23 @@ function drawBtCurve(points) {
     line.setData(curve);
     btChart = chart;
     watchPaneInteraction(chart, host); // gestures here drive the main chart
+    ChartZoom.bind(host, () => ({ chart: btChart === chart ? chart : null, barCount: curve.length }));
     // The equity curve joins the crosshair sync too (its zoom already follows
     // the main chart), anchored on the equity value at each time.
     const anchor = _crosshairValues(curve);
     registerCrosshairAnchor(chart, line, anchor.values, anchor.fallback);
 
-    // Link zoom with the main price chart, exactly like the oscillator panes:
-    // wait for this chart's initial paint (2 frames) before attaching the
-    // two-way time sync, so its own default right-aligned view can't be pushed
-    // back into the main chart and reset the user's zoom. Then pin it to the
-    // main chart's CURRENT visible range rather than a full-content fit.
-    const main = state.chart;
-    const mainRange = main ? main.timeScale().getVisibleRange() : null;
-    if (main && mainRange) {
+    // Link the equity curve to the price chart's bars, exactly like the oscillator
+    // panes: wait for this chart's initial paint (2 frames) so its own default
+    // right-aligned view cannot be mistaken for the user moving it, then join it to
+    // whatever the price chart is showing — not to a full-content fit.
+    requestAnimationFrame(() => {
       requestAnimationFrame(() => {
-        requestAnimationFrame(() => {
-          if (btChart !== chart || !state.chart) return; // superseded/rebuilt
-          subscribeOscToMainTime(chart); // equity curve -> main chart
-          _syncTimeRange(chart, mainRange); // main chart -> equity curve
-        });
+        if (btChart !== chart || !state.chart) return; // superseded/rebuilt
+        _rangeTimes.set(chart, curve.map((p) => p.time));
+        registerRangeSync(chart);
       });
-    } else {
-      chart.timeScale().fitContent();
-    }
+    });
   } catch (_) {
     host.textContent = "Equity curve unavailable.";
   }
