@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[2]
 HTML = (ROOT / "src" / "web" / "templates" / "index.html").read_text(encoding="utf-8")
 APP_JS = (ROOT / "src" / "web" / "static" / "app.js").read_text(encoding="utf-8")
 LOG_JS = (ROOT / "src" / "web" / "static" / "log.js").read_text(encoding="utf-8")
+CSS = (ROOT / "src" / "web" / "static" / "style.css").read_text(encoding="utf-8")
 
 
 def _column(needle: str) -> str:
@@ -30,6 +31,25 @@ def _column(needle: str) -> str:
     if at < aside:
         return "left"
     return "right" if at < end else "outside"
+
+
+def test_the_tick_table_renders_a_bar_s_notes_with_a_warning_mark():
+    """A note exists to be SEEN, so the tick table is where it has to land.
+
+    ``src.data.quality`` reports an odd bar without refusing it, which means nothing else in
+    the system will ever mention it — if this cell is missing, the note is written to disk and
+    read by nobody. The ⚠ and its own colour are what keep it distinguishable at a glance from
+    the ordinary reason text beside it in the same row.
+    """
+    assert "notesCell(tick.notes)" in LOG_JS, "the tick row renders the notes"
+    assert '"notes"' in LOG_JS, "and the table declares the column"
+
+    start = LOG_JS.index("function notesCell")
+    helper = LOG_JS[start:start + 700]
+    assert "⚠" in helper, "marked, so it is not mistaken for the tick's reason"
+    assert 'class="warn"' in helper
+    assert '"—"' in helper, "an em dash when there is nothing to say, not a blank cell"
+    assert ".lg-table td.warn" in CSS, "the marker has its own colour (amber, not red)"
 
 
 # ---------------------------------------------------------------------------

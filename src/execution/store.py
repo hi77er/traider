@@ -184,6 +184,7 @@ def tick_record(
     position: Any = None,
     order_ids: Optional[List[str]] = None,
     trades: Optional[List[Any]] = None,
+    notes: Optional[List[str]] = None,
     open_count: Optional[int] = None,
     protected: Optional[bool] = None,
 ) -> Dict[str, Any]:
@@ -212,6 +213,10 @@ def tick_record(
         # trades.jsonl: the panel answers "what did the last tick do" from latest.json, and
         # a close it cannot see is a close the operator has to go digging for.
         "trades": list(trades or []),
+        # What was odd about the bar WITHOUT being a reason to refuse it (``src.data.quality``).
+        # Always present, empty when there is nothing to say: a key that appears only when
+        # something is wrong is a key a reader has to check for, and one they will forget to.
+        "notes": [str(note) for note in (notes or [])],
     }
     if open_count is not None:
         record["open_count"] = int(open_count)

@@ -10,7 +10,8 @@ One tick, in this order, and the order is not arbitrary:
   3  sync the dataset to now    the only provider call in the loop
   4  read the trailing window   from the DATASET, ending at the newest CLOSED bar
   5  is the stored bar current? the file must reach the bar that should have closed
-  5b has the day hit its loss limit?  ``src.strategy.limits`` — entries only, never exits
+  5b is the bar a bar?         ``src.data.quality`` — an impossible one refuses, an odd one is noted
+  5c has the day hit its loss limit?  ``src.strategy.limits`` — entries only, never exits
   6  already decided that bar?  the driver's idempotency key
   7  decide and act             ``LiveDriver.on_bar_closed`` → reconcile → engine → broker
   8  record it                  the ledger, the state file and the live store
@@ -57,6 +58,7 @@ from src.config.trading_state import armed_strategy, get_state, is_trading_on
 from src.data import dataset
 from src.data import delta as delta_mod
 from src.data import live as live_data
+from src.data import quality
 from src.data.dataset import load_dataset
 from src.execution import accounts, store
 from src.execution.alpaca_broker import AlpacaBroker
@@ -204,6 +206,12 @@ def tick(
     strategy = active_strategy_name() or getattr(settings, "instrument", "strategy")
     env = str(getattr(settings, "execution_env", "paper") or "paper").lower()
 
+    # Anything worth recording about the bar that is not worth refusing over. Filled in below,
+    # once the bar is in hand, and read by ``finish`` from the closure — so every record from
+    # that point on carries it without each of the paths having to remember. The notes belong
+    # to the tick, not to the route it took out of the pipeline.
+    notes: List[str] = []
+
     def finish(
         action: str,
         reason: str = "",
@@ -214,7 +222,7 @@ def tick(
     ) -> Dict[str, Any]:
         record_ = store.tick_record(
             strategy=strategy, env=env, action=action, reason=reason,
-            settings=settings, at=at, **extra,
+            settings=settings, at=at, notes=notes, **extra,
         )
         if record:
             try:
@@ -316,7 +324,24 @@ def tick(
             "the dataset is behind; refusing to decide on a stale bar",
         )
 
-    # -- 5b. the day's loss limits -----------------------------------------
+    # -- 5b. is the bar a bar? ---------------------------------------------
+    # The decision below is made on the newest CLOSED bar, so the question here is whether
+    # that bar describes a market that could have existed. One that cannot be — a missing
+    # price, a zero, a high under its low — refuses the tick, because a decision made on an
+    # impossible bar is a decision about a market that never happened, and every number
+    # downstream of it inherits the mistake.
+    #
+    # A bar that is merely STRANGE is not refused. It is recorded as a note and the decision
+    # goes ahead: the line is "provably impossible" against "worth a look", because anything
+    # softer would need a threshold nobody configured, and that is a trading rule — which
+    # belongs in the strategy, where a backtest can measure it.
+    signal_row = window.iloc[-1]
+    broken = quality.broken_reason(signal_row)
+    if broken:
+        return finish("refused", broken)
+    notes.extend(quality.notes(signal_row))
+
+    # -- 5c. the day's loss limits -----------------------------------------
     # Before the driver is built, because the answer changes what it is allowed to open.
     # A breach stops NEW entries for the rest of the exchange day and lifts by itself when
     # the next one starts — a halt nobody has to remember to clear.

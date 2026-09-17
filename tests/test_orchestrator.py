@@ -22,6 +22,7 @@ import pytest
 from src.config import state_files
 from src.config.settings import Settings
 from src.config.trading_state import write_state
+from src.data import dataset
 from src.data.dataset import save_dataset
 from src.execution.accounts import EnvAccount
 from src.scheduler import lease as lease_mod
@@ -514,6 +515,84 @@ def test_a_closed_position_writes_a_trade_row(tmp_path, armed):
     assert trades[0]["reason"] in ("signal", "forced")
     assert orchestrator.store.load_latest(settings, STRATEGY)["trades"], "also on the heartbeat"
     assert len(orchestrator.store.read_orders(settings, STRATEGY)) == 2, "the open and the close"
+
+
+# ---------------------------------------------------------------------------
+# the bar the decision is made on
+# ---------------------------------------------------------------------------
+def _break_signal_bar(settings, at, column, value):
+    """Break the bar the next tick will decide on, and save the dataset back.
+
+    The bar is found through ``last_closed_bar`` rather than taken to be the frame's last row:
+    the loop decides on the newest bar that has CLOSED at ``at``, and near a session boundary
+    that is not the last row in the file. (Found the hard way — a corrupted last row was
+    silently outside the window, so the check under test never saw it.)
+    """
+    until = dataset.bar_stamp(settings, dataset.last_closed_bar(settings, at))
+    frame = _frame(_sessions())
+    stamps = [dataset.bar_stamp(settings, ts) for ts in frame.index]
+    frame.iloc[stamps.index(until), frame.columns.get_loc(column)] = value
+    save_dataset(settings, frame, "AAPL", "1h")
+    return until
+
+
+def test_an_impossible_bar_refuses_the_tick(tmp_path, armed):
+    """A decision made on a bar that cannot exist is a decision about a market that never did.
+
+    Refusing costs a bar; sizing a position from a high that is under its own low costs money,
+    and the number would look perfectly ordinary in every record afterwards.
+    """
+    settings = armed()
+    at = _at("2024-01-05 14:05")
+    _break_signal_bar(settings, at, "high", 1.0)
+
+    record = orchestrator.tick(
+        settings, now=at, sync_call=lambda: {}, clock_call=Calls().clock,
+        driver=_driver(settings),
+    )
+
+    assert record["action"] == "refused", record
+    assert "high (1) is below its low" in record["reason"], record["reason"]
+    assert record["intents"] == [] and record["order_ids"] == [], "nothing was decided"
+    assert orchestrator.store.read_orders(settings, STRATEGY) == []
+
+
+def test_an_odd_bar_is_decided_on_and_the_note_rides_along(tmp_path, armed):
+    """Unusual is not impossible: the bar is used, and what was odd about it is recorded.
+
+    Both halves matter. Refusing every zero-volume bar stops the bot on a quiet afternoon;
+    deciding on one silently hides a bar somebody should look at.
+    """
+    settings = armed()
+    at = _at("2024-01-05 14:05")
+    _break_signal_bar(settings, at, "volume", 0)
+
+    record = orchestrator.tick(
+        settings, now=at, sync_call=lambda: {}, clock_call=Calls().clock,
+        driver=_driver(settings),
+    )
+
+    assert record["action"] == "decided", "the bar was usable, so it was used"
+    assert record["notes"] == ["the bar has a volume of 0"], record["notes"]
+    assert record["intents"][0]["intent"] == "open", "and the entry went through"
+    # The note is in the day's log too, not only on the heartbeat the panel reads.
+    logged = orchestrator.store.read_ticks(settings, STRATEGY, "2024-01-05")[0]
+    assert logged["notes"] == record["notes"]
+
+
+def test_a_healthy_bar_carries_an_empty_notes_list(tmp_path, armed):
+    """The key is always there, so nothing has to check for its absence.
+
+    ``notes`` appears on every record, empty when there is nothing to say — a field that only
+    shows up when something is wrong is one a reader has to remember to look for.
+    """
+    settings = armed()
+    record = orchestrator.tick(
+        settings, now=_at("2024-01-05 14:05"), sync_call=lambda: {}, clock_call=Calls().clock,
+        driver=_driver(settings),
+    )
+
+    assert record["notes"] == []
 
 
 # ---------------------------------------------------------------------------

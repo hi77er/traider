@@ -68,6 +68,16 @@
     return `<td${cls ? ` class="${cls}"` : ""}>${esc(value)}</td>`;
   }
 
+  // The ⚠ a tick carries when its bar was odd but usable (`src.data.quality`). An em dash when
+  // there is nothing to say, so an empty cell never reads as a value that failed to load —
+  // and the text is shown rather than hidden behind a tooltip, because "which bar was strange,
+  // and how" is exactly what someone reading this table came to find out.
+  function notesCell(notes) {
+    const list = (notes || []).filter(Boolean);
+    if (!list.length) return "<td>—</td>";
+    return `<td class="warn">⚠ ${esc(list.join("; "))}</td>`;
+  }
+
   function money(value) {
     if (value === null || value === undefined || value === "") return "—";
     const number = Number(value);
@@ -251,14 +261,15 @@
     const ticks = (state.log && state.log.ticks) || [];
     $("lg-day").textContent = state.log ? state.log.day : "";
     setIfChanged($("lg-ticks"), table(
-      ["when", "action", "bar", "signal", "reason", "orders"],
+      ["when", "action", "bar", "signal", "reason", "orders", "notes"],
       ticks,
       (tick) => {
         const ids = (tick.order_ids || []).length;
         const cls = tick.action === "refused" ? "bad" : "";
         return `<tr>${cell(stamp(tick.at))}${cell(tick.action, cls)}${cell(tick.bar)}
           ${cell(tick.signal)}${cell(tick.reason)}
-          <td>${ids ? `${ids} — ${esc((tick.order_ids || []).join(", "))}` : "—"}</td></tr>`;
+          <td>${ids ? `${ids} — ${esc((tick.order_ids || []).join(", "))}` : "—"}</td>
+          ${notesCell(tick.notes)}</tr>`;
       }
     ) || empty("nothing was decided on this day"));
   }

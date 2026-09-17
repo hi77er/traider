@@ -169,3 +169,42 @@ def test_the_page_puts_the_account_before_the_local_record(api_settings):
 
     assert html.index("Account") < html.index("What the loop did")
     assert html.index("What the loop did") < html.index("Trades closed")
+
+
+# ---------------------------------------------------------------------------
+# the bar's notes (7.4): reported, never acted on
+# ---------------------------------------------------------------------------
+def test_the_notes_about_an_odd_bar_come_back_with_the_tick(api_settings):
+    """The note is part of the record, so the page renders it rather than re-deriving it.
+
+    What was odd about a bar was decided when the bar was decided (``src.data.quality``), and
+    a page that recomputed it later from today's data would describe a different bar.
+    """
+    settings = api_settings
+    at = datetime(2026, 9, 17, 14, 0, tzinfo=timezone.utc)
+    record = store.tick_record(
+        strategy="Alpha", env="paper", action="decided", settings=settings, at=at,
+        bar="2026-09-17T17:30:00+00:00", notes=["the bar has a volume of 0"],
+    )
+    store.append_tick(settings, "Alpha", record, when=at)
+
+    body = client.get("/api/v1/log").json()
+
+    assert body["ticks"][0]["notes"] == ["the bar has a volume of 0"]
+
+
+def test_a_tick_written_before_notes_existed_is_still_readable(api_settings):
+    """Old logs stay readable. The field is new, the file is append-only, and a page that
+    assumed it was there would show an empty table for every day before it existed."""
+    settings = api_settings
+    at = datetime(2026, 9, 17, 13, 0, tzinfo=timezone.utc)
+    old = {
+        "at": at.isoformat(), "day": "2026-09-17", "strategy": "Alpha", "env": "paper",
+        "action": "decided", "reason": "", "bar": "2026-09-17T17:30:00+00:00",
+    }
+    store.append_tick(settings, "Alpha", old, when=at)
+
+    body = client.get("/api/v1/log").json()
+
+    assert [tick["action"] for tick in body["ticks"]] == ["decided"]
+    assert "notes" not in body["ticks"][0], "the row is passed through as it was written"

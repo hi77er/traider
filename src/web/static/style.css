@@ -1424,6 +1424,9 @@ td.mkt-sym { font-weight: 600; }
 .lg-table tbody tr:hover { background: rgba(76, 141, 255, 0.05); }
 .lg-table td.bad, .lg-table td:first-child { white-space: nowrap; }
 .lg-table td.bad { color: var(--red); }
+/* A tick's BAR was odd without being a reason to refuse it (``src.data.quality``): amber, not
+   red — the decision stands and the note is a look-at-this, not a failure. */
+.lg-table td.warn { color: #f0b429; }
 .lg-table td.good { color: var(--green); }
 #lg-protection.bad { color: var(--red); }
 .rp-run.active { border-color: var(--accent); color: var(--accent); }
