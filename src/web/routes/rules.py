@@ -77,7 +77,14 @@ def create_strategy(body: StrategyCreate, settings: Settings = Depends(get_effec
         # flatten that follows would run against the NEW strategy's instrument and
         # environment, and miss the position entirely. Blocking the switch is what keeps
         # "flatten first" reachable from the screen where the position is actually visible.
-        Depends(trading_service.require_flat("The active strategy cannot be changed while a position is open")),
+        #
+        # ``active_only``: the position that matters is one in the account BEING TRADED. A
+        # key for the other account that the broker rejects is not a reason to freeze the
+        # picker — that account is not touched by a switch, and refusing for it locked
+        # strategy changes permanently with the remedy nowhere in the message.
+        Depends(trading_service.require_flat(
+            "The active strategy cannot be changed while a position is open", active_only=True,
+        )),
     ],
 )
 def select_strategy(body: StrategyCreate, settings: Settings = Depends(get_effective_settings_dep)) -> dict:
@@ -90,8 +97,12 @@ def select_strategy(body: StrategyCreate, settings: Settings = Depends(get_effec
     dependencies=[
         Depends(require_trading_off),
         # Deleting the strategy that owns a position would leave nothing that knows how to
-        # close it — the instrument and the environment go with the strategy.
-        Depends(trading_service.require_flat("A strategy cannot be deleted while a position is open")),
+        # close it — the instrument and the environment go with the strategy. ``active_only``
+        # for the same reason as the switch: a position in the account being traded is the
+        # one that would be abandoned, and an unreadable account elsewhere is not.
+        Depends(trading_service.require_flat(
+            "A strategy cannot be deleted while a position is open", active_only=True,
+        )),
     ],
 )
 def delete_strategy(body: StrategyDelete, settings: Settings = Depends(get_effective_settings_dep)) -> dict:

@@ -71,7 +71,7 @@ __all__ = [
 
 
 # -- the exposure gate -----------------------------------------------------
-def flat_blocker(settings, *, action: str) -> Optional[str]:
+def flat_blocker(settings, *, action: str, active_only: bool = False) -> Optional[str]:
     """Why this action must not proceed, or ``None`` when nothing is in the way.
 
     ``action`` leads the message because the same check guards four different things, and
@@ -81,10 +81,27 @@ def flat_blocker(settings, *, action: str) -> Optional[str]:
     not be read. Both are decisions not to trade blind — see
     ``src/execution/positions`` for why "no credentials" is provably flat while
     "unreachable" is not.
+
+    ``active_only`` narrows the SECOND of those to the environment being traded, and it
+    exists because a broken key for an account this screen is not pointed at is not a
+    reason to freeze it. Changing the active strategy and deleting a strategy cannot strand
+    a position in an account the bot is not trading: the danger there is a position in the
+    account in play, whose flatten button would follow the switch. Refusing because the
+    OTHER account could not be read blocked those actions permanently, with the remedy
+    (fix or clear the other account's keys) nowhere in the message — a false positive that
+    locked the picker for good.
+
+    ⚠️ It does NOT narrow the held rule, and it must not: a position you can see, in either
+    account, is exactly what the switch would leave behind. Arming (``turn_on``) and
+    switching the environment keep the strict rule, because both of those DO reach an
+    account whose contents are unknown.
     """
     states = positions.snapshots(settings)
     held = positions.held(states)
     blind = positions.unknown(states)
+    if active_only:
+        active = str(getattr(settings, "execution_env", "paper") or "paper").strip().lower()
+        blind = [state for state in blind if state.env == active]
 
     if held:
         # The tail gives the operator both ways out, and both are real: flattening is
@@ -104,7 +121,7 @@ def flat_blocker(settings, *, action: str) -> Optional[str]:
     return None
 
 
-def require_flat(action: str):
+def require_flat(action: str, *, active_only: bool = False):
     """A FastAPI dependency refusing ``action`` while a position is open.
 
     A factory rather than a plain function so each route can say what it is refusing —
@@ -115,10 +132,14 @@ def require_flat(action: str):
     frequent settings writes) it guards only the rare user-initiated actions that can
     strand a position. The lock follows EXPOSURE, not the switch: it is holding something
     that matters, not whether trading is armed.
+
+    ``active_only`` is passed on to :func:`flat_blocker`: true for the actions that cannot
+    strand a position in an account they do not touch (changing or deleting a strategy),
+    false for the ones that can (arming, changing the environment).
     """
 
     def dependency(settings=Depends(get_effective_settings_dep)) -> None:
-        blocker = flat_blocker(settings, action=action)
+        blocker = flat_blocker(settings, action=action, active_only=active_only)
         if blocker:
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=blocker)
 

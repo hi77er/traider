@@ -477,3 +477,99 @@ def test_stop_and_flatten_in_the_route(tmp_path, state_file, account):
         app.dependency_overrides.clear()
     assert response.status_code == 200
     assert response.json()["flattened"][0]["symbol"] == "AAPL"
+
+
+# ---------------------------------------------------------------------------
+# which account has to be PROVEN flat, per action
+#
+# Reading both accounts is right, and it is why a live position blocks a paper
+# strategy. But refusing to change a strategy because an account that is NOT
+# being traded cannot be read froze the strategy picker for a reason with no
+# remedy on that screen — the account in question is not touched by a switch,
+# and a switch cannot strand a position in it. So the two actions that only
+# ever move a strategy ask about the account in play, while arming and the
+# environment switch keep asking about both: those two can reach the other
+# account, so "we could not look" has to stay a refusal for them.
+# ---------------------------------------------------------------------------
+def _blind(monkeypatch, env):
+    """Make one environment unreachable, leaving the other provably flat."""
+
+    def probe(viewed, env_name):
+        if env_name == env:
+            raise AlpacaError("unauthorized")
+        return []
+
+    monkeypatch.setattr(positions, "probe", probe)
+
+
+def test_a_blind_account_that_is_not_being_traded_allows_a_switch(tmp_path, monkeypatch):
+    _blind(monkeypatch, "live")
+    settings = _s(tmp_path, execution_env="paper", **PAPER_KEYS, **LIVE_KEYS)
+
+    assert trading_service.flat_blocker(
+        settings, action="switch", active_only=True
+    ) is None
+
+
+def test_the_account_being_traded_still_has_to_be_readable_to_switch(tmp_path, monkeypatch):
+    """The flag narrows WHICH account, not whether an answer is required."""
+    _blind(monkeypatch, "live")
+    settings = _s(tmp_path, execution_env="live", **PAPER_KEYS, **LIVE_KEYS)
+
+    blocker = trading_service.flat_blocker(settings, action="switch", active_only=True)
+
+    assert blocker is not None
+    assert "live account could not be read" in blocker
+
+
+def test_a_position_in_the_other_account_still_blocks_the_switch(tmp_path, monkeypatch):
+    """The held rule is not narrowed: a position that can be seen is one that would be
+    stranded, and it does not matter which account it is sitting in."""
+    monkeypatch.setattr(
+        positions, "probe", lambda viewed, env: [_position()] if env == "live" else []
+    )
+    settings = _s(tmp_path, execution_env="paper", **PAPER_KEYS, **LIVE_KEYS)
+
+    blocker = trading_service.flat_blocker(settings, action="switch", active_only=True)
+
+    assert blocker is not None
+    assert "90 AAPL" in blocker and "Flatten first" in blocker
+
+
+def test_arming_is_not_narrowed_by_the_same_blind_account(tmp_path, monkeypatch):
+    """Arming goes through the environment switch, so an account nobody can read is a
+    refusal there — the same settings that allow a strategy change must not allow this."""
+    _blind(monkeypatch, "live")
+    settings = _s(tmp_path, execution_env="paper", **PAPER_KEYS, **LIVE_KEYS)
+
+    blocker = trading_service.flat_blocker(settings, action="Trading cannot be started")
+
+    assert blocker is not None
+    assert "unknown" in blocker and "live" in blocker
+    assert trading_service.flat_blocker(
+        settings, action="switch", active_only=True
+    ) is None, "the switch is the one that has to keep working"
+
+
+def test_the_switch_and_the_delete_route_ask_about_the_account_in_play(tmp_path, monkeypatch):
+    """End to end on the reported bug: a rejected key for the account not being traded
+    must not freeze the picker."""
+    _blind(monkeypatch, "live")
+    settings = _s(tmp_path, execution_env="paper", **PAPER_KEYS, **LIVE_KEYS)
+    app.dependency_overrides[get_effective_settings_dep] = lambda: settings
+    try:
+        client = TestClient(app)
+        selected = client.post("/api/v1/rules/select", json={"name": "gamma"})
+        armed = client.post("/api/v1/trading/on", json={"confirm": True})
+    finally:
+        app.dependency_overrides.clear()
+
+    assert selected.status_code != 409, selected.json()
+    assert selected.status_code < 500
+
+    # Arming refuses the same account, but as a PAYLOAD rather than a status code —
+    # ``turn_on`` never raises, because the panel shows the reason inline instead of
+    # as an error toast. The refusal is the ``ok: false``.
+    assert armed.json()["ok"] is False, "arming must still refuse the account it cannot read"
+    assert armed.json()["needs_flatten"] is True
+    assert "live" in armed.json()["message"]
