@@ -68,20 +68,34 @@ ledger records one, so a halt is a leg in the ledger rather than a silence.
 
 Consequences to know before touching them:
 
-- **On a daily bar size both limits are inert.** One decision *is* the day, so the tally resets
-  before a second decision can be evaluated against it. A daily-bar run is protected by its stops
-  and its sizing. The Risk panel says so rather than offering a promise it cannot keep.
+- **At a bar size of a day or coarser the two limits behave DIFFERENTLY, and the Risk panel says
+  each one in its own field.** `MAX_CONSECUTIVE_LOSSES` above 1 **cannot be reached**: the streak
+  is per exchange day and a day holds at most one trade (one close per bar). `MAX_LOSS_PERCENT`
+  **still fires**: it is measured on the account's equity, so at a daily bar it acts when the bar
+  closes and stops the NEXT session's entry rather than the one that just lost. This corrected an
+  earlier claim in this file that both were inert — that was true of the retired breaker, whose
+  own counter reset per bar, and not of an equity-based limit.
 - **A backtest does not apply them.** It has no broker, so it has no day-start equity to measure
   `MAX_LOSS_PERCENT` against, and no per-tick halt to model. A backtest therefore shows entries a
   live loop would have refused — the one place the two deliberately differ beyond whole shares.
+  `tests/test_strategy_parity.py` asserts no veto reaches the shared machine from a run with no
+  halt, so this cannot drift the other way by accident.
 - **`MAX_LOSS_PERCENT` is EQUITY-based** (`day_pl = equity - last_equity`, from the account read),
   so it includes what is still open. `MAX_CONSECUTIVE_LOSSES` counts today's closed round trips
-  whose `equity_ret < 0`; a skipped entry neither counts nor resets either one.
+  whose `equity_ret < 0`; a skipped entry neither counts nor resets either one — the loop writes
+  skipped legs to the trade log too, which is exactly why the tally has to ignore them.
+- **The limits refuse ENTRIES only, and so does a stale-process veto.** Both travel the same route:
+  a reason is handed to the driver (`LiveDriver.halt`) and passed into `StrategyEngine.step(veto=)`,
+  where an entry the machine wanted comes back as `Intent(action=SKIP)`. It is a veto and not a
+  refused tick on purpose — refusing the tick would skip the reconciliation, and a broker exit
+  nobody books leaves the bot believing it still holds a position it does not.
+- ⚠️ **The veto must stay INSIDE the decision.** `_entry_intent` CREATES `state.position` while
+  deciding, so converting the entry after `step` returned leaves the state holding a position the
+  broker never received — and the next tick refuses for ever over drift that never happened. The
+  check belongs before anything is created (this was a real bug, caught by a test).
 - **The retired modules are gone.** `src/risk/circuit_breaker.py` and `src/risk/validator.py` were
   deleted: the validator was a second, separately-stateful SIZING path, and the breaker kept its own
   counter where the ledger already records every leg. `AlpacaExecutor.validator` went with them.
-  The breaker's own docstring is worth remembering — it documented that on daily bars it was inert
-  either way, which is the fact the panel now reports.
 
 ## Procedure
 1. **Read `StrategyConfig.from_settings`** before assuming a setting is in play: an

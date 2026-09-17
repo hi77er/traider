@@ -60,9 +60,12 @@ Two consequences worth knowing:
 - **Every risk field is optional, and empty means NOT APPLIED** — in the backtest
   and in live/paper trading alike, because both read these same values. There is
   no master switch: `MAX_EXPOSURE_PERCENT` is the only one with a default (100 =
-  the whole account), and stopping a trade on losses (`MAX_CONSECUTIVE_LOSSES`,
-  `MAX_LOSS_PERCENT`) is collected but not yet applied — halting belongs to the
-  execution loop, which is where the frequent decisions are. See
+  the whole account). The two loss limits (`MAX_CONSECUTIVE_LOSSES`,
+  `MAX_LOSS_PERCENT`) are enforced by the **execution loop**, not by the backtest
+  — halting belongs where the frequent decisions are, and a limit measured against
+  an account is one a backtest cannot have. Both are measured over one exchange
+  day and clear when it turns over, and a halt refuses NEW entries only: an open
+  position keeps its stop, its take and its signal exit. See
   [One strategy, two drivers](#one-strategy-two-drivers) for the sizing rule.
 
 ## Two processes

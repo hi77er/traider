@@ -142,7 +142,11 @@ Track your progress through all 41 tasks across 9 phases.
   - [x] fixed_risk + volatility_target modes (volatility from trailing returns)
 
 - [x] **risk-circuit-breaker** (23) — Circuit breaker  ✅ COMPLETE
-  - [x] src/risk/circuit_breaker.py
+  - [x] src/risk/circuit_breaker.py  → **DELETED in Phase 7 (7.3)**: it was built and
+        tested and imported by nothing, and its own counter was superseded by the trade log
+        (the loop writes every leg with its day and its `equity_ret`, so the tally is a read,
+        not a persisted counter). The loss limits it anticipated now live in
+        `src/strategy/limits.py` and are applied by the loop
   - [x] Tracks consecutive losses and the day's realised P&L
   - [x] stop_trading_today() on MAX_CONSECUTIVE_LOSSES / MAX_LOSS_PERCENT
   - [x] Resets on a new day; snapshot()/restore() ready for the state tracker
@@ -224,10 +228,10 @@ Track your progress through all 41 tasks across 9 phases.
         fields each carry an example line ("e.g. 2", "leave empty for no stop")
   - [x] **Circuit breaker removed from the run**: no `ensure_breaker`, no skip-on-trip,
         no day-key plumbing, no breaker counters. `MAX_LOSS_PERCENT` /
-        `MAX_CONSECUTIVE_LOSSES` are still COLLECTED (panel + provenance) but not
-        applied — halting belongs to the execution loop. `Intent(action=SKIP)` and
-        `Ledger.record_skip` stay as the vocabulary so a refusal is a leg, not a
-        silence
+        `MAX_CONSECUTIVE_LOSSES` are APPLIED BY THE LOOP (Phase 7): measured per exchange
+        day, refusing new entries only, with the same vocabulary — an entry comes back as
+        `Intent(action=SKIP)` and `Ledger.record_skip` books it, so a refusal is a leg, not
+        a silence
   - [x] `risk_sim.RiskConfig` is now an ALIAS for `StrategyConfig` (it was a parallel
         dataclass with the same fields — exactly the drift the shared engine exists to
         prevent); `cash`-style `as_dict`/`to_strategy_config` live on the one config
@@ -243,7 +247,8 @@ Track your progress through all 41 tasks across 9 phases.
         both + cap), and fixtures name their risk values — an empty box is a real
         instruction, so a test must not inherit the developer's `.env` (nor a stray
         shell export, which `_env_file=None` does not defeat)
-  - [ ] Apply `MAX_LOSS_PERCENT` / `MAX_CONSECUTIVE_LOSSES` in the execution loop
+  - [x] Apply `MAX_LOSS_PERCENT` / `MAX_CONSECUTIVE_LOSSES` in the execution loop
+        (Phase 7): `src/strategy/limits.py`, a veto on new entries handed to the driver
 
 - [x] **execution-alpaca** (25) — Implement the Alpaca executor (execution only)  ✅ COMPLETE
   - [x] `src/execution/alpaca_client.py` — the API as URLs and status codes: auth

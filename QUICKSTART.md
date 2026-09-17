@@ -90,8 +90,9 @@ Build a modular Python trading bot for AAPL (Apple) stock that:
    ├─ Exposure cap (default 100% = the whole account)
    ├─ Position sizing (risk per trade x stop distance, capped by exposure)
    ├─ Stop / take levels, as resting bracket orders at the broker
-   ├─ Loss limits (max daily loss, max consecutive losses) — COLLECTED, NOT APPLIED
-   │  (deferred to the execution loop)
+   ├─ Loss limits (max daily loss, max consecutive losses) — APPLIED by the
+   │  execution LOOP, per exchange day: a halt refuses new entries and never
+   │  blocks an exit, and a backtest does not have them
    └─ EMPTY MEANS NOT APPLIED: there is no master switch, so what is set is what
       runs. Clearing a box takes that behaviour out of the run.
 

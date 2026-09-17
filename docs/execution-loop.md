@@ -5,9 +5,10 @@ the SAME strategy machine the backtest drives, and places orders through the Alp
 broker. This document is the agreed design plus the order it gets built in, so the
 reasoning survives the code.
 
-Status: **Phases 0–6 are built** (2026-09-17). 7–8 are not. The loop runs and the
-dashboard shows what it is doing; what is missing is the deferred loss limits, the data
-quality gates and the deployment follow-through.
+Status: **Phases 0–7 are built** (2026-09-17). 8 is not. The loop runs, the dashboard shows
+what it is doing, and the two things that were deferred to it — the day's loss limits and the
+data-quality gates — are enforced inside the loop. What is missing is the deployment
+follow-through.
 
 Related reading: [`README.md`](../README.md) ("Two processes"), `TRAIDER_PLAN.md`
 (phases and the file tree), `src/strategy/live.py` (the driver), and
@@ -204,7 +205,9 @@ data/live_results/<strategy-slug>/
   INSTRUMENT alone, which gave two strategies on the same symbol one position between them.
 - **The day is the MARKET's day**, not UTC: `ticks/<date>.jsonl` and the index are keyed by
   the date in `MARKET_TIMEZONE`, so one session is one file rather than two halves either
-  side of midnight. The same boundary is what the deferred loss limits reset on.
+  side of midnight. The same boundary is what the loss limits reset on, and both are measured
+  in the EXCHANGE's day for that reason: a loser must not get a fresh budget at local midnight
+  on a machine that is hours from New York.
 - **`latest.json` is written on EVERY tick, including the ones that do nothing.** It carries
   the heartbeat, so a quiet day — no new bar, market closed, or trading off — still moves it.
   Without that, "alive with nothing to do" and "dead" look identical from the dashboard, and
@@ -471,16 +474,90 @@ with the rest of the page; the orders view asks Alpaca only when the panel is op
 refreshed by hand. This app has never polled the broker, and a dashboard that generated
 traffic merely by being open would be the first thing to do so.
 
-### Phase 7 — deferred limits and data quality
+### Phase 7 — the day's loss limits and data quality ✅ DONE
 
-| # | Step |
-| --- | --- |
-| 7.1 | `MAX_LOSS_PERCENT` / `MAX_CONSECUTIVE_LOSSES`: a per-day tally of realised fills, reset on the exchange's day boundary |
-| 7.2 | Refusal via the existing vocabulary — `Intent(action=SKIP)` + `Ledger.record_skip` |
-| 7.3 | Decide the fate of `src/risk/circuit_breaker.py` and `src/risk/validator.py`: built, tested, imported by nothing |
-| 7.4 | Refuse a bar with missing/zero/inverted high-low, or one older than the boundary that should have closed it |
-| 7.5 | Refuse an entry when equity cannot be read |
-| 7.6 | Refuse to tick on `freshness.info()` — a loop running older code than its own source |
+| # | Step | State |
+| --- | --- | --- |
+| 7.1 | `MAX_LOSS_PERCENT` / `MAX_CONSECUTIVE_LOSSES`: measured over the exchange's day, cleared when it turns over | ✅ |
+| 7.2 | Refusal via the existing vocabulary — an entry comes back as `Intent(action=SKIP)` and the ledger books it | ✅ |
+| 7.3 | The fate of `src/risk/circuit_breaker.py` and `src/risk/validator.py` | ✅ both DELETED |
+| 7.4 | Refuse a bar that cannot exist; report one that is merely odd | ✅ (`src/data/quality.py`) |
+| 7.5 | Refuse an entry when equity cannot be read | ✅ (fail closed, `MAX_LOSS_PERCENT` set) |
+| 7.6 | Refuse new entries when the loop is running older code than its own source | ✅ |
+
+**The limits belong to the LOOP, and the policy is a pure function.** A limit needs the day's
+trades and the account's equity, and `src/strategy` may not import `src/execution` — so the loop
+gathers the facts, `src/strategy/limits.py` decides, and the verdict travels down as a refusal
+to OPEN. That module reads nothing, owns nothing and writes nothing.
+
+**The day boundary is the feature, not the tidiness.** Both limits are measured over one
+exchange day and clear when it turns over. A halted bot takes no trades, so a streak that only
+a win could break can never be broken — the bot would be locked out for good with nothing on
+the dashboard to clear it. The day comes from `store.trading_day`, never from the local date.
+
+**A loss is money, not price.** The streak reads `equity_ret` (the leg's return times the
+weight it was sized at): a 1% adverse move on a quarter-sized position costs a quarter of a
+percent. `ret` is the price move alone, and a trade whose price ROSE while its money fell still
+counts as a loss.
+
+**A skip is neither a loss nor a win.** The loop writes every leg to `trades.jsonl` — skipped
+ones included, which is what makes a refusal visible in the log — so the tally has to ignore
+them. Counting one would halt over a trade that never happened; resetting on one would clear a
+halt that is still earned, because the bot's own refusals would break the streak.
+
+**Entries only, never exits.** This is the rule the whole design turns on, and it is why the
+verdict is a VETO handed to the driver rather than a refused tick. A refused tick skips the
+reconciliation below it, and a broker exit nobody books leaves the bot believing it still holds
+a position it does not — for the rest of the day. A vetoed entry is refused while the exit the
+broker made is still adopted and written to the log, on the same bar.
+
+**The veto had to move INSIDE the decision.** The first implementation converted the entry to a
+`SKIP` after `engine.step` returned, and a test caught what that costs: `_entry_intent` CREATES
+`state.position` as part of deciding, so refusing afterwards left the state holding a position
+the broker never received — and the next tick refused for ever over drift that never happened.
+The veto is therefore an argument to `step` (`veto=`), checked before anything is created, and
+`state.position` is never touched.
+
+**A backtest does NOT apply these limits.** They are the loop's: a backtest has no account and
+no broker, so it cannot measure either limit, and `MAX_LOSS_PERCENT` is defined against equity
+that only a live run has. This is the one place the two runs deliberately differ. The parity
+test asserts the seam stays one-way — no veto ever reaches the shared machine from a run with
+no halt — so the backtest cannot start depending on it by accident.
+
+**The bar the decision is made on is checked, and the check is split in two.**
+`src/data/quality.py` refuses a bar that is IMPOSSIBLE (a missing or NaN price — NaN counts as
+missing because it compares `False` against everything — a zero or negative price, a high under
+its low, a range that excludes its own open or close) and merely NOTES one that is odd (no
+volume, or no range at all), which the tick records as `notes` and the log page shows with a ⚠
+in amber, next to the red a refusal gets. The line between them is "provably impossible"
+against "worth a look", and it is narrow on purpose: anything softer needs a threshold, and a
+threshold nobody configured is the loop inventing trading policy. A rule like that belongs in
+the strategy, where a backtest can measure it.
+
+**7.6 is the one failure a process cannot see from the inside.** Python loads a module once, so
+an edit under a running loop is an edit it has never read: it keeps trading yesterday's
+strategy, and every test passes, because the tests import the code fresh. So the loop watches
+its own source (`LOOP_SOURCE`) against the mtimes it IMPORTED (`LOADED_SOURCE`, taken as the
+scheduler module loads) — and refuses new entries when they have moved on. It still reconciles,
+for the same reason the limits do. The watch list is narrow (the files that decide what to trade
+and how, not the dashboard and not the data pipeline), every path in it is pinned by a test,
+and the baseline is import-time rather than "now", because "now" would compare a file with
+itself and always pass.
+
+**D5 — what a daily bar size does to the limits, said per field.** The panel adds a note to each
+of the two fields, because the answer is not the same for both: at a bar size of a day or
+coarser `MAX_CONSECUTIVE_LOSSES` above 1 **cannot be reached at all** (the streak is per exchange
+day and a day holds at most one trade), while `MAX_LOSS_PERCENT` **still fires** — it is measured
+on the account's equity, so at a daily bar it acts at the close and stops the NEXT session's
+entry rather than the one that just lost. One sentence above both fields would have been wrong
+for one of them.
+
+**7.3 — the two modules were deleted, not wired in.** `src/risk/validator.py` ran a SECOND,
+separately-stateful sizing path behind one order, which is exactly what the risk layer being the
+ENGINE prevents; and the breaker kept its own counter where the ledger already records every leg
+(the loop builds a fresh driver per tick, so a counter would have to be persisted anyway).
+Deleting the breaker also settled a design question the right way round: its `roll(day)` reset is
+what makes a halt self-recovering, and dropping that reset would have been the bug.
 
 ### Phase 8 — deployment follow-through
 

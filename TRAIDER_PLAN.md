@@ -41,10 +41,11 @@ asymmetry, and a driver must never be allowed to grow a rule of its own.
 **Risk settings are optional, and empty means NOT APPLIED.** No master switches.
 See Phase 4 and module 5d below.
 
-**Execution is implemented; nothing starts it.** `src/execution` can place a
+**Execution is implemented and the loop drives it.** `src/execution` can place a
 bracketed order in either environment, and `AlpacaBroker` satisfies the strategy's
-broker seam — but `src/scheduler/` is an empty package, so **no order can leave the
-process today**. That (plus the deferred loss limits) is the remaining work.
+broker seam; `src/scheduler/` is the loop that decides when, and Phase 7 added the day's
+loss limits and the data-quality gates to it. What remains is the deployment
+follow-through (Phase 8).
 
 ---
 
@@ -139,8 +140,9 @@ traider/
 │   ├── risk/
 │   │   ├── __init__.py
 │   │   ├── position_sizing.py       # Size from equity, risk limit, stop distance
-│   │   ├── circuit_breaker.py       # Loss limits — NOT wired into a run (deferred)
-│   │   └── validator.py             # Unified signal validator — NOT wired into a run
+│   │   ├── circuit_breaker.py       # DELETED in Phase 7 (7.3) — superseded by the
+│   │   │                            #   trade log + src/strategy/limits.py
+│   │   └── validator.py             # DELETED in Phase 7 (7.3) — a second sizing path
 │   ├── execution/                   # The only package that can move money
 │   │   ├── __init__.py
 │   │   ├── config.py                # paper | live resolution (raises, never downgrades)
@@ -658,9 +660,11 @@ Backtest window comes from `BACKTEST_START_DATE` / `BACKTEST_END_DATE` (or the h
 ✅ risk-backtest-parity     → Gate measures the SAME system that will trade: one
                               shared state machine (src/strategy) drives the backtest
                               and a live run, proven by tests/test_strategy_parity.py
-✅ risk-validation          → Unified risk checks (validator.py — built, NOT wired in)
-⏸️ risk-loss-limits         → MAX_CONSECUTIVE_LOSSES / MAX_LOSS_PERCENT applied in
-                              the execution loop [collected, not applied]
+✅ risk-validation          → the validator.py path was DELETED in Phase 7 (7.3): a
+                              second, separately-stateful sizing path behind one order
+✅ risk-loss-limits         → MAX_CONSECUTIVE_LOSSES / MAX_LOSS_PERCENT APPLIED by the
+                              execution loop (Phase 7): src/strategy/limits.py, per
+                              exchange day, a veto on NEW entries only
 ✅ execution-alpaca         → Alpaca order placement (bracket exits, poll, flatten)
 ✅ execution-retry          → Retry with backoff (only failures that never reached
                               a verdict; a retry reuses its client_order_id)

@@ -26,8 +26,9 @@ PROJECT OVERVIEW
 4. MODEL/SIGNAL    → AI core: features → BUY/SELL/HOLD + confidence
 5. RISK MGMT       → Optional settings: exposure cap, sizing, stop/take.
                      EMPTY MEANS NOT APPLIED; no master switch. Loss limits
-                     (MAX_LOSS_PERCENT / MAX_CONSECUTIVE_LOSSES) are collected but
-                     NOT applied — they belong to the execution loop.
+                     (MAX_LOSS_PERCENT / MAX_CONSECUTIVE_LOSSES) are APPLIED BY
+                     THE LOOP (src/strategy/limits.py): per exchange day, new
+                     entries only, a backtest does not have them.
 6. STRATEGY        → ONE state machine (src/strategy) both the backtest and a live
                      run drive; parity is enforced by test
 7. EXECUTION       → Place bracketed orders on Alpaca via its API (data comes from
@@ -58,8 +59,8 @@ Phase 4: Risk & Execution (Days 13-15) — COMPLETED
   ✓ Position sizing, order execution, retries, the Alpaca broker seam
   ✓ Risk settings made optional (empty = not applied); both master switches removed
   ✓ One shared strategy engine + a parity test that proves backtest == live logic
-  ➜ Loss limits (MAX_LOSS_PERCENT / MAX_CONSECUTIVE_LOSSES) — DEFERRED to the
-    execution loop: collected and shown, not applied
+  ✓ Loss limits (MAX_LOSS_PERCENT / MAX_CONSECUTIVE_LOSSES) — APPLIED by the
+    execution loop since Phase 7: measured per exchange day, entries only
 
 Phase 5: Deferred — Core & Backtest Completion (moved from Phases 2 & 3)
   ✓ DONE: report generator + standalone report page (/report, run menu, full trade list)
@@ -203,8 +204,8 @@ RISK MITIGATION
 ✓ Refuse-before-send: the trading switch, the numbers and the risk layer all
   stop an order BEFORE it is sent; a bracket carries the exits in one call
 ✓ Parity test: the backtest and a live run drive the same state machine
-⚠ Loss limits (MAX_LOSS_PERCENT / MAX_CONSECUTIVE_LOSSES) are collected but NOT
-  applied — deferred to the execution loop
+✓ Loss limits (MAX_LOSS_PERCENT / MAX_CONSECUTIVE_LOSSES) are APPLIED by the
+  execution loop — per exchange day, refusing new entries only (Phase 7)
 ✓ Position sizing (never risk > configured limit)
 ✓ Comprehensive logging (debug any issue post-facto)
 ✓ Web Portal alerts (see immediately if something breaks)
