@@ -688,14 +688,16 @@ Moved from Phases 2 & 3 so Risk & Execution can start first. Prerequisite for Ph
 ```
 ⏸️ scheduler-create         → The bar-boundary loop
                               [BUILT — src/scheduler/orchestrator.py ticks the gates in
-                               order and sleeps to the next boundary. The HOST that runs
-                               it (lease, wake, --once) is Phase 5 and is not built yet.]
+                               order and sleeps to the next boundary; src/scheduler/host.py
+                               claims the lease, reports the startup reconcile and runs it;
+                               `python -m src.main [--once]` is the entry point.]
 ⏸️ scheduler-error-handling → Robust error handling [with the scheduler]
-⏸️ main-entry               → Entry point wiring the live loop. `src/main.py` is now a
-                              real host: it names its role, refuses to start if the
-                              dashboard is loaded in its process, and exits non-zero
-                              while the loop is unbuilt (never a silent no-op). The
-                              loop itself is still to be wired into it (Phase 5).
+⏸️ main-entry               → Entry point wiring the live loop. `src/main.py` is a real
+                              host: it names its role, refuses to start if the dashboard is
+                              loaded in its process or if a live loop already holds the
+                              lease (exit 2 / 4), reports what it inherited, and runs the
+                              loop. Two layers of error handling behind it: no tick can
+                              raise, and no run can die of a failed log.
 ```
 
 **The full design and build order for this phase: [`docs/execution-loop.md`](docs/execution-loop.md).**

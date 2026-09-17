@@ -55,13 +55,14 @@ from src.execution.alpaca_broker import AlpacaBroker
 from src.execution.alpaca_executor import AlpacaExecutor
 from src.execution.config import execution_status
 from src.model.simple_model import RuleBasedSignalGenerator
+from src.scheduler import lease as lease_mod
 from src.strategy.config import StrategyConfig
 from src.strategy.engine import StrategyEngine
 from src.strategy.live import LiveDriver, NotEnoughHistory
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["tick", "run", "build_driver"]
+__all__ = ["armed_strategy", "build_driver", "run", "tick"]
 
 #: Actions worth a line in the day's log. The heartbeat is not one of them: a market that
 #: has been shut for eight hours would otherwise write eight hours of identical lines, and
@@ -71,6 +72,20 @@ LOGGED_ACTIONS = frozenset({"decided", "refused"})
 #: Seconds added to a boundary before asking. The provider's newest bar is not always in
 #: place the instant it closes, and one tick is cheap while a missed bar is not.
 PROVIDER_LAG_SECONDS = 5.0
+
+
+def armed_strategy(settings) -> str:
+    """The strategy this loop runs: the one the switch was armed with, else the active one.
+
+    The same rule the tick applies when it decides whether to refuse, in the one place a
+    host can ask it — the startup reconcile needs a driver before any tick has run, and
+    building it for a different strategy than the first tick would use would report on an
+    account the loop is not about to trade.
+    """
+    stamped = get_state(settings).get("strategy")
+    if stamped:
+        return str(stamped)
+    return str(active_strategy_name() or getattr(settings, "instrument", "strategy"))
 
 
 def build_driver(settings, *, name: Optional[str] = None, dry_run: bool = False, broker=None) -> LiveDriver:
@@ -241,11 +256,12 @@ def tick(
         )
 
     # -- 5 & 6. decide and act ---------------------------------------------
-    driver = driver or build_driver(settings, name=stamped or strategy, dry_run=dry_run)
-    if driver.name != (stamped or strategy):
+    wanted = armed_strategy(settings)
+    driver = driver or build_driver(settings, name=wanted, dry_run=dry_run)
+    if driver.name != wanted:
         # A caller handed us a driver for a different strategy. Better to say so than to
         # trade through it: the state file and the account would both be the wrong one.
-        return finish("refused", f"the driver is for {driver.name!r}, not {stamped or strategy!r}")
+        return finish("refused", f"the driver is for {driver.name!r}, not {wanted!r}")
 
     try:
         result = driver.on_bar_closed(window)
@@ -295,6 +311,8 @@ def run(
     sleep: Callable[[float], None] = time.sleep,
     ticks: Optional[int] = None,
     clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+    lease=None,
+    resolve: Optional[Callable[[], Any]] = None,
     **tick_kwargs,
 ) -> List[Dict[str, Any]]:
     """Sleep to each bar boundary and tick. Returns the records it produced.
@@ -306,6 +324,18 @@ def run(
     named apart deliberately: passing one where the other was meant is silent, and the
     loop would then tick on a wall clock while its caller believed it was on a fixed one.
 
+    ``lease`` is the loop's claim on the host, refreshed BEFORE each sleep with the boundary
+    it is about to sleep until. Declaring the wake in advance is what lets a later reader
+    tell "asleep until 14:30" from "died at 14:05" — the loop is asleep for an hour at a
+    time on purpose, so a heartbeat that needed a timer to prove it was alive would fight
+    the scheduling this is built around. Optional, because a test drives the loop with no
+    lease at all.
+
+    ``resolve`` re-reads the settings for each tick. The account layer answers from files
+    with an mtime-keyed cache, so passing it is what makes a change made in the dashboard —
+    a risk setting, the environment, the bar size — take effect at the next boundary with
+    no restart and no IPC. Without it the loop keeps the settings it was handed.
+
     A tick is always followed by a sleep, including a failed one: the next bar is usually
     fine, and a loop that spins on a broken configuration is a loop that fills the disk with
     the same refusal.
@@ -313,18 +343,25 @@ def run(
     records: List[Dict[str, Any]] = []
     while ticks is None or len(records) < int(ticks):
         at = clock()
+        current = resolve() if resolve is not None else settings
         try:
-            records.append(tick(settings, dry_run=dry_run, now=at, **tick_kwargs))
+            records.append(tick(current, dry_run=dry_run, now=at, **tick_kwargs))
         except Exception:  # noqa: BLE001 - nothing may kill the loop
             logger.exception("Tick raised outside its own handling; continuing")
 
         if ticks is not None and len(records) >= int(ticks):
             break
 
-        boundary = dataset.next_bar_boundary(settings, at)
+        boundary = dataset.next_bar_boundary(current, at)
         if boundary is None:
             logger.error("Could not work out the next bar boundary — stopping rather than spinning")
             break
+
+        if lease is not None:
+            # Before the sleep, never after: the claim has to be honest about the interval
+            # it is about to be unresponsive for.
+            lease_mod.refresh(lease, next_wake=boundary)
+
         wait = (boundary - at).total_seconds() + PROVIDER_LAG_SECONDS
         logger.info("Next bar closes at %s — sleeping %.0fs", boundary, max(0.0, wait))
         if wait > 0:

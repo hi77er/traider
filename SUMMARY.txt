@@ -31,9 +31,9 @@ PROJECT OVERVIEW
 6. STRATEGY        → ONE state machine (src/strategy) both the backtest and a live
                      run drive; parity is enforced by test
 7. EXECUTION       → Place bracketed orders on Alpaca via its API (data comes from
-                     OpenBB). Built — but nothing starts a tick yet
+                     OpenBB). Built, and the loop drives it (src/scheduler)
 8. STATE TRACKER   → DynamoDB table (positions, P&L, trades)  [not built]
-9. SCHEDULER       → Main loop over closed bars (own process)  [not built]
+9. SCHEDULER       → Main loop over closed bars (own process)  [built]
 10. LOGGING/WEB PORTAL → Structured logs + dashboard (progress, charts, config, alerts)
 11. BACKTESTER     → Validate strategy on historical data before live
 
@@ -68,18 +68,18 @@ Phase 5: Deferred — Core & Backtest Completion (moved from Phases 2 & 3)
   ➜ GATE CHECK: Backtest metrics (Sharpe ≥ 1.0, DD ≤ 25%, WR ≥ 55%)
   ➜ Parameter sensitivity (multi-run sweep) — split out of the report task
 
-Phase 6: Integration (Days 16-17, 3 tasks) — NOT STARTED
-  ➜ APScheduler loop, error handling, entry point
-    src/scheduler/ is an empty package and the SCHEDULER_* settings were retired,
-    so nothing starts a tick and no order can leave the process. The design and the
-    build order are in docs/execution-loop.md.
-    so NOTHING STARTS A TICK: the execution layer is built and tested, but no
-    order can leave the process until this phase is done
-  
+Phase 6: Integration (Days 16-17, 3 tasks) — IN PROGRESS
+  ✓ scheduler-create: the loop (src/scheduler/orchestrator.py) — the gates in order,
+    a boundary sleep, no catch-up, a record per tick
+  ✓ main-entry: src/main.py hosts it under a lease (data/loop.lock); exit codes
+    2 = wrong host, 4 = another live loop already runs, 0 = the tick ran
+  ➜ NEXT: the dashboard's view of it — positions, orders, the trading log, the
+    "N open" pill (Phase 6 of docs/execution-loop.md)
+
 Phase 7: Testing (Days 18-21, 4 tasks) — IN PROGRESS
-  ✓ Unit + integration tests (601 passing, incl. backtest⇄live parity and the
-    order path against a stubbed broker — CI never touches a real account)
-  ➜ Paper trading on a real Alpaca account (1-2 weeks) — needs the tick, see Phase 6
+  ✓ Unit + integration tests (766 passing, incl. backtest⇄live parity, the order path
+    against a stubbed broker, and the loop against a stubbed provider/exchange/broker)
+  ➜ Paper trading on a real Alpaca account (1-2 weeks)
   ➜ GATE CHECK: Zero crashes, P&L accuracy ±0.1%
   
 Phase 8: Deployment (Days 22-25, 5 tasks)

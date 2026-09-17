@@ -5,7 +5,9 @@ the SAME strategy machine the backtest drives, and places orders through the Alp
 broker. This document is the agreed design plus the order it gets built in, so the
 reasoning survives the code.
 
-Status: **design settled 2026-09-16**. Phases 0–3 are built; 4–8 are not.
+Status: **Phases 0–5 are built** (2026-09-17). 6–8 are not. The loop runs; what is
+missing is the dashboard's view of it, the deferred loss limits and the deployment
+follow-through.
 
 Related reading: [`README.md`](../README.md) ("Two processes"), `TRAIDER_PLAN.md`
 (phases and the file tree), `src/strategy/live.py` (the driver), and
@@ -33,8 +35,11 @@ Two consequences the implementation must honour:
 
 - **Idempotent per bar.** `state.last_decided_bar` is the key, so a restart mid-bar or
   a duplicate wake is harmless.
-- **A lease file.** Two loops mean double orders. The lease (pid + heartbeat) is what
-  makes "exactly one trading process" true rather than merely intended.
+- **A lease file.** Two loops mean double orders. The lease (pid + the boundary the holder
+  is sleeping until, `data/loop.lock`) is what makes "exactly one trading process" true
+  rather than merely intended. `src/scheduler/lease.py` has the rules; the one that matters
+  operationally is that a crashed loop needs no manual cleanup and a live one is never
+  taken over.
 
 The process model is **two processes sharing files and nothing else** — the loop and
 the dashboard. See README, "Two processes"; `tests/test_architecture.py` enforces it.
@@ -84,9 +89,9 @@ identical from the dashboard.
 - **The decision bar is derived from the data**, not from arithmetic on the wall clock:
   signal on the newest closed bar, fill at the next bar's open. That matches the
   backtest exactly and survives a provider that labels bars differently.
-- **Startup:** acquire the lease → one reconcile against the broker, reported and not
-  traded on → sleep to the next boundary. A position may exist while trading is OFF;
-  it is never replayed.
+- **Startup:** acquire the lease → retire the pre-Phase-3 state file → one reconcile
+  against the broker, reported and not traded on → sleep to the next boundary. A position
+  may exist while trading is OFF; it is never replayed.
 
 ## 3. Gates — the policy
 
@@ -362,15 +367,48 @@ tests that already existed:
   wall clock while its caller believed it was on a fixed one. `run`'s parameter is now
   `clock`.
 
-### Phase 5 — the host
+### Phase 5 — the host ✅ DONE
 
-| # | Step |
-| --- | --- |
-| 5.1–5.2 | The lease in `data/loop.lock`, with a stale timeout so a crashed loop needs no manual cleanup |
-| 5.3 | Compute the next wake from the exchange's own schedule, not local time |
-| 5.4 | Startup: lease → a reported reconcile → sleep |
-| 5.5 | `src/main.py` runs the orchestrator, keeping the host guard already built |
-| 5.6 | `--once` for the suite and for a cron deployment |
+| # | Step | State |
+| --- | --- | --- |
+| 5.1–5.2 | The lease in `data/loop.lock`, with a stale timeout so a crashed loop needs no manual cleanup | ✅ |
+| 5.3 | Compute the next wake from the exchange's own schedule, not local time | ✅ |
+| 5.4 | Startup: lease → a reported reconcile → sleep | ✅ |
+| 5.5 | `src/main.py` runs the orchestrator, keeping the host guard already built | ✅ |
+| 5.6 | `--once` for the suite and for a cron deployment | ✅ |
+
+**The lease declares the wake, it does not heartbeat.** The holder writes the boundary it
+is about to sleep until, and `expires_at` is that moment plus a five-minute grace. A
+heartbeat would need a timer to prove the loop is alive, which fights the scheduling this
+design is built around — the loop sleeps for an hour at a time on purpose. The
+consequence worth knowing is that **on one machine a crashed loop is taken over at once,
+and a live one is never taken over at all**: a pid that is alive outranks the timestamps,
+and only another host (or a pid that cannot be read) falls back to the expiry. Pid reuse
+errs the same safe way — a recycled pid looks alive, so the lease is respected. An
+unreadable lock counts as nobody's, because the alternative is manual cleanup at 09:30.
+
+**The startup report never refuses to start.** It retires the pre-Phase-3 state file,
+then — only with trading ON, so a process needs no credentials to run on the many days
+trading is off — reads the broker once and says whether it agrees with the local position.
+A disagreement is logged and does not stop the process: the tick's own reconcile is what
+refuses to trade on it, and refusing to *start* would leave an operator with a process that
+will not run and no way to see why. A broker-side exit is NOT adopted here either —
+adoption needs the bar that closed, which is what the first tick has and the startup does
+not.
+
+**Exit codes are the only thing a supervisor can act on**: `0` the process ran (with
+`--once`, one tick happened — the VERDICT is in the record, not the code, because a closed
+market is not a process failure and an alarm every night is an alarm nobody reads), `2`
+wrong host, `4` another live loop holds the lease, `1` an unexpected failure.
+
+**Orders are NAMED, so a retry cannot double a position.** The driver derives a
+`client_order_id` from the strategy, the environment, the bar key and the intent's index
+within that bar (`LiveDriver.order_id_for`). This closes the hole the "state is saved last"
+rule left open: a tick that dies between submitting and recording leaves the bar undecided,
+so the next tick decides it again — and "retryable" is only safe if the retry IS the same
+order. Alpaca deduplicates on that id, so the second submit is a refused duplicate rather
+than a second position. It also makes an order in the broker's own dashboard traceable to a
+strategy and a bar with no local log, which is the one thing a deleted log cannot say.
 
 ### Phase 6 — dashboard surface
 
@@ -382,6 +420,7 @@ tests that already existed:
 | 6.5 | The trading log screen: account state first, local context second, tolerant of a deleted log |
 | 6.6 | The Live panel: last tick, position with its exits, environment, the session's ticks |
 | 6.7 | The loud case surfaced: a position held with NO resting exits |
+| 6.8 | Write `orders.jsonl` / `trades.jsonl` from the loop — built in Phase 3, called by nothing yet |
 
 ### Phase 7 — deferred limits and data quality
 

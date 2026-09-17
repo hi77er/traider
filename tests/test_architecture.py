@@ -336,12 +336,36 @@ def test_the_loop_starts_cleanly_when_it_is_alone(monkeypatch) -> None:
     assert loop_host.check_host() is None
 
 
-def test_the_loop_host_never_pretends_to_be_running(monkeypatch) -> None:
-    """Until Phase 6 exists, it must not exit 0.
+def test_the_loop_host_refuses_before_it_reads_anything(monkeypatch) -> None:
+    """The host guard runs first — before argv, before any config or data file.
 
-    A process that reports success while trading nothing is the same lie the
-    trading switch refuses to tell — it looks like it works.
+    Phase 5 made this matter: ``main`` now parses a command line and resolves the account,
+    so the guard has to come before both. A process that must not host the loop has no
+    business touching the account on its way to saying so, and the test proves the order
+    rather than trusting it: parsing is replaced by something that would explode.
     """
+    def explode(argv=None):
+        raise AssertionError("argv was parsed before the host was checked")
+
+    monkeypatch.setattr(loop_host, "__name__", "__main__")
+    monkeypatch.setitem(sys.modules, "src.web.app", web_app)
+    monkeypatch.setattr(loop_host, "parse_args", explode)
+
+    assert loop_host.main(["--once"]) == loop_host.EXIT_WRONG_HOST
+
+
+def test_the_loop_host_no_longer_promises_nothing(monkeypatch) -> None:
+    """``EXIT_NOT_IMPLEMENTED`` is gone, and that is the point of Phase 5.
+
+    It existed to stop the process reporting success while trading nothing — the same lie
+    the trading switch refuses to tell. Now that the loop exists, the code that told that
+    lie has to go with it, or the next reader would have to work out which one is current.
+    """
+    assert not hasattr(loop_host, "EXIT_NOT_IMPLEMENTED")
+    assert hasattr(loop_host, "EXIT_ALREADY_RUNNING")
+
     monkeypatch.setattr(loop_host, "__name__", "__main__")
     monkeypatch.delitem(sys.modules, "src.web.app", raising=False)
-    assert loop_host.main() != 0
+    options = loop_host.parse_args(["--once"])
+    assert options.once is True
+    assert loop_host.parse_args([]).once is False

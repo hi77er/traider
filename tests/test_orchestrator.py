@@ -23,6 +23,7 @@ from src.config import state_files
 from src.config.settings import Settings
 from src.config.trading_state import write_state
 from src.data.dataset import save_dataset
+from src.scheduler import lease as lease_mod
 from src.scheduler import orchestrator
 from src.strategy.broker import SimulatedBroker
 from src.strategy.config import StrategyConfig
@@ -472,3 +473,52 @@ def test_a_run_that_starts_late_decides_only_on_the_newest_closed_bar(tmp_path, 
     # bar is still forming and closes at 16:00.
     assert decided == ["2024-01-05 14:30:00"], "the newest closed bar, and only that one"
     assert len(orchestrator.store.read_ticks(settings, STRATEGY, when=_at("2024-01-05 15:50"))) == 1
+
+
+# ---------------------------------------------------------------------------
+# what the run tells the host about itself
+# ---------------------------------------------------------------------------
+def test_the_loop_declares_the_wake_it_is_sleeping_towards(tmp_path, armed):
+    """The claim is refreshed BEFORE the sleep, with the boundary the loop has committed to.
+
+    That is what makes a lease readable rather than decorative: without it a reader sees a
+    timestamp from the last tick and cannot tell an hour-long sleep from a dead process,
+    and would have to refresh on a timer — which fights the very scheduling this design is
+    built around.
+    """
+    settings = armed()
+    claim = lease_mod.acquire(settings, strategy=STRATEGY)
+    moments = [_at("2024-01-05 14:05"), _at("2024-01-05 14:05")]
+
+    orchestrator.run(
+        settings, ticks=2, sleep=lambda _s: None, clock=lambda: moments.pop(0), lease=claim,
+        sync_call=lambda: {}, clock_call=Calls().clock, driver=_driver(settings),
+    )
+
+    record = lease_mod.read(settings)
+    # 14:05 ET -> the 13:30 bar closes at 14:30 ET, which is 19:30Z.
+    assert record["next_wake"] == "2024-01-05T19:30:00+00:00"
+    assert record["pid"], "the claim still says who holds it"
+
+
+def test_each_tick_uses_the_settings_resolved_for_that_tick(tmp_path, armed):
+    """Why ``resolve`` exists: a change made in the dashboard lands at the NEXT boundary.
+
+    The account layer answers from files with an mtime-keyed cache, so handing the loop a
+    way to ask again is what makes a risk setting, an environment or a bar size take effect
+    with no restart, no signal and no IPC. The record's own ``day`` is what proves which of
+    the two settings the tick was actually handed: 23:00 in New York is already tomorrow
+    in UTC, so the two produce different dates from the same moment.
+    """
+    settings = armed()
+    write_state(settings, {"on": False, "since": None})
+    elsewhere = _settings(tmp_path, market_timezone="UTC")
+    resolved = [settings, elsewhere]
+    moments = [_at("2024-01-04 23:00"), _at("2024-01-04 23:00")]
+
+    records = orchestrator.run(
+        settings, ticks=2, sleep=lambda _s: None, clock=lambda: moments.pop(0),
+        resolve=lambda: resolved.pop(0), sync_call=lambda: {}, clock_call=Calls().clock,
+    )
+
+    assert [r["day"] for r in records] == ["2024-01-04", "2024-01-05"]

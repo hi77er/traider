@@ -18,12 +18,13 @@ replay of it.
 | Data pipeline (OpenBB + yfinance, Parquet store, delta backfill) | done |
 | Features, rule model, risk layer, backtest engine + Gate | done |
 | Web portal (chart, config, backtest panel, report page) | done |
-| Tests | 611 passing |
+| Tests | 766 passing |
 | Execution config — Alpaca broker, per-strategy paper/live, fail-closed | done |
 | Trading on/off switch + the "no reconfiguration while trading is on" lock | done |
 | Live order execution — order building, retries, brackets, cancel/flatten | done |
 | Portfolio state (DynamoDB) | **not implemented** |
-| The execution loop — `src/main.py`, a separate process | **not implemented** |
+| The execution loop — `src/main.py`, a separate process | done |
+| The dashboard's view of it — positions, orders, the trading log | **not implemented** (Phase 6) |
 
 The current strategy **does not pass its own Gate yet** (see
 [CHECKLIST.md](CHECKLIST.md) for the metrics). Treat every stored result as
@@ -47,7 +48,7 @@ OpenBB/yfinance ──> canonical Parquet dataset ──> features ──> rule 
           │                            │     + trading on/off lock done,
           │                            │     executor implemented
           v                            v
-   report page + run store        portfolio state <- not implemented
+   report page + run store        the live tree in data/
 ```
 
 Two consequences worth knowing:
@@ -101,12 +102,14 @@ Why they are separate:
   OFF takes effect at the next boundary without touching the network.
 
 That is enforced, not just described: `src/main.py` refuses to start if the
-dashboard is loaded in its own process, and `tests/test_architecture.py` fails if
-any web module gains a path to the loop.
+ dashboard is loaded in its own process, `tests/test_architecture.py` fails if
+any web module gains a path to the loop, and the loop holds a **lease**
+(`data/loop.lock`) so a second one cannot start and place a second set of orders.
+The lease declares the boundary the holder is sleeping until, so a crashed loop is
+taken over at once while a live one is never taken over at all.
 
-> The loop itself is **not implemented yet** (Phase 6 of
-> [TRAIDER_PLAN.md](TRAIDER_PLAN.md)). `python -m src.main` names its role, says so,
-> and exits non-zero — it will not run as a silent no-op.
+See [docs/execution-loop.md](docs/execution-loop.md) for the tick's order, the
+gates, and the build plan.
 
 ## Requirements
 
@@ -136,7 +139,7 @@ Two processes, two terminals — see [Two processes](#two-processes):
 
 ```bash
 ./scripts/run-dashboard.sh        # -> http://127.0.0.1:8000
-./scripts/run-bot.sh              # the trading loop (not implemented yet)
+./scripts/run-bot.sh              # the trading loop (add --once to run a single tick)
 ```
 
 Both are thin wrappers around `python -m src.web.app` and `python -m src.main`,
@@ -285,14 +288,16 @@ src/
   model/       rule store and rule-based signal generator
   risk/        position sizing and stop/take levels (plus an unwired validator)
   backtest/    engine, metrics + Gate, risk replay, report analytics, run store
-  execution/   Alpaca paper/live resolver (config); executor not implemented
-  state/       portfolio tracker      (not implemented)
-  scheduler/   decision loop          (not implemented)
+  execution/   Alpaca executor, broker seam, positions reader, live store
+  state/       portfolio tracker      (not implemented — the live store holds the position)
+  scheduler/   the loop: orchestrator (tick + run), host (lease, startup), lease
   logging/     structured logging, alerts (not implemented)
   web/         FastAPI app, routes, services (incl. the trading lock), templates, static assets
+  main.py      THE LOOP's entry point (the other process)
 tests/         pytest suite (offline)
 settings/      LOCAL DATA (gitignored): strategies/store.json + account/account.json
-data/          generated at runtime: historical Parquet + backtest results
+data/          generated at runtime: historical Parquet, backtest results, the live tree,
+               and loop.lock (the lease)
 ```
 
 Runtime data is not in the repository:

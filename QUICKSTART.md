@@ -183,8 +183,10 @@ starts or stops the other — see [Two processes](README.md#two-processes).
 ./scripts/run-dashboard.sh
 # → open http://localhost:8000
 
-# terminal 2 — the trading loop (not implemented yet: it says so and exits)
+# terminal 2 — the trading loop: wakes on bar boundaries and places orders
 ./scripts/run-bot.sh
+# one tick and exit, for a smoke test or a cron deployment:
+.venv/bin/python -m src.main --once
 ```
 
 Endpoints:
