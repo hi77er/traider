@@ -2112,37 +2112,6 @@ function signedPercent(value) {
   return `${number > 0 ? "+" : ""}${number.toFixed(2)}%`;
 }
 
-// The account this panel leads with is the one being TRADED. The other one appears only when
-// it could not be read, because that is a warning worth having here; when it is healthy its
-// numbers are context, and the log page shows both side by side for exactly that. The reason
-// text differs for a key that was rejected and one that was never configured, so a deliberate
-// paper-only setup does not read as a fault.
-function accountRows(payload) {
-  if (!payload) return [];
-  const rows = [];
-  for (const account of payload.accounts || []) {
-    const traded = account.env === payload.env;
-    if (!account.known) {
-      if (!traded && !account.reason) continue;
-      rows.push([`${account.env} account`,
-        `<span class="warn">${escapeHtml(account.reason || "could not be read")}</span>`]);
-      continue;
-    }
-    if (!traded) continue;
-    const who = [account.env, account.account, account.status].filter(Boolean).join(" · ");
-    rows.push(["account", `${escapeHtml(who)}${account.blocked ? ' <span class="bad">⚠ blocked</span>' : ""}`]);
-    const change = [];
-    if (account.day_pl !== null && account.day_pl !== undefined) {
-      change.push(`day ${money(account.day_pl, true)}`);
-      const pct = signedPercent(account.day_pl_pct);
-      if (pct) change.push(`(${pct})`);
-    }
-    rows.push(["equity", [money(account.equity), change.join(" ")].filter(Boolean).join(" · ")]);
-    rows.push(["cash", `${money(account.cash)} · buying power ${money(account.buying_power)}`]);
-  }
-  return rows;
-}
-
 function livePanelVisible() {
   const body = $("live-body");
   return !!body && !body.hidden && !document.hidden;
@@ -2224,8 +2193,11 @@ function renderLive(loop, orders, market, accounts) {
     chip.title = info.note;
   }
 
-  // The market line and the account numbers are kept across the fast polls, which fetch
-  // neither: the session moves at 09:30 and 16:00, and equity is a broker call.
+  // The broker half is kept across the fast polls, which fetch none of it: without this the
+  // 5-second loop read would re-render the panel with no orders, blanking the tiles that come
+  // from Alpaca and replacing the protection verdict with "open the panel" until the next
+  // slow poll put them back. It flapped, once a poll.
+  if (orders) state.liveOrders = orders;
   if (market) state.liveMarket = market;
   if (accounts) state.liveAccounts = accounts;
 
@@ -2261,8 +2233,9 @@ function renderLive(loop, orders, market, accounts) {
   }
   setIfChanged($("live-state"), lines.map((line) => `<div>${line}</div>`).join(""));
 
-  renderProtection(orders ? orders.protection : null);
-  renderLiveDetail(loop, orders);
+  // From the last read, not from this render's argument: see above.
+  renderProtection(state.liveOrders ? state.liveOrders.protection : null);
+  renderLiveDetail(loop, state.liveOrders);
 }
 
 function renderProtection(verdict) {
@@ -2296,37 +2269,91 @@ function renderProtection(verdict) {
     + "cancelled or an amendment was rejected — check the broker before assuming this is protected.";
 }
 
+// One number in a box, the same `.bt-stat` the backtest KPIs and the report page use — with
+// the same pos/neg tinting and the same hover hint. A dashboard is read by glancing at boxes,
+// while a key/value list is read by scanning labels one at a time.
+function liveTile(label, value, cls, tip) {
+  const tipAttr = tip ? ` data-tip="${escapeHtml(tip)}"` : "";
+  return `<div class="bt-stat"${tipAttr}>`
+    + `<span class="label">${escapeHtml(label)}</span>`
+    + `<span class="value${cls ? ` ${cls}` : ""}">${value}</span></div>`;
+}
+
 function renderLiveDetail(loop, orders) {
-  const host = $("live-detail");
+  const host = $("live-metrics");
   if (!host) return;
-  const rows = [];
-  // What the account is WORTH, first: it is the number an operator checks when they open
-  // this panel, and the account it belongs to is the one being traded.
-  for (const line of accountRows(state.liveAccounts)) rows.push(line);
+  const tiles = [];
+  const warnings = [];
+
+  // -- the account being traded -------------------------------------------
+  // The one the panel is about, so its numbers come first and its failure is a warning
+  // rather than a row of dashes: an unreadable account is not a balance of zero.
+  const accounts = state.liveAccounts || {};
+  const active = (accounts.accounts || []).find((row) => row.env === accounts.env) || null;
+  if (active && active.known) {
+    const change = active.day_pl === null || active.day_pl === undefined ? null : Number(active.day_pl);
+    tiles.push(liveTile("Account",
+      `${escapeHtml(active.env || "")}${active.account ? ` ${escapeHtml(active.account)}` : ""}`,
+      active.blocked ? "neg" : "",
+      active.blocked
+        ? "the broker is refusing orders for this account"
+        : `status ${active.status || "unknown"}`));
+    tiles.push(liveTile("Equity", escapeHtml(money(active.equity))));
+    tiles.push(liveTile("Day",
+      `${escapeHtml(money(active.day_pl, true))}${signedPercent(active.day_pl_pct) ? ` (${escapeHtml(signedPercent(active.day_pl_pct))})` : ""}`,
+      change === null ? "" : (change < 0 ? "neg" : (change > 0 ? "pos" : "")),
+      change === null
+        ? "no previous close to compare against"
+        : "equity now against the previous close, so it includes what is still open"));
+    tiles.push(liveTile("Cash", escapeHtml(money(active.cash))));
+    tiles.push(liveTile("Buying power", escapeHtml(money(active.buying_power)),
+      "", active.multiplier ? `${Number(active.multiplier)}× the account's cash, at the broker` : ""));
+  } else if (active) {
+    // The reason is already a sentence that names the account ("the live account could not
+    // be read (…)"), so prefixing it says the same thing twice.
+    warnings.push(`<span class="warn">${escapeHtml(active.reason || `the ${active.env} account could not be read`)}</span>`);
+  }
+
+  // -- what is held, and what protects it ---------------------------------
   const position = (orders && orders.protection && orders.protection.position)
     || (loop.last_tick && loop.last_tick.position)
     || null;
-  if (position) {
-    rows.push(["position", `${position.short ? "short" : "long"} @ ${Number(position.entry_price).toFixed(2)}`
-      + ` · stop ${position.stop === null || position.stop === undefined ? "none" : Number(position.stop).toFixed(2)}`
-      + ` · target ${position.take === null || position.take === undefined ? "none" : Number(position.take).toFixed(2)}`]);
-  }
-  if (orders) {
-    if (!orders.ok) {
-      rows.push(["broker", `<span class="warn">${escapeHtml(orders.message || "could not be read")}</span>`]);
-    } else {
-      rows.push(["working orders", `${orders.open.length} open · ${orders.resting.length} exit leg(s) resting`]);
-      if (orders.closed && orders.closed.length) {
-        const newest = orders.closed[0];
-        rows.push(["last fill", `${escapeHtml(newest.side || "")} ${escapeHtml(newest.filled_qty || newest.qty || "")}`
-          + ` @ ${escapeHtml(newest.filled_avg_price || "—")} (${escapeHtml(newest.status || "")})`]);
-      }
+  tiles.push(position
+    ? liveTile("Position", `${position.short ? "short" : "long"} @ ${Number(position.entry_price).toFixed(2)}`)
+    : liveTile("Position", "flat"));
+
+  if (orders && orders.ok !== false) {
+    tiles.push(liveTile("Working orders", String((orders.open || []).length),
+      "", "orders the broker still has: an entry that has not filled, or a bracket parent"));
+    tiles.push(liveTile("Exit legs", String((orders.resting || []).length),
+      "", "stop and limit legs resting at the broker — these are what close the position"));
+    const newest = (orders.closed || [])[0];
+    if (newest) {
+      tiles.push(liveTile("Last fill",
+        `${escapeHtml(newest.filled_qty || newest.qty || "")} @ ${escapeHtml(newest.filled_avg_price || "—")}`,
+        "", `${newest.side || ""} · ${newest.status || ""}`.trim()));
     }
+  } else if (orders) {
+    warnings.push(`<span class="warn">the broker could not be read — `
+      + `${escapeHtml(orders.message || "no reason given")}</span>`);
   }
-  rows.push(["trades closed", String(((loop.last_tick && loop.last_tick.trades) || []).length)]);
-  setIfChanged(host, rows.map(([key, value]) =>
-    `<div class="live-row"><span class="live-key">${escapeHtml(key)}</span><span>${value}</span></div>`
-  ).join(""));
+
+  tiles.push(liveTile("Trades closed", String(((loop.last_tick && loop.last_tick.trades) || []).length),
+    "", "round trips the loop has finished on this strategy"));
+
+  // The other environment is a warning when it cannot be read and context otherwise; its
+  // numbers live on the log page, which shows both side by side.
+  for (const row of accounts.accounts || []) {
+    if (row.env === accounts.env || row.known) continue;
+    warnings.push(`<span class="warn">${escapeHtml(row.reason || `the ${row.env} account could not be read`)}</span>`);
+  }
+
+  setIfChanged(host, tiles.join(""));
+  const warnHost = $("live-warnings");
+  if (warnHost) {
+    setIfChanged(warnHost, warnings.join("<br>"));
+    warnHost.hidden = warnings.length === 0;
+  }
 }
 
 function toggleLivePanel(ev) {

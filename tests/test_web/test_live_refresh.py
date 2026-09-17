@@ -218,27 +218,59 @@ def test_the_panel_fetches_the_accounts_only_on_the_slow_poll():
 def test_the_panel_keeps_the_accounts_across_the_fast_polls():
     """The fast poll does not fetch them, which only works if the last answer is remembered."""
     assert "state.liveAccounts" in APP_JS
-    assert "accountRows" in _function(APP_JS, "renderLiveDetail")
+    assert "state.liveAccounts" in _function(APP_JS, "renderLiveDetail")
 
 
 def test_a_zero_balance_and_an_unreadable_account_render_differently():
     """The distinction the whole read is built around: "$0.00" is a claim about a balance and
-    an unreadable account is the absence of one."""
-    body = _function(APP_JS, "accountRows")
+    an unreadable account is the absence of one. So the numbers become boxes only for an
+    account that was read; anything else becomes a sentence instead."""
+    body = _function(APP_JS, "renderLiveDetail")
 
-    assert "account.known" in body
-    assert "account.reason" in body, "the reason goes in place of the numbers"
-    assert body.index("!account.known") < body.index("money(account.equity)"), \
-        "the unknown branch has to be reached before any number is formatted"
+    assert "active.known" in body
+    assert "active.reason" in body, "the reason goes in place of the numbers"
+    assert body.index("active.known") < body.index("money(active.equity)"), \
+        "the unknown case has to be decided before any number is formatted"
 
 
 def test_the_panel_leads_with_the_account_being_traded():
     """The other account appears only when it cannot be read: that is a warning, while a
     healthy one's numbers are context the log page already shows side by side."""
-    body = _function(APP_JS, "accountRows")
+    body = _function(APP_JS, "renderLiveDetail")
 
-    assert "payload.env" in body
-    assert "if (!traded) continue;" in body
+    assert "accounts.env" in body, "the row picked out is the environment being traded"
+    assert "row.env === accounts.env || row.known" in body
+
+
+# ---------------------------------------------------------------------------
+# the numbers are boxes now
+# ---------------------------------------------------------------------------
+def test_the_metrics_are_the_same_boxes_the_backtest_uses():
+    """Asked for as "the same style of information boxes as the backtest panel": the same
+    class, so they cannot drift into a second look."""
+    body = _function(APP_JS, "liveTile")
+
+    assert 'class="bt-stat"' in body
+    assert 'class="label"' in body and 'class="value' in body
+
+
+def test_a_box_can_carry_its_explanation():
+    """``data-tip``, not ``title``: the embedded browser in the dashboard does not render a
+    native tooltip, which is why the backtest boxes use the CSS one."""
+    body = _function(APP_JS, "liveTile")
+
+    assert "data-tip" in body
+    assert "title=" not in body
+
+
+def test_the_grid_has_its_own_declaration():
+    """The shared grid rule is scoped to ``#bt-metrics``, so tiles under any other id stack
+    in a single column — the report page hit this and says so in a comment."""
+    css = (ROOT / "src" / "web" / "static" / "style.css").read_text(encoding="utf-8")
+
+    assert ".live-metrics { display: grid" in css
+    assert 'id="live-metrics" class="live-metrics"' in \
+        (ROOT / "src" / "web" / "templates" / "index.html").read_text(encoding="utf-8")
 
 
 def test_the_log_page_reads_and_renders_the_accounts():
@@ -258,3 +290,16 @@ def test_the_day_percentage_is_not_divided_by_a_hundred_twice():
 
     formatter = _function(LOG_JS, "percentText")
     assert "* 100" not in formatter and "percent(" not in formatter.replace("percentText(", "")
+
+
+def test_the_fast_poll_does_not_blank_what_the_broker_told_us():
+    """The 5-second poll fetches no orders, so a render driven by its own null argument dropped
+    every Alpaca-derived tile and put the protection hint back — for the rest of the minute,
+    until the slow poll restored them. Caught in the browser by counting tiles either side of a
+    poll; no test could see it, because both states are "correct" for the render that made them.
+    """
+    body = _function(APP_JS, "renderLive")
+
+    assert "state.liveOrders = orders" in body, "the last read has to be remembered"
+    assert "renderLiveDetail(loop, state.liveOrders)" in body, "and rendered from"
+    assert "renderProtection(state.liveOrders" in body

@@ -18,7 +18,7 @@ replay of it.
 | Data pipeline (OpenBB + yfinance, Parquet store, delta backfill) | done |
 | Features, rule model, risk layer, backtest engine + Gate | done |
 | Web portal (chart, config, backtest panel, report page) | done |
-| Tests | 879 passing |
+| Tests | 883 passing |
 | Execution config — Alpaca broker, per-strategy paper/live, fail-closed | done |
 | Trading on/off switch + the "no reconfiguration while trading is on" lock | done |
 | Live order execution — order building, retries, brackets, cancel/flatten | done |
@@ -254,10 +254,12 @@ The portal is the whole interface:
   than inferred from the last tick, so it answers "do I need to come back, and
   when?" even before the loop has ever run; when the clock cannot be read it says
   so instead of guessing, because "closed" and "we could not look" are different
-  answers. It also leads with **what the account is worth** — equity, the day's
-  change and its percentage, cash and buying power — for the environment being
-  traded. An account that could not be read shows its reason in place of the
-  numbers, never `$0.00`: a balance and an absence of one are different answers.
+  answers. Its numbers are laid out as **the same stat boxes the backtest panel and the
+  report page use** — account, equity, the day's change, cash, buying power, position,
+  working orders, resting exit legs, trades closed — because a dashboard is read by
+  glancing at boxes. Anything that is not a measurement stays a sentence: an account that
+  could not be read shows its REASON under the boxes rather than `$0.00` in them, since a
+  balance and an absence of one are different answers.
 - **The log page's Account card** shows the same numbers for **both**
   environments, one row each, directly comparable — because a strategy trades one
   account at a time while a person can be wrong about which. The account number is

@@ -1396,10 +1396,15 @@ td.mkt-sym { font-weight: 600; }
 #live-state .warn { color: #f0b429; }
 #live-protection { margin: 10px 0 6px; line-height: 1.5; }
 #live-protection.bad { color: var(--red); }
-#live-detail { border-top: 1px solid var(--border); margin-top: 8px; padding-top: 6px; }
-.live-row { display: flex; gap: 10px; font-size: 13px; padding: 2px 0; }
-.live-key { color: var(--muted); min-width: 110px; }
-.live-row .warn { color: #f0b429; }
+#live-metrics { border-top: 1px solid var(--border); margin-top: 10px; padding-top: 10px; }
+#live-metrics:empty { border-top: none; margin-top: 0; padding-top: 0; }
+
+/* The dashboard's KPI grid is `#bt-metrics` (an ID), so the grid has to be declared again
+   here — the shared rule does not reach these tiles and they would stack in one column. */
+.live-metrics { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 8px; }
+#live-warnings { margin: 10px 0 0; line-height: 1.5; }
+/* (`.live-row` / `.live-key` retired with the rows they styled — the panel's numbers are
+   `.bt-stat` boxes now, and `#live-state .warn` already carries the warning colour.) */
 .chip.good { color: var(--green); border-color: rgba(38, 166, 154, 0.5); }
 .chip.bad { color: var(--red); border-color: rgba(239, 83, 80, 0.55); }
 

@@ -189,7 +189,11 @@
           <div class="collapse-body" id="live-body" hidden>
             <p id="live-state" class="muted">Checking…</p>
             <p id="live-protection" class="muted"></p>
-            <div id="live-detail"></div>
+            <!-- The numbers as boxes, in the same style as the backtest KPIs and the report
+                 page: a dashboard is read by glancing at boxes. Warnings stay as sentences
+                 because a reason is not a measurement. -->
+            <div id="live-metrics" class="live-metrics"></div>
+            <p id="live-warnings" class="muted" hidden></p>
             <p class="muted note">Read from the loop's own records and from Alpaca. Nothing
               on this panel can place, change or cancel an order — the trading controls are
               at the top of the page.</p>

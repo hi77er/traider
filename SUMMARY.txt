@@ -77,7 +77,7 @@ Phase 6: Integration (Days 16-17, 3 tasks) — DONE
     "N open" pill, the Live panel with the protection verdict, and the /log page
 
 Phase 7: Testing (Days 18-21, 4 tasks) — IN PROGRESS
-  ✓ Unit + integration tests (879 passing, incl. backtest⇄live parity, the order path
+  ✓ Unit + integration tests (883 passing, incl. backtest⇄live parity, the order path
     against a stubbed broker, and the loop against a stubbed provider/exchange/broker)
   ➜ Paper trading on a real Alpaca account (1-2 weeks)
   ➜ GATE CHECK: Zero crashes, P&L accuracy ±0.1%
