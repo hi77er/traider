@@ -360,15 +360,20 @@ class AlpacaExecutor:
     def open_orders(self, instrument: Optional[str] = None) -> list:
         return self.client.open_orders(instrument)
 
-    def resting_exits(self, instrument: Optional[str] = None) -> list:
+    def resting_exits(self, instrument: Optional[str] = None, orders: Optional[list] = None) -> list:
         """The resting exit legs among the open orders for ``instrument``.
 
         Separate from ``open_orders`` because the question "is this position protected?"
         is not answered by "are there orders": an entry that has not filled yet is an open
         order, and a bracket parent is an open order, while neither is an exit. Only a stop
         or limit leg protects anything.
+
+        ``orders`` is an already-fetched open-order list. A caller that wants BOTH lists —
+        the dashboard does — passes the one it has: this is a filter over those rows, not a
+        different question, so asking the broker again would be a second round trip for the
+        same answer.
         """
-        return _exit_legs(self.client.open_orders(instrument))
+        return _exit_legs(self.client.open_orders(instrument) if orders is None else orders)
 
     def closed_orders(self, instrument: Optional[str] = None, limit: int = 20) -> list:
         """Recently finished orders, newest first — where a resting exit's fill is read."""

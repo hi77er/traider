@@ -42,6 +42,12 @@
     return `<p class="muted">${esc(text)}</p>`;
   }
 
+  // Only write when the text actually changed. This page now re-reads itself while today is
+  // showing, and a table rewritten on every poll is one you cannot select text in.
+  function setIfChanged(el, html) {
+    if (el && el.innerHTML !== html) el.innerHTML = html;
+  }
+
   function table(headers, rows, rowFor) {
     if (!rows.length) return null;
     return `<table class="lg-table"><thead><tr>${headers
@@ -106,10 +112,10 @@
       $("lg-days").innerHTML = empty("no day has been recorded yet");
       return;
     }
-    $("lg-days").innerHTML = days
+    setIfChanged($("lg-days"), days
       .map((day) => `<button class="rp-run${day === current ? " active" : ""}" data-day="${esc(day)}">
           <span class="rp-run-id">${esc(day)}</span></button>`)
-      .join("");
+      .join(""));
     for (const button of $("lg-days").querySelectorAll("[data-day]")) {
       button.onclick = () => loadLog(button.dataset.day);
     }
@@ -152,7 +158,7 @@
         rows.push({ env: account.env, symbol: "—", unknown: true });
       }
     }
-    $("lg-positions").innerHTML = rows.length
+    setIfChanged($("lg-positions"), rows.length
       ? table(
         ["account", "symbol", "qty", "avg entry", "market value", "unrealized"],
         rows,
@@ -165,10 +171,10 @@
       )
       : empty(orders.ok === false
         ? `the broker could not be read (${orders.message || "no credentials"}) — anything held is unknown, not zero`
-        : "nothing is held");
+        : "nothing is held"));
 
     const working = [...(orders.open || []), ...(orders.resting || [])];
-    $("lg-working").innerHTML = orders.ok === false
+    setIfChanged($("lg-working"), orders.ok === false
       ? empty("the broker could not be read, so nothing is known about working orders")
       : (table(
         ["id", "client id", "side", "type", "qty", "filled", "avg price", "stop", "limit", "status"],
@@ -177,13 +183,13 @@
           ${cell(order.type)}${cell(order.qty)}${cell(order.filled_qty)}
           ${cell(money(order.filled_avg_price))}${cell(money(order.stop_price))}
           ${cell(money(order.limit_price))}${cell(order.status)}</tr>`
-      ) || empty("no orders are working"));
+      ) || empty("no orders are working")));
   }
 
   function renderTicks() {
     const ticks = (state.log && state.log.ticks) || [];
     $("lg-day").textContent = state.log ? state.log.day : "";
-    $("lg-ticks").innerHTML = table(
+    setIfChanged($("lg-ticks"), table(
       ["when", "action", "bar", "signal", "reason", "orders"],
       ticks,
       (tick) => {
@@ -193,23 +199,23 @@
           ${cell(tick.signal)}${cell(tick.reason)}
           <td>${ids ? `${ids} — ${esc((tick.order_ids || []).join(", "))}` : "—"}</td></tr>`;
       }
-    ) || empty("nothing was decided on this day");
+    ) || empty("nothing was decided on this day"));
   }
 
   function renderOrders() {
     const orders = (state.log && state.log.orders) || [];
-    $("lg-orders").innerHTML = table(
+    setIfChanged($("lg-orders"), table(
       ["when", "intent", "status", "price", "expected", "bar", "broker id", "client id"],
       orders,
       (order) => `<tr>${cell(stamp(order.at))}${cell(order.intent)}${cell(order.status)}
         ${cell(money(order.price))}${cell(money(order.expected))}${cell(order.bar)}
         ${cell(order.order_id)}${cell(order.client_order_id)}</tr>`
-    ) || empty("no order has been submitted yet");
+    ) || empty("no order has been submitted yet"));
   }
 
   function renderTrades() {
     const trades = (state.trades && state.trades.trades) || [];
-    $("lg-trades").innerHTML = table(
+    setIfChanged($("lg-trades"), table(
       ["closed", "direction", "entry", "exit", "return", "weight", "bars", "reason"],
       trades,
       (trade) => {
@@ -219,7 +225,7 @@
           ${cell(percent(trade.ret), cls)}${cell(trade.weight)}${cell(trade.bars)}
           ${cell(trade.reason)}</tr>`;
       }
-    ) || empty("no round trip has been closed yet");
+    ) || empty("no round trip has been closed yet"));
   }
 
   async function loadLog(day) {
@@ -233,6 +239,9 @@
     renderDays();
     renderTicks();
     renderOrders();
+    // Choosing a day is what decides whether this page polls at all, so the decision is
+    // remade here rather than only on load.
+    schedulePoll();
   }
 
   async function loadAll(day) {
@@ -261,12 +270,53 @@
     }
     renderAccount();
     renderTrades();
+    schedulePoll();
   }
 
   window.loadLog = loadLog;
   window.loadAll = loadAll;
+  // The ↻ button means "re-read what I am looking at". Going through ``loadAll()`` with no
+  // day would fall back to the server's newest, so a click from a past day would silently
+  // jump the page forward — the one thing a refresh must not do.
+  window.refreshLog = function () {
+    return loadAll(state.log && state.log.day);
+  };
 
-  // Read once, on load, and again only when the user asks (a day button). Deliberately on no
-  // timer: this page shows a scrollback, and nothing here is worth broker traffic per second.
+  // The page re-reads itself only while TODAY is showing. A past day cannot gain rows, and
+  // polling one would be broker traffic for a page nobody is watching change. Today is the
+  // exchange's today, decided by the server, so a reader in another timezone does not drag
+  // the page into refreshing a day that has already closed.
+  const LOG_POLL_MS = 20000;
+  let pollTimer = null;
+
+  function isToday() {
+    return !!(state.log && state.log.day && state.log.day === state.log.today);
+  }
+
+  function stopPoll() {
+    if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; }
+  }
+
+  // Self-scheduling, so a slow day read delays the next poll instead of stacking one on top.
+  function schedulePoll(delay) {
+    stopPoll();
+    if (document.hidden || !isToday()) return;
+    pollTimer = setTimeout(async () => {
+      pollTimer = null;
+      if (document.hidden || !isToday()) return;
+      await loadAll();
+      schedulePoll(LOG_POLL_MS);
+    }, delay === undefined ? LOG_POLL_MS : delay);
+  }
+
+  // A hidden tab is nobody watching: stop, and catch up in one go on the way back.
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) stopPoll();
+    else loadAll();
+  });
+  window.addEventListener("pagehide", stopPoll);
+
+  // Read once, on load, and then keep today's view current. A day button switches to that
+  // day and does not poll; the ↻ button re-reads whatever is on screen.
   loadAll();
 })();

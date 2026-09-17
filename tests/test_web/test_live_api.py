@@ -426,3 +426,75 @@ def test_the_orders_endpoint_reports_the_verdict_even_with_no_broker(api_setting
     assert body["ok"] is False, "no credentials in this fixture"
     assert body["protection"]["state"] == loop_service.UNPROTECTED
     assert body["protection"]["uncovered"] == ["stop", "take"]
+
+
+# ---------------------------------------------------------------------------
+# what the panel's poll costs
+# ---------------------------------------------------------------------------
+def test_the_orders_route_asks_for_the_open_orders_once(api_settings, monkeypatch):
+    """``resting`` is a filter over rows ``open`` already has, so asking twice is a second
+    round trip for an identical answer — and this route is polled, which turns a wasted call
+    into a recurring cost."""
+    from src.web.routes import live as live_routes
+
+    class FakeExecutor:
+        """Counts the fetches and remembers what it was handed, so the route's half of the
+        bargain (fetch once, pass the rows on) is what gets asserted. The executor's half —
+        not asking again when it IS handed rows — is ``test_resting_exits_uses_the_orders_it_
+        was_given``."""
+
+        def __init__(self):
+            self.fetch_count = 0
+            self.handed = None
+
+        def open_orders(self, instrument=None):
+            self.fetch_count += 1
+            return [
+                {"id": "o1", "symbol": "AAPL", "side": "buy", "type": "market", "status": "new"},
+                {"id": "o2", "symbol": "AAPL", "type": "stop", "stop_price": "95.0", "status": "new"},
+            ]
+
+        def resting_exits(self, instrument=None, orders=None):
+            self.handed = orders
+            return [order for order in (orders or []) if order.get("type") == "stop"]
+
+        def closed_orders(self, instrument=None, limit=20):
+            return []
+
+    executor = FakeExecutor()
+    monkeypatch.setattr(live_routes, "execution_status", lambda settings: {"ok": True, "env": "paper"})
+    monkeypatch.setattr(live_routes.positions, "executor_for", lambda settings, env: executor)
+
+    body = client.get("/api/v1/orders").json()
+
+    assert executor.fetch_count == 1, "one fetch, both lists"
+    assert [order["id"] for order in body["open"]] == ["o1", "o2"], "both lists still filled"
+    assert [order["id"] for order in body["resting"]] == ["o2"], "the stop leg is the exit"
+    assert executor.handed is not None, "the rows it already fetched are what it was given"
+
+
+def test_resting_exits_uses_the_orders_it_was_given(monkeypatch):
+    """The executor's half of the same bargain: given the rows, it must not go and ask."""
+    from src.execution import alpaca_executor as module
+
+    class Client:
+        def open_orders(self, instrument=None):
+            raise AssertionError("the orders were already fetched")
+
+    executor = module.AlpacaExecutor.__new__(module.AlpacaExecutor)
+    executor.client = Client()
+
+    legs = executor.resting_exits("AAPL", orders=[{"id": "o2", "type": "stop"}])
+
+    assert [leg["id"] for leg in legs] == ["o2"]
+
+
+def test_the_log_payload_names_the_exchange_today(api_settings):
+    """The log page polls only while TODAY is showing, and it has to be told which day that
+    is by the server: on a machine seven hours ahead of New York the two disagree for most
+    of the evening, and the page would keep refreshing a day that has already closed."""
+    body = client.get("/api/v1/log?day=2020-01-02").json()
+
+    assert body["day"] == "2020-01-02"
+    assert body["today"] == store.trading_day(api_settings)
+    assert body["today"] != body["day"], "today is the exchange's date, not the day asked for"

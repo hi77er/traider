@@ -3,6 +3,7 @@
 Three read-only endpoints for the header pill, the Live panel and the trading log page:
 
 ``GET /api/v1/loop``       -> the loop's own state: holder, next wake, last tick, last refusal
+``GET /api/v1/clock``      -> whether the exchange is open, and when it next changes
 ``GET /api/v1/positions``  -> what the account holds (both environments)
 ``GET /api/v1/orders``     -> open orders, the resting exit legs, and recent fills
 
@@ -27,7 +28,7 @@ from src.config.effective import get_effective_settings_dep
 from src.execution import positions
 from src.execution.config import execution_status
 from src.web.auth import require_auth
-from src.web.services import loop_service
+from src.web.services import clock_service, loop_service
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +68,17 @@ def _order_views(orders: Any) -> List[Dict[str, Any]]:
 def get_loop(settings=Depends(get_effective_settings_dep)) -> dict:
     """The loop's state: is anything running it, and what did it last do."""
     return loop_service.status(settings)
+
+
+@router.get("/clock")
+def get_clock(settings=Depends(get_effective_settings_dep)) -> dict:
+    """Whether the exchange is open, and when it next opens or closes.
+
+    Its own endpoint rather than a field on ``/loop``, because that one is read from files
+    and polled every few seconds while this one asks a broker. Keeping the two apart is what
+    lets the panel poll the cheap half often and this half rarely.
+    """
+    return clock_service.state(settings)
 
 
 @router.get("/positions")
@@ -120,8 +132,12 @@ def get_orders(
 
     try:
         executor = positions.executor_for(settings, env)
-        payload["open"] = _order_views(executor.open_orders(settings.instrument))
-        payload["resting"] = _order_views(executor.resting_exits(settings.instrument))
+        # ONE fetch, then both lists derived from it. ``resting`` is a filter over the same
+        # rows ``open`` is, so asking twice is a second round trip for an identical answer —
+        # and this route is polled, which turns that into a recurring cost.
+        working = executor.open_orders(settings.instrument)
+        payload["open"] = _order_views(working)
+        payload["resting"] = _order_views(executor.resting_exits(settings.instrument, orders=working))
         payload["closed"] = _order_views(executor.closed_orders(settings.instrument, limit=limit))
     except Exception as exc:  # noqa: BLE001 - a broker outage must render, not 500
         logger.exception("Could not read orders for %s", settings.instrument)
@@ -179,6 +195,12 @@ def get_log(
         "ok": True,
         "strategy": name,
         "day": chosen,
+        # The exchange's own today, for the page to compare ``day`` against before it
+        # decides to poll. Computed HERE rather than in the browser because "today" is the
+        # exchange's date, not the reader's: on a machine seven hours ahead of New York the
+        # two disagree for most of the evening, and the page would sit there refreshing a
+        # day that has already closed.
+        "today": store.trading_day(settings),
         # The day menu comes from the index, which exists so that listing the days a strategy
         # ran never has to read the tick logs — they grow without bound.
         "days": [entry.get("day") for entry in reversed(index)][:120],

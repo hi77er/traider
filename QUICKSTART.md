@@ -195,9 +195,12 @@ Endpoints:
   submitted orders and closed trades (account state first, local context second)
 - `GET /api/v1/health` — health check
 - `GET /api/v1/loop` — is a loop running, when it next wakes, its last tick and last refusal
+- `GET /api/v1/clock` — whether the exchange is open, and when it next opens or closes
+  (Alpaca's clock, cached a minute — the session only moves at the boundaries)
 - `GET /api/v1/positions` · `GET /api/v1/orders` · `GET /api/v1/trades` — what is held, what
   is working (plus the resting exit legs), and the round trips that closed
-- `GET /api/v1/log?day=YYYY-MM-DD` — one day of ticks + submitted orders, from the live store
+- `GET /api/v1/log?day=YYYY-MM-DD` — one day of ticks + submitted orders, from the live store,
+  plus the exchange's own `today` so the page knows whether it is worth refreshing
 - `GET /api/v1/dataset/status` — dataset summary + backfill job state
 - `GET /api/v1/dataset/data?start=&end=&limit=&offset=` — paginated OHLCV rows (`limit=0` = all for the chart)
 - `POST /api/v1/dataset/backfill` — start the background initial download

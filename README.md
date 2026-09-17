@@ -18,7 +18,7 @@ replay of it.
 | Data pipeline (OpenBB + yfinance, Parquet store, delta backfill) | done |
 | Features, rule model, risk layer, backtest engine + Gate | done |
 | Web portal (chart, config, backtest panel, report page) | done |
-| Tests | 813 passing |
+| Tests | 849 passing |
 | Execution config — Alpaca broker, per-strategy paper/live, fail-closed | done |
 | Trading on/off switch + the "no reconfiguration while trading is on" lock | done |
 | Live order execution — order building, retries, brackets, cancel/flatten | done |
@@ -247,6 +247,25 @@ The portal is the whole interface:
   Yahoo Finance: a preset screener, the whole US market, top gainers, highest
   volume, top losers and the small-cap gainers/volume lists. The two long tables
   are collapsible and start collapsed so the page opens as an overview
+- **Live panel** (right column, click the header to expand) - whether a loop is
+  running the active strategy, what it last did and when, whether anything open is
+  actually **protected** by a resting exit, and whether the **exchange is open** —
+  with the time it next changes. That last line is read from Alpaca's clock rather
+  than inferred from the last tick, so it answers "do I need to come back, and
+  when?" even before the loop has ever run; when the clock cannot be read it says
+  so instead of guessing, because "closed" and "we could not look" are different
+  answers.
+
+**The dashboard does not reload itself, and what it does refresh is deliberate.**
+The Live panel polls only while it is expanded *and* the tab is in the foreground:
+the loop's own records every 5 s (local files) and the account plus the exchange
+clock every 60 s (broker calls). Opening it, or coming back to the tab, refreshes at
+once. A poll that changes nothing rewrites nothing, so the panel does not churn
+while you read it. Collapse it, or leave the tab, and the polling stops — a
+background tab asking Alpaca every minute is a recurring cost with no reader. The
+trading log page refreshes itself only while **today** is showing, since a past day
+cannot gain rows, and its ↻ button re-reads the day you are looking at. Everything
+else is on demand.
 
 The two header controls are **one pill in every state** - same border, radius,
 padding, height, font, tint, background and text colour, whichever account is

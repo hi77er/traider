@@ -2023,26 +2023,125 @@ function showLiveError(message) {
   if (chip) { chip.textContent = "?"; chip.className = "chip bad"; }
 }
 
-async function loadLive(includeOrders) {
+// The panel polls; the page does not. Two cadences, because the two halves cost very
+// different amounts: the loop's records are local files, while the orders and the clock are
+// broker calls. And it stops the moment nobody is looking — a collapsed panel or a
+// backgrounded tab asking Alpaca every minute is a recurring cost with no reader.
+const LIVE_POLL_MS = 5000;      // /loop — files only
+const LIVE_SLOW_MS = 60000;     // /orders and /clock — broker calls
+const LIVE_BACKOFF_MS = 30000;  // after a failure: slow down rather than hammer
+const LIVE_MAX_FAILURES = 5;
+
+const _livePoll = { timer: null, lastSlow: 0, failures: 0, token: 0 };
+
+// Alpaca's clock returns the EXCHANGE's own wall time with its offset (…-04:00), so the 09:30
+// in it is 09:30 in New York whatever this machine is set to. Reading the digits directly
+// avoids converting it into the operator's zone and then calling the result the market's.
+function exchangeClock(iso) {
+  const parts = /(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(String(iso || ""));
+  if (!parts) return "";
+  const et = `${parts[4]}:${parts[5]}`;
+  const when = new Date(iso);
+  if (Number.isNaN(when.getTime())) return `${et} ET`;
+  const local = when.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  // Only worth saying when the two differ: on a machine already set to New York, "09:30 ET
+  // (09:30 here)" is noise.
+  return local === et ? `${et} ET` : `${et} ET (${local} here)`;
+}
+
+function untilWhen(iso) {
+  if (!iso) return "";
+  const when = new Date(iso);
+  if (Number.isNaN(when.getTime())) return "";
+  const minutes = Math.round((when.getTime() - Date.now()) / 60000);
+  if (minutes <= 0) return "";
+  if (minutes < 60) return `in ${minutes}m`;
+  const hours = Math.floor(minutes / 60), rest = minutes % 60;
+  return rest ? `in ${hours}h ${rest}m` : `in ${hours}h`;
+}
+
+// The answer to "do I need to come back, and when?". Shown whether or not a loop has ever
+// run, which is the state a first test starts in — and deliberately silent rather than
+// guessing when the clock could not be read.
+function marketLine(market) {
+  if (!market) return "";
+  if (!market.ok || market.is_open === null || market.is_open === undefined) {
+    return `<span class="warn">exchange state unknown — ${escapeHtml(market.message || "the clock could not be read")}</span>`;
+  }
+  const when = market.is_open ? market.next_close : market.next_open;
+  const verb = market.is_open ? "closes" : "opens";
+  const state = market.is_open ? "open" : "closed";
+  return [`the exchange is <b>${state}</b> — ${verb}`,
+    escapeHtml(exchangeClock(when)), escapeHtml(untilWhen(when))].filter(Boolean).join(" ");
+}
+
+function livePanelVisible() {
+  const body = $("live-body");
+  return !!body && !body.hidden && !document.hidden;
+}
+
+function stopLivePoll() {
+  if (_livePoll.timer) { clearTimeout(_livePoll.timer); _livePoll.timer = null; }
+}
+
+// Self-scheduling rather than setInterval: the next poll is queued only once this one has
+// settled, so a slow broker makes the panel slower instead of stacking up requests.
+function scheduleLivePoll(delay) {
+  stopLivePoll();
+  if (!livePanelVisible()) return;
+  _livePoll.timer = setTimeout(runLivePoll, delay === undefined ? LIVE_POLL_MS : delay);
+}
+
+async function runLivePoll() {
+  _livePoll.timer = null;
+  if (!livePanelVisible()) return;   // collapsed or backgrounded since it was scheduled
+  const slow = Date.now() - _livePoll.lastSlow >= LIVE_SLOW_MS;
+  if (slow) _livePoll.lastSlow = Date.now();
+  const ok = await loadLive(slow, { quiet: true });
+  _livePoll.failures = ok ? 0 : _livePoll.failures + 1;
+  if (_livePoll.failures >= LIVE_MAX_FAILURES) return;  // the operator can ask again
+  scheduleLivePoll(_livePoll.failures ? LIVE_BACKOFF_MS : LIVE_POLL_MS);
+}
+
+// Only write when the text actually changed. Re-rendering an unchanged panel every few
+// seconds is invisible except in the ways it is not: it resets a blinking chip mid-blink and
+// makes the relative ages flicker as you read them.
+function setIfChanged(el, html) {
+  if (el && el.innerHTML !== html) el.innerHTML = html;
+}
+
+async function loadLive(includeOrders, options) {
+  const quiet = !!(options && options.quiet);
+  // A poll and a ↻ can overlap. Only the newest render wins, so a slow response cannot land
+  // on top of a fresher one and show the panel going backwards.
+  const generation = ++_livePoll.token;
   let loop = null;
   try {
     loop = await api("/api/v1/loop");
   } catch (err) {
-    showLiveError(`could not read the loop's records: ${err.message}`);
-    return;
+    if (!quiet) showLiveError(`could not read the loop's records: ${err.message}`);
+    return false;
   }
   let orders = null;
+  let market = null;
   if (includeOrders) {
     try {
       orders = await api("/api/v1/orders");
     } catch (err) {
       orders = { ok: false, message: err.message };
     }
+    try {
+      market = await api("/api/v1/clock");
+    } catch (err) {
+      market = { ok: false, message: err.message };
+    }
   }
-  renderLive(loop, orders);
+  if (generation !== _livePoll.token) return false;
+  renderLive(loop, orders, market);
+  return true;
 }
 
-function renderLive(loop, orders) {
+function renderLive(loop, orders, market) {
   const info = LIVE_STATE[loop.state] || LIVE_STATE.never;
   const chip = $("live-chip");
   if (chip) {
@@ -2050,6 +2149,10 @@ function renderLive(loop, orders) {
     chip.className = `chip ${info.cls}`;
     chip.title = info.note;
   }
+
+  // The market line is kept across the fast polls, which do not fetch it: the session moves
+  // at 09:30 and 16:00 and nowhere else, so re-asking every five seconds would buy nothing.
+  if (market) state.liveMarket = market;
 
   const who = loop.holder ? loop.holder_text : (loop.claim ? loop.holder_text : "");
   const lines = [];
@@ -2071,6 +2174,8 @@ function renderLive(loop, orders) {
   } else {
     lines.push("no tick has ever been recorded for this strategy");
   }
+  const marketText = marketLine(state.liveMarket);
+  if (marketText) lines.push(marketText);
   if (loop.last_refusal && loop.last_refusal.reason) {
     lines.push(`<span class="warn">last refusal: ${escapeHtml(loop.last_refusal.reason)}</span>`);
   }
@@ -2079,7 +2184,7 @@ function renderLive(loop, orders) {
   for (const trade of closed) {
     lines.push(`closed a ${escapeHtml(trade.direction || "position")} at ${escapeHtml(trade.exit_price)} (${escapeHtml(trade.reason || "")})`);
   }
-  $("live-state").innerHTML = lines.map((line) => `<div>${line}</div>`).join("");
+  setIfChanged($("live-state"), lines.map((line) => `<div>${line}</div>`).join(""));
 
   renderProtection(orders ? orders.protection : null);
   renderLiveDetail(loop, orders);
@@ -2141,9 +2246,9 @@ function renderLiveDetail(loop, orders) {
     }
   }
   rows.push(["trades closed", String(((loop.last_tick && loop.last_tick.trades) || []).length)]);
-  host.innerHTML = rows.map(([key, value]) =>
+  setIfChanged(host, rows.map(([key, value]) =>
     `<div class="live-row"><span class="live-key">${escapeHtml(key)}</span><span>${value}</span></div>`
-  ).join("");
+  ).join(""));
 }
 
 function toggleLivePanel(ev) {
@@ -2158,8 +2263,29 @@ function toggleLivePanel(ev) {
   }
   // Opening it is what asks the broker: the panel is the only thing here that wants
   // Alpaca's order list, so it pays for it rather than the page load doing so.
-  if (!body.hidden) loadLive(true);
+  if (!body.hidden) {
+    loadLive(true);
+    _livePoll.lastSlow = Date.now();
+    scheduleLivePoll();
+  } else {
+    stopLivePoll();
+  }
 }
+
+// A backgrounded tab is the same case as a collapsed panel: no reader, so no polling. On the
+// way back the panel is refreshed at once rather than waiting out the interval.
+function handleLiveVisibility() {
+  if (livePanelVisible()) {
+    loadLive(true);
+    _livePoll.lastSlow = Date.now();
+    scheduleLivePoll();
+  } else {
+    stopLivePoll();
+  }
+}
+
+document.addEventListener("visibilitychange", handleLiveVisibility);
+window.addEventListener("pagehide", stopLivePoll);
 
 function openLivePanel() {
   const body = $("live-body");
