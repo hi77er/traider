@@ -5,9 +5,9 @@ the SAME strategy machine the backtest drives, and places orders through the Alp
 broker. This document is the agreed design plus the order it gets built in, so the
 reasoning survives the code.
 
-Status: **Phases 0–5 are built** (2026-09-17). 6–8 are not. The loop runs; what is
-missing is the dashboard's view of it, the deferred loss limits and the deployment
-follow-through.
+Status: **Phases 0–6 are built** (2026-09-17). 7–8 are not. The loop runs and the
+dashboard shows what it is doing; what is missing is the deferred loss limits, the data
+quality gates and the deployment follow-through.
 
 Related reading: [`README.md`](../README.md) ("Two processes"), `TRAIDER_PLAN.md`
 (phases and the file tree), `src/strategy/live.py` (the driver), and
@@ -211,9 +211,11 @@ data/live_results/<strategy-slug>/
 | Why did it happen — which signal, which bar, which refusal? | **Local logs** |
 
 So the trading log screen renders account state first and local context second, and
-must degrade gracefully when the local log is missing. It needs two read-only
-endpoints — `GET /api/v1/positions`, `GET /api/v1/orders` — whose client methods
-already exist.
+degrades gracefully when the local log is missing. It reads two endpoints —
+`GET /api/v1/positions`, `GET /api/v1/orders` — and the page is built so that a
+deleted local log still renders: an empty day, never an error. The local half is
+`GET /api/v1/log?day=` (the day's ticks and submitted orders) and
+`GET /api/v1/trades`.
 
 The same rule appears inside the driver: an exit the broker made on its own is
 **adopted** (booked at the price the broker's order history reports), never
@@ -410,17 +412,44 @@ order. Alpaca deduplicates on that id, so the second submit is a refused duplica
 than a second position. It also makes an order in the broker's own dashboard traceable to a
 strategy and a bar with no local log, which is the one thing a deleted log cannot say.
 
-### Phase 6 — dashboard surface
+### Phase 6 — dashboard surface ✅ DONE
 
-| # | Step |
-| --- | --- |
-| 6.1–6.2 | `GET /api/v1/positions`, `GET /api/v1/orders` |
-| 6.3 | `GET /api/v1/loop`: lease holder, last-tick age, next wake, last refusal |
-| 6.4 | The "N open" header pill, from the broker |
-| 6.5 | The trading log screen: account state first, local context second, tolerant of a deleted log |
-| 6.6 | The Live panel: last tick, position with its exits, environment, the session's ticks |
-| 6.7 | The loud case surfaced: a position held with NO resting exits |
-| 6.8 | Write `orders.jsonl` / `trades.jsonl` from the loop — built in Phase 3, called by nothing yet |
+| # | Step | State |
+| --- | --- | --- |
+| 6.1–6.2 | `GET /api/v1/positions`, `GET /api/v1/orders` | ✅ |
+| 6.3 | `GET /api/v1/loop`: lease holder, last-tick age, next wake, last refusal | ✅ |
+| 6.4 | The "N open" header pill, from the broker | ✅ |
+| 6.5 | The trading log screen: account state first, local context second, tolerant of a deleted log | ✅ (`/log`) |
+| 6.6 | The Live panel: last tick, position with its exits, environment, the session's ticks | ✅ |
+| 6.7 | The loud case surfaced: a position held with NO resting exits | ✅ |
+| 6.8 | Write `orders.jsonl` / `trades.jsonl` from the loop — built in Phase 3, called by nothing yet | ✅ |
+| 6.9 | `GET /api/v1/trades`, `GET /api/v1/log?day=` — the local half the log page reads | ✅ |
+
+**The reading side had to move below both processes first.** The dashboard cannot import
+`src.scheduler` — that is the invariant which makes the two-process split real — so the lease's
+*reading* (path, record shape, the rules for judging a holder, `describe`) now lives in
+`src/config/loop_state.py`, and the loop's *claiming* in `src/scheduler/lease.py` builds on it.
+`armed_strategy` moved to `trading_state` for the same reason: "which strategy is the bot for"
+is a question about `trading.json`, and both processes need the answer.
+
+**One verdict, three screens.** `loop_service.status()` returns `never` / `stopped` /
+`overdue` / `running`, and that distinction is the whole point: a timestamp cannot tell a
+clean shutdown from a crash, and a quiet market from a dead loop. It reports the last refusal
+from the tick LOG rather than from `latest.json`, because the last tick may well have been a
+success — "why did nothing happen at 14:30" wants the last thing that went wrong.
+
+**Protection is judged from the position, not from the configuration.** The stop and target
+recorded ON THE POSITION when it opened are compared with the exit legs the broker is actually
+resting, at a 0.3% tolerance for float noise. Three verdicts, and the third is deliberate:
+`naked by design` (no level was ever configured — not a failure, and warning about it is how
+the real warning gets ignored), `unprotected` (a level was set and nothing is resting at it —
+the silent one), `protected`. Reading the configuration instead would let a setting edited
+since the position opened make an unprotected position look protected.
+
+**The dashboard never polls the broker.** The Live panel's state is local files and refreshes
+with the rest of the page; the orders view asks Alpaca only when the panel is opened or
+refreshed by hand. This app has never polled the broker, and a dashboard that generated
+traffic merely by being open would be the first thing to do so.
 
 ### Phase 7 — deferred limits and data quality
 

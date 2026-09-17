@@ -68,16 +68,16 @@ Phase 5: Deferred — Core & Backtest Completion (moved from Phases 2 & 3)
   ➜ GATE CHECK: Backtest metrics (Sharpe ≥ 1.0, DD ≤ 25%, WR ≥ 55%)
   ➜ Parameter sensitivity (multi-run sweep) — split out of the report task
 
-Phase 6: Integration (Days 16-17, 3 tasks) — IN PROGRESS
+Phase 6: Integration (Days 16-17, 3 tasks) — DONE
   ✓ scheduler-create: the loop (src/scheduler/orchestrator.py) — the gates in order,
     a boundary sleep, no catch-up, a record per tick
   ✓ main-entry: src/main.py hosts it under a lease (data/loop.lock); exit codes
     2 = wrong host, 4 = another live loop already runs, 0 = the tick ran
-  ➜ NEXT: the dashboard's view of it — positions, orders, the trading log, the
-    "N open" pill (Phase 6 of docs/execution-loop.md)
+  ✓ the dashboard's view of it: GET /api/v1/loop|positions|orders|trades|log, a
+    "N open" pill, the Live panel with the protection verdict, and the /log page
 
 Phase 7: Testing (Days 18-21, 4 tasks) — IN PROGRESS
-  ✓ Unit + integration tests (766 passing, incl. backtest⇄live parity, the order path
+  ✓ Unit + integration tests (813 passing, incl. backtest⇄live parity, the order path
     against a stubbed broker, and the loop against a stubbed provider/exchange/broker)
   ➜ Paper trading on a real Alpaca account (1-2 weeks)
   ➜ GATE CHECK: Zero crashes, P&L accuracy ±0.1%

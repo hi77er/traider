@@ -18,13 +18,13 @@ replay of it.
 | Data pipeline (OpenBB + yfinance, Parquet store, delta backfill) | done |
 | Features, rule model, risk layer, backtest engine + Gate | done |
 | Web portal (chart, config, backtest panel, report page) | done |
-| Tests | 766 passing |
+| Tests | 813 passing |
 | Execution config — Alpaca broker, per-strategy paper/live, fail-closed | done |
 | Trading on/off switch + the "no reconfiguration while trading is on" lock | done |
 | Live order execution — order building, retries, brackets, cancel/flatten | done |
 | Portfolio state (DynamoDB) | **not implemented** |
 | The execution loop — `src/main.py`, a separate process | done |
-| The dashboard's view of it — positions, orders, the trading log | **not implemented** (Phase 6) |
+| The dashboard's view of it — positions, orders, the trading log (`/log`) | done |
 
 The current strategy **does not pass its own Gate yet** (see
 [CHECKLIST.md](CHECKLIST.md) for the metrics). Treat every stored result as
@@ -87,7 +87,7 @@ flowchart LR
 |  | **The loop** — `src/main.py` | **The dashboard** — `src/web` |
 | --- | --- | --- |
 | Started by | `scripts/run-bot.sh` | `scripts/run-dashboard.sh` |
-| Owns | the bar clock, the shared strategy machine, **every order** | HTTP: the UI, configuration, backtests, reports |
+| Owns | the bar clock, the shared strategy machine, **every order** | HTTP: the UI, configuration, backtests, reports, and the read-only view of the loop (`Live` panel, `/log`) |
 | Must never | serve HTTP | place an order, or start the loop |
 | Reaches the other by | reading and writing files | reading files |
 
@@ -299,6 +299,11 @@ settings/      LOCAL DATA (gitignored): strategies/store.json + account/account.
 data/          generated at runtime: historical Parquet, backtest results, the live tree,
                and loop.lock (the lease)
 ```
+
+`src/config/` also holds the runtime state **both processes read**: the switch
+(`trading_state`) and the loop's lease (`loop_state`). They live below `src/web` and
+`src/scheduler` on purpose, so the dashboard can answer "is the bot running?" without
+importing the loop — the invariant `tests/test_architecture.py` enforces.
 
 Runtime data is not in the repository:
 
