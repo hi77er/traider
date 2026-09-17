@@ -290,6 +290,12 @@ class LiveDriver:
         )
         self.engine.observe_close(float(candles["close"].iloc[-1]))
 
+        # Everything booked during this call, so the loop can write it down. The ledger is
+        # cumulative for the driver's life and the loop builds a driver per tick, so this
+        # slice is the whole difference between "the trades so far" and "the trades now" —
+        # and it is the only place a live exit price survives at all once the tick ends.
+        booked_before = len(self.ledger.legs)
+
         # A resting exit can have closed the position while this driver slept between
         # bars. Adopt it BEFORE reconciling: the mismatch it creates is not drift, and
         # leaving it unbooked would refuse every future tick for ever.
@@ -298,7 +304,14 @@ class LiveDriver:
         mismatch = self.reconcile()
         if mismatch:
             logger.warning(mismatch)
-            return {"action": "refused", "reason": mismatch, "bar": bar_key}
+            # The refusal does not undo the booking: an exit the broker made happened, and
+            # dropping it here is how a closed trade disappears from the log entirely.
+            return {
+                "action": "refused",
+                "reason": mismatch,
+                "bar": bar_key,
+                "trades": self._booked_since(booked_before),
+            }
 
         intents = self.engine.step(self.state, fill_bar, act)
         done = []
@@ -315,9 +328,16 @@ class LiveDriver:
         self.save_state()
         self.log.extend(done)
         report = {"action": "decided", "bar": bar_key, "signal": act, "intents": done}
+        booked = self._booked_since(booked_before)
+        if booked:
+            report["trades"] = booked
         if adopted is not None:
             report["adopted"] = adopted
         return report
+
+    def _booked_since(self, mark: int) -> list:
+        """The legs booked since ``mark``, as plain dicts for the record to carry."""
+        return [dict(leg) for leg in self.ledger.legs[mark:]]
 
     def _act(self, bar: Bar, intent: Intent, client_order_id: str = "") -> Dict[str, Any]:
         """Submit one intent and book what came back."""
@@ -330,6 +350,13 @@ class LiveDriver:
         # broker they are the same by construction; for a real one they can differ, and
         # that difference is the honest cost of trading rather than a modelling choice.
         real = fill.price if fill.filled else None
+        # The broker's id and ours, on every outcome including a rejected order: an order
+        # that was refused still has a client_order_id, and that is what makes a rejection
+        # traceable in the log rather than a line saying "something did not work".
+        identity = {
+            "order_id": fill.order_id,
+            "client_order_id": fill.client_order_id or client_order_id or None,
+        }
         if intent.action == OPEN:
             report = {
                 "intent": intent.action,
@@ -337,6 +364,7 @@ class LiveDriver:
                 "price": real if real is not None else intent.expected_price,
                 "expected": intent.expected_price,
                 "status": fill.status,
+                **identity,
             }
             if real is not None:
                 self._reprice_entry(real)
@@ -352,8 +380,9 @@ class LiveDriver:
                 "price": real if real is not None else intent.expected_price,
                 "expected": intent.expected_price,
                 "status": fill.status,
+                **identity,
             }
-        return {"intent": intent.action, "reason": intent.reason}
+        return {"intent": intent.action, "reason": intent.reason, **identity}
 
     def _submit(self, intent: Intent, client_order_id: str = "") -> Fill:
         if self.broker is None:

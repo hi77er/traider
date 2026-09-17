@@ -57,12 +57,22 @@ FILLED, NO_FILL, REJECTED = "filled", "no_fill", "rejected"
 
 @dataclass
 class Fill:
-    """What actually happened to an intent."""
+    """What actually happened to an intent.
+
+    ``order_id`` and ``client_order_id`` are the broker's name for the order and ours
+    (see ``LiveDriver.order_id_for``). They are carried here because they are the only
+    way an order can be attributed later: without them a tick can say a bar was decided
+    and a position exists, but not which order did it — and nothing in the live log could
+    be joined to the broker's own list. ``SimulatedBroker`` has no broker-side id to
+    report and echoes the client id it was given, so a dry run's log is still joinable.
+    """
 
     status: str = FILLED
     price: Optional[float] = None
     quantity: float = 0.0
     detail: str = ""
+    order_id: Optional[str] = None
+    client_order_id: Optional[str] = None
 
     @property
     def filled(self) -> bool:
@@ -171,11 +181,11 @@ class SimulatedBroker:
         )
 
     def submit(self, intent: Intent, client_order_id: Optional[str] = None) -> Fill:
-        # ``client_order_id`` is deliberately unused: there is no order to deduplicate, and
-        # a simulated fill is a function of the intent alone.
-        del client_order_id
+        # There is no broker-side order to deduplicate against, so the id is echoed back
+        # rather than used: a simulated run's log then carries the same join key a real
+        # one does, and the code that writes it needs no special case.
         if intent.skipped or intent.expected_price is None:
-            return Fill(status=NO_FILL, detail="nothing to fill")
+            return Fill(status=NO_FILL, detail="nothing to fill", client_order_id=client_order_id)
         price = float(intent.expected_price)
         # Track what is held, like a real broker would: a live driver reconciles against
         # this, and a simulator that always reported "flat" would make every run refuse
@@ -186,7 +196,12 @@ class SimulatedBroker:
         elif intent.action == CLOSE:
             self.quantity = 0.0
             self.entry_price = None
-        return Fill(status=FILLED, price=price, quantity=abs(self.quantity))
+        return Fill(
+            status=FILLED,
+            price=price,
+            quantity=abs(self.quantity),
+            client_order_id=client_order_id,
+        )
 
     def close(self, reason: str = "") -> Fill:
         self.quantity = 0.0

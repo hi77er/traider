@@ -418,6 +418,104 @@ def test_a_quiet_tick_is_not_written_to_the_log(tmp_path, armed):
 
 
 # ---------------------------------------------------------------------------
+# the order and trade logs
+# ---------------------------------------------------------------------------
+class _SellAfterBuy(AlwaysBuy):
+    """Buy on the first call, sell on the second — one round trip, deterministically."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def evaluate_frame(self, frame):
+        self.calls += 1
+        return frame.assign(signal="BUY" if self.calls == 1 else "SELL")
+
+
+def test_a_decided_tick_writes_the_order_it_submitted(tmp_path, armed):
+    """orders.jsonl is the loop's account of what it TRIED to do, with the join key.
+
+    The broker's own list answers what became of an order; this answers which bar, which
+    signal and which intent produced it. ``client_order_id`` is what joins the two, and it
+    is the only thing that makes an order in Alpaca's dashboard traceable back to a
+    strategy and a bar.
+    """
+    settings = armed()
+    record = orchestrator.tick(
+        settings, now=_at("2024-01-05 14:05"), sync_call=lambda: {}, clock_call=Calls().clock,
+        driver=_driver(settings),
+    )
+
+    rows = orchestrator.store.read_orders(settings, STRATEGY)
+    assert record["action"] == "decided"
+    assert len(rows) == 1, rows
+    assert rows[0]["intent"] == "open"
+    assert rows[0]["status"] == "filled"
+    assert rows[0]["bar"] == record["bar"]
+    assert rows[0]["client_order_id"].startswith("traider-")
+    assert rows[0]["day"] == "2024-01-05"
+    assert orchestrator.store.load_index(settings, STRATEGY)[0]["orders"] == 1
+
+
+def test_a_refused_tick_writes_no_orders_but_its_trades_are_kept(tmp_path, armed):
+    """A refusal can still have BOOKED something.
+
+    An exit the broker made is adopted before the reconcile that refuses, so the trade
+    happened whatever the tick's verdict — and dropping it here is how a real exit vanishes
+    from the log while the position is still gone from the account.
+    """
+    settings = armed()
+    leg = {"entry_idx": 1, "exit_idx": 4, "direction": "long", "entry_price": 100.0,
+           "exit_price": 104.0, "ret": 0.04, "equity_ret": 0.04, "weight": 1.0,
+           "bars": 3, "reason": "stop", "skipped": False}
+
+    class RefusingDriver:
+        name = STRATEGY
+        state = type("S", (), {"position": None})()
+
+        def on_bar_closed(self, window):
+            return {"action": "refused", "reason": "the broker holds 4 shares we do not",
+                    "bar": "2024-01-05T17:30:00+00:00", "trades": [leg]}
+
+    orchestrator.tick(
+        settings, now=_at("2024-01-05 14:05"), sync_call=lambda: {}, clock_call=Calls().clock,
+        driver=RefusingDriver(),
+    )
+
+    trades = orchestrator.store.read_trades(settings, STRATEGY)
+    assert [t["reason"] for t in trades] == ["stop"]
+    assert trades[0]["exit_price"] == 104.0 and trades[0]["ret"] == 0.04
+    assert orchestrator.store.read_orders(settings, STRATEGY) == [], "nothing was submitted"
+    assert orchestrator.store.load_index(settings, STRATEGY)[0]["trades"] == 1
+
+
+def test_a_closed_position_writes_a_trade_row(tmp_path, armed):
+    """The live half of a trade list: until this existed, a live exit price was lost with
+    the tick that computed it — which is why only the backtest could show one."""
+    settings = armed()
+    broker = SimulatedBroker()
+    generator = _SellAfterBuy()
+
+    first = _driver(settings, broker)
+    first.generator = generator
+    opened = orchestrator.tick(settings, now=_at("2024-01-05 14:05"), sync_call=lambda: {},
+                               clock_call=Calls().clock, driver=first)
+    second = _driver(settings, broker)
+    second.generator = generator
+    closed = orchestrator.tick(settings, now=_at("2024-01-05 15:05"), sync_call=lambda: {},
+                               clock_call=Calls().clock, driver=second)
+
+    assert opened["action"] == "decided" and closed["action"] == "decided"
+    assert closed["signal"] == "SELL"
+    trades = orchestrator.store.read_trades(settings, STRATEGY)
+    assert len(trades) == 1, trades
+    assert trades[0]["direction"] == "long"
+    assert trades[0]["entry_price"] == opened["intents"][0]["price"]
+    assert trades[0]["reason"] in ("signal", "forced")
+    assert orchestrator.store.load_latest(settings, STRATEGY)["trades"], "also on the heartbeat"
+    assert len(orchestrator.store.read_orders(settings, STRATEGY)) == 2, "the open and the close"
+
+
+# ---------------------------------------------------------------------------
 # the run loop
 # ---------------------------------------------------------------------------
 def test_run_ticks_the_requested_number_of_times_and_returns_them(tmp_path, armed):

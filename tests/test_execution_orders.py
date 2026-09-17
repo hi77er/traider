@@ -528,9 +528,73 @@ def test_the_broker_implements_the_seam_the_driver_is_written_against():
     assert isinstance(broker, Broker)
     # A rejected entry comes back as a Fill, so a mid-tick failure cannot leave the
     # driver half-updated; and "nothing to submit" is answered, not raised.
-    assert broker.submit(Intent(action=OPEN, expected_price=100.0, weight=0.5)).status == REJECTED
+    refused = broker.submit(
+        Intent(action=OPEN, expected_price=100.0, weight=0.5), client_order_id="traider-T-abc"
+    )
+    assert refused.status == REJECTED
+    # A refusal is named too: the broker answered nothing, so our own id is all there is,
+    # and it is what makes "this bar's entry was refused" traceable to the order that was
+    # meant to carry it.
+    assert refused.client_order_id == "traider-T-abc"
+    assert refused.order_id is None
     assert broker.submit(Intent(action=OPEN, skipped=True)).status == NO_FILL
     assert broker.submit(None).status == NO_FILL
+
+
+def test_a_local_refusal_names_the_order_the_broker_never_saw():
+    """Three of the four ways an entry is refused here happen BEFORE anything is sent: the
+    switch, the size, the price. Our own id is the only identifier those orders will ever
+    have, so a refusal without one cannot be tied to the bar that asked for it.
+
+    Note the ordering this pins down: sizing needs equity, so the account is READ before the
+    switch is consulted (the guard lives in the executor's ``place_order``). A read moves no
+    money, and no order is sent — but "the broker was never asked" would be the wrong way to
+    say it.
+    """
+    settings = _settings()
+    session = StubSession()
+    session.queue("GET", "/v2/account", StubResponse(200, {"equity": "10000"}))
+    executor = AlpacaExecutor(
+        settings, client=AlpacaClient(resolve_execution_target(settings), session=session),
+        sleep=lambda _s: None, guard=lambda: "trading is OFF",  # the switch says no
+    )
+    broker = AlpacaBroker(settings, executor=executor)
+
+    refused = broker.submit(
+        Intent(action=OPEN, expected_price=100.0, weight=0.5), client_order_id="traider-T-sw"
+    )
+
+    assert refused.status == REJECTED
+    assert refused.client_order_id == "traider-T-sw"
+    assert [r["method"] for r in session.requests] == ["GET"], "no order was ever sent"
+
+    # The third local refusal: an intent with no price to size against. This one is checked
+    # before equity is read, so it asks the broker nothing at all.
+    unpriced = broker.submit(Intent(action=OPEN, weight=0.5), client_order_id="traider-T-np")
+    assert unpriced.status == REJECTED and "no price" in unpriced.detail
+    assert unpriced.client_order_id == "traider-T-np"
+    assert [r["method"] for r in session.requests] == ["GET"], "nothing further was sent"
+
+
+def test_an_entry_one_share_cannot_afford_is_named_too():
+    """The other local refusal, and the one most likely to be seen in a small account."""
+    settings = _settings()
+    session = StubSession()
+    session.queue("GET", "/v2/account", StubResponse(200, {"equity": "50"}))
+    executor = AlpacaExecutor(
+        settings, client=AlpacaClient(resolve_execution_target(settings), session=session),
+        sleep=lambda _s: None, guard=lambda: None,
+    )
+    broker = AlpacaBroker(settings, executor=executor)
+
+    refused = broker.submit(
+        Intent(action=OPEN, expected_price=100.0, weight=0.5), client_order_id="traider-T-poor"
+    )
+
+    assert refused.status == REJECTED
+    assert "cannot afford" in refused.detail
+    assert refused.client_order_id == "traider-T-poor"
+    assert [r["method"] for r in session.requests] == ["GET"], "no order was sent"
 
 
 def test_closing_cancels_the_resting_exits_before_it_closes():
@@ -732,6 +796,15 @@ def test_a_live_tick_places_a_bracketed_order_through_the_shared_engine(tmp_path
     assert payload["order_class"] == "bracket", "the protection travels with the entry"
     assert "stop_loss" in payload and "take_profit" in payload
     assert payload["client_order_id"].startswith("traider-TEST-"), payload["client_order_id"]
+
+    # ...and the ids come back out of the broker into the report the loop writes down.
+    # Both are needed and they are not the same id: the broker's own is what an operator
+    # searches Alpaca with, ours is what ties the order to a strategy and a bar.
+    intent = report["intents"][0]
+    assert intent["order_id"] == "ord-1"
+    # The broker's echo wins when there is one, exactly as a real Alpaca echoes what was
+    # sent — this stub answers with its own id, which is what makes the distinction visible.
+    assert intent["client_order_id"] == "cid-1"
 
     # The position is recorded from the FILL, not from the expectation.
     assert driver.state.position is not None

@@ -165,6 +165,7 @@ def tick(
         reason: str = "",
         logged: bool = False,
         index_fields: Optional[Dict[str, Any]] = None,
+        orders: Optional[List[Dict[str, Any]]] = None,
         **extra,
     ) -> Dict[str, Any]:
         record_ = store.tick_record(
@@ -180,6 +181,22 @@ def tick(
                     # filed under today — and the file's name would disagree with the
                     # record's own ``day`` field, which is read from the same moment.
                     store.append_tick(settings, strategy, record_, when=at)
+                    # The order and trade logs are the LOOP's to write: reading and writing
+                    # state is the driver's job, housekeeping is not, and ``src/strategy``
+                    # may not import ``src/execution`` at all. The rows come from the
+                    # driver's own reports, so what lands here is what the machine tried to
+                    # do — the broker's copy of the same orders answers a different
+                    # question, and ``client_order_id`` is what joins the two.
+                    for row in orders or []:
+                        store.append_order(settings, strategy, row)
+                    for leg in record_["trades"]:
+                        store.append_trade(
+                            settings, strategy,
+                            store.trade_record(
+                                settings=settings, strategy=strategy, env=env,
+                                at=at, bar=record_["bar"], leg=leg,
+                            ),
+                        )
                     _bump_day(
                         settings, strategy, record_["day"],
                         env=env, last_action=action, last_at=record_["at"],
@@ -274,7 +291,17 @@ def tick(
     if result.get("action") == "noop":
         return finish("noop", result.get("reason") or "this bar was already decided", bar=result.get("bar"))
     if result.get("action") == "refused":
-        return finish("refused", result.get("reason") or "the driver refused", bar=result.get("bar"))
+        # A refusal can still have BOOKED something: an exit the broker made is adopted
+        # before the reconcile that refuses, so the trade happened whatever the tick's
+        # verdict. Dropping it here is how a real exit vanishes from the log.
+        legs = result.get("trades") or []
+        return finish(
+            "refused",
+            result.get("reason") or "the driver refused",
+            bar=result.get("bar"),
+            index_fields={"trades": len(legs)} if legs else None,
+            trades=legs,
+        )
 
     # -- 7. record ---------------------------------------------------------
     intents = result.get("intents") or []
@@ -282,14 +309,28 @@ def tick(
     if result.get("adopted"):
         order_ids.append(result["adopted"].get("order_id"))
     order_ids = [oid for oid in order_ids if oid]
+    legs = result.get("trades") or []
+    # One row per submitted order, including the ones that were refused: an order that did
+    # not fill is exactly what someone reading the log is looking for, and a log that only
+    # records successes cannot answer "why is this bar missing a trade".
+    orders = [
+        store.order_record(
+            settings=settings, strategy=strategy, env=env, at=at,
+            bar=result.get("bar"), intent=intent,
+        )
+        for intent in intents
+        if not intent.get("skipped") and intent.get("intent")
+    ]
     position = driver.state.position
     return finish(
         "decided",
         logged=True,
-        index_fields={"decided": 1, "orders": len(order_ids)},
+        index_fields={"decided": 1, "orders": len(orders), "trades": len(legs)},
+        orders=orders,
         bar=result.get("bar"),
         signal=result.get("signal"),
         intents=intents,
+        trades=legs,
         adopted=result.get("adopted"),
         position=None if position is None else position.as_dict(),
         order_ids=order_ids,

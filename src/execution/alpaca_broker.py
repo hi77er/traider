@@ -212,13 +212,17 @@ class AlpacaBroker:
         except OrderRefused as exc:
             # Nothing was sent: the switch, the sizes or the prices said no.
             logger.error("%s refused a %s: %s", self.label, intent.action, exc)
-            return Fill(status=REJECTED, detail=str(exc))
+            return Fill(status=REJECTED, detail=str(exc), client_order_id=client_order_id)
         except AlpacaError as exc:
             logger.error("%s broker error on %s: %s", self.label, intent.action, exc)
-            return Fill(status=REJECTED, detail=str(exc))
+            return Fill(status=REJECTED, detail=str(exc), client_order_id=client_order_id)
         except Exception as exc:  # noqa: BLE001 - a tick must not die inside a broker
             logger.exception("%s unexpected failure on %s", self.label, intent.action)
-            return Fill(status=REJECTED, detail=f"unexpected broker failure: {exc}")
+            return Fill(
+                status=REJECTED,
+                detail=f"unexpected broker failure: {exc}",
+                client_order_id=client_order_id,
+            )
         return Fill(status=NO_FILL, detail=f"unsupported action {intent.action!r}")
 
     def close(self, reason: str = "") -> Fill:
@@ -276,13 +280,24 @@ class AlpacaBroker:
 
     # -- entries and exits -------------------------------------------------
     def _open(self, intent: Intent, *, client_order_id: Optional[str] = None) -> Fill:
+        # Every refusal below carries ``client_order_id``. Nothing was sent, so our own name
+        # for the order is the ONLY identifier it will ever have — and a log line saying
+        # "the entry was skipped" without one cannot be tied to the bar that asked for it.
         price = _to_float(intent.expected_price)
         if not price:
-            return Fill(status=REJECTED, detail="no price on the intent to size against")
+            return Fill(
+                status=REJECTED,
+                detail="no price on the intent to size against",
+                client_order_id=client_order_id,
+            )
 
         equity = self.equity()
         if equity <= 0:
-            return Fill(status=REJECTED, detail="account equity is unknown — cannot size an entry")
+            return Fill(
+                status=REJECTED,
+                detail="account equity is unknown — cannot size an entry",
+                client_order_id=client_order_id,
+            )
 
         quantity = shares_for(intent.weight, price, equity)
         if quantity < 1:
@@ -295,6 +310,7 @@ class AlpacaBroker:
                     f"equity {equity:.2f} at weight {float(intent.weight):.3f} cannot afford one "
                     f"share of {self.symbol} at {price:.2f} — entry skipped"
                 ),
+                client_order_id=client_order_id,
             )
 
         # The bracket carries the protection to the broker, where it survives this
@@ -344,14 +360,22 @@ class AlpacaBroker:
         price = _to_float(result.get("filled_avg_price"))
         filled_qty = _to_float(result.get("filled_qty")) or 0.0
         detail = f"{self.label} {side} {self.symbol} {status}"
+        # The broker's ids travel with the fill whatever its status: an order that is
+        # still working has one too, and it is what the log is joined on.
+        ids = {
+            "order_id": str(result.get("order_id") or "") or None,
+            "client_order_id": str(result.get("client_order_id") or "") or None,
+        }
 
         if status in DEAD_STATUSES:
-            return Fill(status=REJECTED, detail=detail)
+            return Fill(status=REJECTED, detail=detail, **ids)
         if price and (filled_qty > 0 or side == "EXIT"):
-            fill = Fill(status=FILLED, price=price, quantity=filled_qty or quantity, detail=detail)
+            fill = Fill(
+                status=FILLED, price=price, quantity=filled_qty or quantity, detail=detail, **ids
+            )
             self.fills.append({"side": side, "fill": fill})
             return fill
         if result.get("timed_out"):
             detail += f" — still working after the timeout (order {result.get('order_id')})"
         logger.warning("%s not filled yet: %s", self.label, detail)
-        return Fill(status=NO_FILL, quantity=filled_qty, detail=detail)
+        return Fill(status=NO_FILL, quantity=filled_qty, detail=detail, **ids)

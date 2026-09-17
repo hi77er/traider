@@ -278,6 +278,72 @@ def test_a_tick_record_carries_the_core_keys_and_the_day(tmp_path):
         assert key in record, key
     assert record["day"] == "2026-09-16" and record["env"] == "paper"
     assert record["adopted"] is None and record["intents"] == []
+    assert record["trades"] == [], "nothing closed unless the tick says so"
+
+
+def test_a_tick_record_carries_the_trades_that_tick_closed(tmp_path):
+    """The panel answers "what did the last tick do" from latest.json, so a close it
+    cannot see is a close the operator has to go digging in a .jsonl for."""
+    settings = _s(tmp_path)
+    leg = {"entry_idx": 3, "exit_idx": 7, "direction": "long", "entry_price": 100.0,
+           "exit_price": 103.0, "ret": 0.03, "reason": "take", "skipped": False}
+
+    record = _record(settings, at=datetime(2026, 9, 16, 14, 0, tzinfo=timezone.utc), trades=[leg])
+
+    assert record["trades"][0]["reason"] == "take"
+    assert record["trades"][0]["ret"] == 0.03
+
+
+def test_an_order_row_names_the_order_on_both_sides(tmp_path):
+    """``client_order_id`` is the join key, and ``order_id`` is what the broker's own
+    dashboard is searched with. A row with only one of them is half an answer."""
+    settings = _s(tmp_path)
+    row = store.order_record(
+        settings=settings, strategy="Alpha", env="paper",
+        at=datetime(2026, 9, 16, 14, 0, tzinfo=timezone.utc),
+        bar="2026-09-16T17:30:00+00:00",
+        intent={"intent": "open", "reason": "signal", "status": "filled", "price": 101.5,
+                "expected": 101.0, "order_id": "ord-9", "client_order_id": "traider-A-b3"},
+    )
+
+    assert row["intent"] == "open" and row["status"] == "filled"
+    assert row["order_id"] == "ord-9" and row["client_order_id"] == "traider-A-b3"
+    assert row["day"] == "2026-09-16" and row["env"] == "paper" and row["strategy"] == "Alpha"
+    assert row["bar"] == "2026-09-16T17:30:00+00:00"
+
+
+def test_a_trade_row_is_the_engines_own_leg_plus_when_it_happened(tmp_path):
+    """The leg's fields are carried verbatim, because that is the same row a backtest
+    stores — a live trade and a replayed one have to be comparable without translation."""
+    settings = _s(tmp_path)
+    leg = {"entry_idx": 3, "exit_idx": 7, "direction": "short", "entry_price": 100.0,
+           "exit_price": 96.0, "ret": 0.04, "equity_ret": 0.02, "weight": 0.5, "bars": 4,
+           "reason": "stop", "stop_percent": 2.0, "skipped": False}
+
+    row = store.trade_record(
+        settings=settings, strategy="Alpha", env="paper",
+        at=datetime(2026, 9, 16, 1, 0, tzinfo=timezone.utc), leg=leg,
+    )
+
+    for key, value in leg.items():
+        assert row[key] == value, key
+    # 01:00Z is still the 15th where the market is, and the row must agree with the tick
+    # log it sits beside rather than with the machine's own date.
+    assert row["day"] == "2026-09-15"
+    assert row["skipped"] is False
+
+
+def test_a_skipped_leg_is_still_a_row(tmp_path):
+    """A refusal the engine made is a decision, and the engine's own vocabulary says so:
+    ``record_skip`` appends a leg rather than leaving a silence."""
+    settings = _s(tmp_path)
+    row = store.trade_record(
+        settings=settings, strategy="Alpha", env="paper",
+        at=datetime(2026, 9, 16, 14, 0, tzinfo=timezone.utc),
+        leg={"entry_idx": 2, "exit_idx": 2, "skipped": True, "reason": "daily loss limit"},
+    )
+
+    assert row["skipped"] is True and row["reason"] == "daily loss limit"
 
 
 # ---------------------------------------------------------------------------

@@ -59,6 +59,7 @@ __all__ = [
     "live_root",
     "load_index",
     "load_latest",
+    "order_record",
     "orders_path",
     "read_lines",
     "retire_legacy_state",
@@ -68,6 +69,7 @@ __all__ = [
     "tick_log_path",
     "tick_record",
     "ticks_dir",
+    "trade_record",
     "trading_day",
     "trades_path",
     "upsert_day",
@@ -156,6 +158,7 @@ def tick_record(
     adopted: Optional[Dict[str, Any]] = None,
     position: Any = None,
     order_ids: Optional[List[str]] = None,
+    trades: Optional[List[Any]] = None,
     open_count: Optional[int] = None,
     protected: Optional[bool] = None,
 ) -> Dict[str, Any]:
@@ -180,6 +183,10 @@ def tick_record(
         "adopted": adopted,
         "position": position,
         "order_ids": list(order_ids or []),
+        # The trades this tick CLOSED. Carried in the record as well as appended to
+        # trades.jsonl: the panel answers "what did the last tick do" from latest.json, and
+        # a close it cannot see is a close the operator has to go digging for.
+        "trades": list(trades or []),
     }
     if open_count is not None:
         record["open_count"] = int(open_count)
@@ -194,6 +201,79 @@ def tick_record(
 def save_latest(settings, name: str, record: Dict[str, Any]) -> Path:
     """Rewrite the panel's view. Called on EVERY tick, including no-ops (the heartbeat)."""
     return artifacts.write_json_atomic(latest_path(settings, name), record)
+
+
+def order_record(
+    *,
+    settings,
+    strategy: str,
+    env: str,
+    at: Any,
+    bar: Any = None,
+    intent: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """One submitted order, in the shape ``orders.jsonl`` holds.
+
+    Built from the driver's own per-intent report rather than from the broker's payload,
+    because the question this file answers is "what did the bot try to do and why" — the
+    broker's copy answers what happened to it. Both are needed, and the
+    ``client_order_id`` is what joins them.
+    """
+    intent = dict(intent or {})
+    moment = at or datetime.now(timezone.utc)
+    return {
+        "at": moment.isoformat() if hasattr(moment, "isoformat") else str(moment),
+        "day": trading_day(settings, moment) if settings is not None else str(moment)[:10],
+        "strategy": strategy,
+        "env": str(env or "").lower(),
+        "bar": None if bar is None else str(bar),
+        "intent": intent.get("intent"),
+        "reason": intent.get("reason") or "",
+        "status": intent.get("status") or "",
+        "price": intent.get("price"),
+        "expected": intent.get("expected"),
+        "order_id": intent.get("order_id"),
+        "client_order_id": intent.get("client_order_id"),
+    }
+
+
+def trade_record(
+    *,
+    settings,
+    strategy: str,
+    env: str,
+    at: Any,
+    bar: Any = None,
+    leg: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """One closed round trip, in the shape ``trades.jsonl`` holds.
+
+    The fields come from the engine's own leg — the same row a backtest stores — so a
+    live trade and a replayed one are described identically and the two can be compared
+    without translating between them. The wall-clock moment is added because a leg carries
+    only the bar INDEX it ended on, and "when" is the first thing anyone asks of a trade.
+    """
+    leg = dict(leg or {})
+    moment = at or datetime.now(timezone.utc)
+    return {
+        "at": moment.isoformat() if hasattr(moment, "isoformat") else str(moment),
+        "day": trading_day(settings, moment) if settings is not None else str(moment)[:10],
+        "strategy": strategy,
+        "env": str(env or "").lower(),
+        "bar": None if bar is None else str(bar),
+        "entry_idx": leg.get("entry_idx"),
+        "exit_idx": leg.get("exit_idx"),
+        "direction": leg.get("direction"),
+        "entry_price": leg.get("entry_price"),
+        "exit_price": leg.get("exit_price"),
+        "ret": leg.get("ret"),
+        "equity_ret": leg.get("equity_ret"),
+        "weight": leg.get("weight"),
+        "bars": leg.get("bars"),
+        "reason": leg.get("reason"),
+        "stop_percent": leg.get("stop_percent"),
+        "skipped": bool(leg.get("skipped")),
+    }
 
 
 def append_line(path: Path, record: Dict[str, Any]) -> Path:
