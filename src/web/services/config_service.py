@@ -28,6 +28,7 @@ from src.config import account as account_mod
 from src.config import history
 from src.config.effective import get_effective_settings, invalidate
 from src.config.settings import Settings
+from src.data.dataset import is_intraday
 from src.execution import credentials as credentials_mod
 
 logger = logging.getLogger(__name__)
@@ -178,6 +179,19 @@ _HINTS: Dict[str, str] = {
     "loss reaches this % of the account (e.g. 5). Leave empty to not halt.",
     "MAX_CONSECUTIVE_LOSSES": "Stop trading for the rest of the day after this many "
     "losing trades in a row (e.g. 3). Leave empty to not halt.",
+}
+
+# Both loss limits are measured over ONE EXCHANGE DAY and clear when it turns over — that is
+# what lets a halt lift by itself, since a halted bot takes no trades and a streak only a win
+# could break would never be broken. At a bar size of a day or coarser that changes what they
+# can do, and each one differently, so the panel says so per FIELD rather than in one sentence
+# above both: what they share is the reason, not the sentence.
+_DAILY_BAR_NOTES = {
+    "MAX_LOSS_PERCENT": "At a bar size of a day or coarser the day's loss is measured once, "
+    "when the bar closes — so this stops the NEXT session's entry rather than the one that "
+    "just lost.",
+    "MAX_CONSECUTIVE_LOSSES": "At a bar size of a day or coarser a day holds at most one "
+    "trade, so a limit above 1 can never be reached.",
 }
 
 
@@ -464,6 +478,11 @@ def strategy_config_groups(settings: Settings, overrides: Optional[Dict[str, str
                     "hints": _field_hints(key, info),
                 }
             )
+            if key in _DAILY_BAR_NOTES and not is_intraday(bar_size):
+                # Whether the limit can DO anything depends on the bar size the panel is
+                # pointed at, which is why this is here and not in the curated hints: the
+                # same field means something different at 1h and at 1d.
+                fields[-1]["hints"].append(_DAILY_BAR_NOTES[key])
             if bounds := _field_bounds(info):
                 fields[-1].update(bounds)
             if key == "HISTORICAL_BAR_SIZE":

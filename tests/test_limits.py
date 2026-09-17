@@ -19,7 +19,7 @@ import pandas as pd
 import pytest
 
 from src.config.settings import Settings
-from src.strategy.broker import SimulatedBroker
+from src.strategy.broker import ClosingFill, SimulatedBroker
 from src.strategy.config import StrategyConfig
 from src.strategy.engine import StrategyEngine
 from src.strategy.limits import day_halt_reason, day_loss_percent, losing_streak
@@ -239,15 +239,25 @@ class Scripted:
 
 
 class CountingBroker(SimulatedBroker):
-    """A simulated broker that remembers whether it was asked to do anything."""
+    """A simulated broker that remembers whether it was asked to do anything.
 
-    def __init__(self):
+    ``closing`` is the exit a real broker can prove it made on its own while the loop slept —
+    a resting stop firing between ticks. The simulated broker never has one, which is exactly
+    why it has to be injectable here: the case this pins is the driver ADOPTING an exit it did
+    not ask for, on a bar where it also refuses to open anything.
+    """
+
+    def __init__(self, closing=None):
         super().__init__()
         self.submitted = []
+        self.closing = closing
 
     def submit(self, intent, client_order_id=None):
         self.submitted.append(intent.action)
         return super().submit(intent, client_order_id=client_order_id)
+
+    def closing_fill(self, short):
+        return self.closing
 
 
 def _driver(tmp_path, signals, *, broker=None, halt=None, name="Alpha") -> LiveDriver:
@@ -293,6 +303,37 @@ def test_a_halted_day_refuses_the_entry_before_the_broker_is_asked(tmp_path) -> 
     assert len(skips) == 1 and skips[0]["reason"] == HALT
     assert driver.ledger.trades == [], "and it is not counted as a trade either"
     assert driver.state.position is None, "no position was created for an order never sent"
+
+
+def test_a_halting_loop_still_adopts_an_exit_it_did_not_ask_for(tmp_path) -> None:
+    """D6, in one bar: the refusal is about ADDING risk, never about abandoning it.
+
+    The broker closed the position while the loop slept (a resting stop), so the local state
+    disagrees with the account. The driver adopts that exit first — booking it, so the trade
+    is in the log and the position is gone from both sides — and only then does it want to
+    open again on the signal, which is the part that is refused.
+
+    A refusal that skipped the tick instead would leave the exit unbooked, and the bot would
+    spend the rest of the day believing it still held something it does not.
+    """
+    broker = CountingBroker()
+    opened = _driver(tmp_path, ["BUY"], broker=broker)
+    opened.on_bar_closed(_frame())
+    assert broker.submitted == ["open"], "a position to lose"
+
+    # Flat, and able to say how it got that way: the stop fired between ticks.
+    broker.quantity, broker.entry_price = 0.0, None
+    broker.closing = ClosingFill(price=105.0, reason="stop", order_id="ord-stop")
+    halted = _driver(tmp_path, ["BUY", "BUY"], broker=broker, halt=HALT)
+
+    report = halted.on_bar_closed(_frame(shift=2))
+
+    legs = report["trades"]
+    assert [leg.get("reason") for leg in legs] == ["stop", HALT], "the exit, then the refusal"
+    assert legs[0]["exit_price"] == 105.0 and not legs[0].get("skipped"), "the exit was BOOKED"
+    assert legs[1]["skipped"] is True, "and the entry it wanted next was refused"
+    assert broker.submitted == ["open"], "the refused entry never reached the broker"
+    assert halted.state.position is None, "and both sides now agree it is flat"
 
 
 def test_a_halted_day_still_lets_an_open_position_leave(tmp_path) -> None:

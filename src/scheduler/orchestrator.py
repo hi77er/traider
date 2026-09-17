@@ -11,7 +11,7 @@ One tick, in this order, and the order is not arbitrary:
   4  read the trailing window   from the DATASET, ending at the newest CLOSED bar
   5  is the stored bar current? the file must reach the bar that should have closed
   5b is the bar a bar?         ``src.data.quality`` — an impossible one refuses, an odd one is noted
-  5c has the day hit its loss limit?  ``src.strategy.limits`` — entries only, never exits
+  5c may anything NEW be opened?  a stale process, and the day's loss limit — entries only
   6  already decided that bar?  the driver's idempotency key
   7  decide and act             ``LiveDriver.on_bar_closed`` → reconcile → engine → broker
   8  record it                  the ledger, the state file and the live store
@@ -35,8 +35,10 @@ out on one bad bar is worse than one that keeps asking, because the next bar is 
 ``MAX_CONSECUTIVE_LOSSES`` are measured over the exchange DAY and against the ACCOUNT, so
 they need the trade log and a broker — neither of which ``src/strategy`` may reach. The loop
 gathers the facts, ``src.strategy.limits`` decides, and the verdict is handed to the driver
-as a refusal to OPEN anything new. An open position keeps its stop, its take and its signal
-exit: this holds back new risk, it never holds a loser.
+as a refusal to OPEN anything new. The same route carries the other thing the machine cannot
+see for itself: whether this process is still running the code that is on disk. An open
+position keeps its stop, its take and its signal exit in both cases: this holds back new risk,
+it never holds a loser.
 
 What this module deliberately does NOT do: hold an executor or a driver between ticks. Both
 are built per tick from the settings and the stored state, so a change to the rules, the risk
@@ -53,6 +55,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 import pandas as pd
 
+from src.config import freshness
 from src.config.effective import active_strategy_name
 from src.config.trading_state import armed_strategy, get_state, is_trading_on
 from src.data import dataset
@@ -83,6 +86,25 @@ LOGGED_ACTIONS = frozenset({"decided", "refused"})
 #: Seconds added to a boundary before asking. The provider's newest bar is not always in
 #: place the instant it closes, and one tick is cheap while a missed bar is not.
 PROVIDER_LAG_SECONDS = 5.0
+
+#: The loop's own source: the files that decide what to trade and how. Watched by mtime so a
+#: loop running older code than these refuses to OPEN anything new (see ``src/config/
+#: freshness``), which is the one failure a process cannot see from the inside — every test
+#: imports the code fresh, so the tests pass while this process runs yesterday's strategy.
+#: Deliberately not the whole tree: a change to the dashboard or to the data pipeline is not a
+#: reason to stop trading, and a watch list that fires on everything is one nobody trusts.
+LOOP_SOURCE = (
+    "src/scheduler/orchestrator.py",
+    "src/strategy/config.py",
+    "src/strategy/engine.py",
+    "src/strategy/limits.py",
+    "src/strategy/live.py",
+)
+
+#: The mtimes of ``LOOP_SOURCE`` as this process IMPORTED them. Python loads a module once, so
+#: this is the code the loop is running; anything newer on disk than this is code it has never
+#: read, however many times the file has been saved since.
+LOADED_SOURCE = freshness.snapshot(LOOP_SOURCE)
 
 
 def build_driver(settings, *, name: Optional[str] = None, dry_run: bool = False, broker=None) -> LiveDriver:
@@ -136,6 +158,39 @@ def _bump_day(settings, name: str, day: str, **fields) -> None:
         else:
             entry[key] = value
     store.upsert_day(settings, name, day, **entry)
+
+
+def _new_entries_blocked(settings, strategy: str, env: str, at) -> Optional[str]:
+    """Why no new entry may be opened this tick, or ``None`` when nothing is in the way.
+
+    Two independent reasons, and it is worth being clear about what they have in common: both
+    are refusals to ADD risk, and neither is a reason to abandon risk already taken.
+
+    * **the loop is running older code than the files on disk.** Python loads a module once, so
+      an edit under a running loop is an edit it has never read — the strategy in flight is
+      then one nobody is looking at, and every test still passes, because the tests import the
+      code fresh. It keeps reconciling and it keeps its exits: the position it is holding is
+      real whichever code put it there.
+    * **the day's loss limits** (see :func:`_day_loss_halt`).
+
+    Both are handled here rather than in the driver because both need facts the driver cannot
+    reach — the filesystem's mtimes, the day's trades, the account's equity.
+    """
+    reasons: List[str] = []
+
+    stale = freshness.info(LOOP_SOURCE, loaded=LOADED_SOURCE)
+    if stale["stale"]:
+        reasons.append(
+            "the loop is running older code than the files on disk ("
+            + ", ".join(stale["changed"])
+            + " changed since it started) — restart it before it opens anything new"
+        )
+
+    loss = _day_loss_halt(settings, strategy, env, at)
+    if loss:
+        reasons.append(loss)
+
+    return " ".join(reasons) or None
 
 
 def _day_loss_halt(settings, strategy: str, env: str, at) -> Optional[str]:
@@ -341,11 +396,12 @@ def tick(
         return finish("refused", broken)
     notes.extend(quality.notes(signal_row))
 
-    # -- 5c. the day's loss limits -----------------------------------------
-    # Before the driver is built, because the answer changes what it is allowed to open.
-    # A breach stops NEW entries for the rest of the exchange day and lifts by itself when
-    # the next one starts — a halt nobody has to remember to clear.
-    halt = _day_loss_halt(settings, strategy, env, at)
+    # -- 5c. may anything NEW be opened? -----------------------------------
+    # Before the driver is built, because the answer changes what it is allowed to open — and
+    # as a VETO rather than a refusal, because an entry is not the only thing a tick does: an
+    # exit the broker made must still be adopted and booked below, or the bot spends the rest
+    # of the day believing it holds a position it does not.
+    halt = _new_entries_blocked(settings, strategy, env, at)
 
     # -- 5 & 6. decide and act ---------------------------------------------
     wanted = armed_strategy(settings)

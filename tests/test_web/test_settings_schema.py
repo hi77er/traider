@@ -297,6 +297,39 @@ def test_the_config_endpoint_is_gone():
     assert not (ROOT / "src" / "web" / "routes" / "config.py").exists()
 
 
+def test_the_day_loss_limits_say_what_a_daily_bar_size_does_to_them():
+    """D5: both limits are measured per exchange day, so a bar size of a day or coarser changes
+    what each one can do — and it is not the same thing for the two of them.
+
+    ``MAX_LOSS_PERCENT`` still fires. It is measured on the account's equity, so at a daily bar
+    it acts when the bar closes and stops the NEXT session's entry rather than the one that just
+    lost. ``MAX_CONSECUTIVE_LOSSES`` cannot be reached at all: the streak is per day, and a day
+    holds at most one trade.
+
+    The panel therefore says it per FIELD rather than in one note above both. An operator who
+    cannot tell the two apart either trusts a setting that cannot work, or switches off one that
+    does — and both mistakes are silent.
+    """
+
+    def hints(bar_size):
+        groups = config_service.strategy_config_groups(
+            S(_env_file=None, historical_bar_size=bar_size)
+        )
+        return {f["key"]: f["hints"] for g in groups for f in g["fields"]}
+
+    hourly, daily = hints("1h"), hints("1d")
+
+    for key in ("MAX_LOSS_PERCENT", "MAX_CONSECUTIVE_LOSSES"):
+        assert daily[key][:-1] == hourly[key], f"{key} gains exactly one line at 1d"
+        assert len(daily[key]) == len(hourly[key]) + 1, key
+
+    assert any("NEXT session" in line for line in daily["MAX_LOSS_PERCENT"]), daily["MAX_LOSS_PERCENT"]
+    assert any("above 1" in line for line in daily["MAX_CONSECUTIVE_LOSSES"]), daily[
+        "MAX_CONSECUTIVE_LOSSES"
+    ]
+    assert daily["MAX_LOSS_PERCENT"] != daily["MAX_CONSECUTIVE_LOSSES"], "each in its own terms"
+
+
 def test_the_service_no_longer_writes_dotenv():
     for name in ("get_config_schema", "update_config", "env_file_path", "_read_env",
                  "_parse_env_file", "_replace_value", "_atomic_write", "_section_for",

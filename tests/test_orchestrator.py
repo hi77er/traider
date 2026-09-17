@@ -19,6 +19,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import pytest
 
+from src.config import freshness
 from src.config import state_files
 from src.config.settings import Settings
 from src.config.trading_state import write_state
@@ -755,6 +756,57 @@ def test_an_unreadable_account_halts_when_the_percent_limit_is_set(tmp_path, arm
     assert "401 Unauthorized" in driver.halt, "the reason the account could not be read"
     assert record["intents"][0]["skipped"] is True
     assert orchestrator.store.read_orders(settings, STRATEGY) == [], "nothing was sent"
+
+
+# ---------------------------------------------------------------------------
+# the code this process is running
+# ---------------------------------------------------------------------------
+def test_a_loop_running_older_code_than_its_own_source_refuses_new_entries(
+    tmp_path, armed, monkeypatch
+):
+    """Python loads a module once, so an edit under a running loop is one it never read.
+
+    Nothing inside the process can see that for itself: every test imports the code fresh, so
+    the suite passes while this process runs a strategy nobody is looking at. The watch list is
+    the substitute — and since the baseline is the mtimes the process IMPORTED, faking a stale
+    loop means backdating that baseline rather than touching a file.
+    """
+    settings = armed()
+    monkeypatch.setattr(
+        orchestrator, "LOADED_SOURCE", dict.fromkeys(orchestrator.LOOP_SOURCE, 0.0)
+    )
+    driver = _driver(settings)
+
+    record = orchestrator.tick(
+        settings, now=_at("2024-01-05 14:05"), sync_call=lambda: {}, clock_call=Calls().clock,
+        driver=driver,
+    )
+
+    assert driver.halt and "older code" in driver.halt, driver.halt
+    assert "src/strategy/engine.py" in driver.halt, "it names what moved, so it can be checked"
+    assert record["action"] == "decided", "the bar was decided; the ENTRY was what refused"
+    assert record["intents"][0]["skipped"] is True
+    assert record["reason"] == driver.halt
+    assert orchestrator.store.read_orders(settings, STRATEGY) == [], "nothing was sent"
+
+
+def test_the_loop_watches_the_code_that_decides_what_to_trade():
+    """A watch list that quietly stopped naming the engine would protect nothing while still
+    reporting that it was watching.
+
+    The existence half matters as much as the membership half: a watched path that does not
+    exist counts as CHANGED (``src.config.freshness`` treats a vanished file as movement), so a
+    rename would refuse every entry with a message about a file nobody can find.
+    """
+    for rel in (
+        "src/scheduler/orchestrator.py",
+        "src/strategy/config.py",
+        "src/strategy/engine.py",
+        "src/strategy/limits.py",
+        "src/strategy/live.py",
+    ):
+        assert rel in orchestrator.LOOP_SOURCE, rel
+        assert (freshness.ROOT / rel).is_file(), f"{rel} is watched but does not exist"
 
 
 # ---------------------------------------------------------------------------
