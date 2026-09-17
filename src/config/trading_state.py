@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from src.config import state_files
+from src.config.effective import active_strategy_name
 
 STATE_FILENAME = "trading.json"
 
@@ -70,3 +71,22 @@ def is_trading_on(settings) -> bool:
     pressed stop, which is the one thing the switch must never do.
     """
     return bool(get_state(settings).get("on"))
+
+
+def armed_strategy(settings) -> str:
+    """Which strategy this bot is FOR: the stamp in the switch, else the active one.
+
+    ``turn_on`` records the strategy it was armed with, because the store can be edited
+    behind the switch's back — and the loop applies the same rule the refusal does, so what
+    it reports at startup, what it runs, and what the dashboard shows it running are one
+    answer rather than three that can drift.
+
+    It lives here rather than with the loop because BOTH processes need it: the dashboard
+    says which strategy is live, and the dashboard may not import the loop at all (see
+    ``tests/test_architecture.py``). Asking the switch what it was armed with is a question
+    about this file, not about the tick.
+    """
+    stamped = get_state(settings).get("strategy")
+    if stamped:
+        return str(stamped)
+    return str(active_strategy_name() or getattr(settings, "instrument", "strategy"))

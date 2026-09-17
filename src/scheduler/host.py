@@ -26,11 +26,11 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable, List, Optional
 
-from src.config.trading_state import is_trading_on
+from src.config.trading_state import armed_strategy, is_trading_on
 from src.execution import store
 from src.scheduler import lease as lease_mod
 from src.scheduler import orchestrator
-from src.scheduler.orchestrator import armed_strategy, build_driver
+from src.scheduler.orchestrator import build_driver
 
 logger = logging.getLogger(__name__)
 

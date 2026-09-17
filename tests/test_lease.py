@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from src.config import loop_state
 from src.config.settings import Settings
 from src.scheduler import lease as lease_mod
 
@@ -38,7 +39,7 @@ def _record(**fields) -> dict:
     now = _at(0)
     record = {
         "pid": DEAD_PID,
-        "host": lease_mod._this_host(),
+        "host": loop_state.this_host(),
         "started": now.isoformat(),
         "heartbeat": now.isoformat(),
         "next_wake": _at(3600).isoformat(),
@@ -49,13 +50,13 @@ def _record(**fields) -> dict:
     # Stamped the way the module writes them, so a test can pass a datetime for legibility
     # and still produce the exact text a real file holds.
     return {
-        key: lease_mod._stamp(value) if isinstance(value, datetime) else value
+        key: loop_state.stamp(value) if isinstance(value, datetime) else value
         for key, value in record.items()
     }
 
 
 def _write(settings, record) -> None:
-    path = lease_mod.lease_path(settings)
+    path = loop_state.lease_path(settings)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(record), encoding="utf-8")
 
@@ -66,7 +67,7 @@ def _write(settings, record) -> None:
 def test_the_lease_sits_beside_the_other_runtime_state(tmp_path):
     """``data/loop.lock``, not inside a strategy's tree: there is one loop, not one each."""
     settings = _settings(tmp_path)
-    path = lease_mod.lease_path(settings)
+    path = loop_state.lease_path(settings)
 
     assert path.name == "loop.lock"
     assert path.parent == (tmp_path / "data").resolve()
@@ -77,13 +78,13 @@ def test_a_free_loop_is_claimed_and_written_down(tmp_path):
 
     claimed = lease_mod.acquire(settings, strategy="Alpha")
 
-    record = lease_mod.read(settings)
+    record = loop_state.read(settings)
     assert record["pid"] == claimed.pid
     assert record["pid"] == os.getpid()
-    assert record["host"] == lease_mod._this_host()
+    assert record["host"] == loop_state.this_host()
     assert record["strategy"] == "Alpha"
     assert record["expires_at"], "the claim declares when it goes stale"
-    assert lease_mod.holder(settings) is not None
+    assert loop_state.holder(settings) is not None
 
 
 # ---------------------------------------------------------------------------
@@ -109,17 +110,17 @@ def test_a_LIVE_pid_outranks_a_stale_timestamp(tmp_path):
     settings = _settings(tmp_path)
     _write(settings, _record(pid=os.getpid(), expires_at=_at(-86400)))
 
-    assert lease_mod.holder(settings) is not None
+    assert loop_state.holder(settings) is not None
 
 
 def test_a_holder_on_another_host_is_trusted_until_its_expiry(tmp_path):
     settings = _settings(tmp_path)
     _write(settings, _record(host="some-other-box", expires_at=_at(600)))
 
-    assert lease_mod.holder(settings) is not None
+    assert loop_state.holder(settings) is not None
 
     _write(settings, _record(host="some-other-box", expires_at=_at(-1)))
-    assert lease_mod.holder(settings) is None
+    assert loop_state.holder(settings) is None
 
 
 # ---------------------------------------------------------------------------
@@ -130,37 +131,37 @@ def test_a_dead_pid_is_taken_over_at_once(tmp_path):
     settings = _settings(tmp_path)
     _write(settings, _record(pid=DEAD_PID, expires_at=_at(3600)))
 
-    assert lease_mod.holder(settings) is None
+    assert loop_state.holder(settings) is None
 
     claimed = lease_mod.acquire(settings)
-    assert lease_mod.read(settings)["pid"] == claimed.pid
+    assert loop_state.read(settings)["pid"] == claimed.pid
 
 
 def test_an_unreadable_lock_does_not_stop_a_start(tmp_path):
     """Otherwise a torn write needs a human at 09:30, which is what this design refuses."""
     settings = _settings(tmp_path)
-    path = lease_mod.lease_path(settings)
+    path = loop_state.lease_path(settings)
     path.parent.mkdir(parents=True, exist_ok=True)
 
     path.write_text("{ not json at all", encoding="utf-8")
-    assert lease_mod.read(settings) is None
+    assert loop_state.read(settings) is None
     assert lease_mod.acquire(settings).pid == os.getpid()
 
     path.write_text("[]", encoding="utf-8")
-    assert lease_mod.read(settings) is None
+    assert loop_state.read(settings) is None
 
 
 def test_a_record_whose_expiry_cannot_be_read_counts_as_expired(tmp_path):
     """A lock nobody can interpret must not hold the loop hostage."""
-    assert lease_mod.is_expired({}) is True
-    assert lease_mod.is_expired({"expires_at": "not a time"}) is True
-    assert lease_mod.is_expired({"expires_at": _at(60).isoformat()}) is False
+    assert loop_state.is_expired({}) is True
+    assert loop_state.is_expired({"expires_at": "not a time"}) is True
+    assert loop_state.is_expired({"expires_at": _at(60).isoformat()}) is False
 
 
 def test_a_naive_expiry_is_read_as_utc(tmp_path):
     """The form an older or hand-edited file may be in, rather than an unreadable one."""
     naive = (_at(600).replace(tzinfo=None)).isoformat()
-    assert lease_mod.is_expired({"expires_at": naive}) is False
+    assert loop_state.is_expired({"expires_at": naive}) is False
 
 
 # ---------------------------------------------------------------------------
@@ -174,13 +175,13 @@ def test_refresh_declares_the_boundary_the_loop_is_sleeping_until(tmp_path):
 
     lease_mod.refresh(claim, next_wake=boundary)
 
-    record = lease_mod.read(settings)
+    record = loop_state.read(settings)
     assert record["next_wake"] == boundary.astimezone(timezone.utc).isoformat()
     assert record["expires_at"] == (
-        boundary + timedelta(seconds=lease_mod.LEASE_GRACE_SECONDS)
+        boundary + timedelta(seconds=loop_state.LEASE_GRACE_SECONDS)
     ).astimezone(timezone.utc).isoformat()
-    assert lease_mod.is_expired(record) is False
-    assert lease_mod.holder(settings) is not None
+    assert loop_state.is_expired(record) is False
+    assert loop_state.holder(settings) is not None
 
 
 def test_refresh_keeps_the_identity_of_the_holder(tmp_path):
@@ -203,8 +204,8 @@ def test_release_removes_our_own_lease(tmp_path):
 
     lease_mod.release(claim)
 
-    assert lease_mod.read(settings) is None
-    assert not lease_mod.lease_path(settings).exists()
+    assert loop_state.read(settings) is None
+    assert not loop_state.lease_path(settings).exists()
 
 
 def test_release_leaves_a_lease_that_is_no_longer_ours(tmp_path):
@@ -219,10 +220,10 @@ def test_release_leaves_a_lease_that_is_no_longer_ours(tmp_path):
 
     lease_mod.release(claim)
 
-    assert lease_mod.read(settings)["pid"] == DEAD_PID + 1
+    assert loop_state.read(settings)["pid"] == DEAD_PID + 1
 
 
 def test_describe_names_the_holder(tmp_path):
-    assert lease_mod.describe(None) == "no loop"
-    text = lease_mod.describe(_record())
+    assert loop_state.describe(None) == "no loop"
+    text = loop_state.describe(_record())
     assert "pid" in text and "Alpha" in text

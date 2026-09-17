@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 
 import pytest
 
+from src.config import loop_state
 from src.config.settings import Settings
 from src.config.trading_state import write_state
 from src.execution import store
@@ -48,13 +49,13 @@ def _hold_the_lease(settings, *, pid: int = 1) -> None:
     unprivileged caller, which the lease reads as "it exists, it is simply not mine" — the
     real behaviour, not a monkeypatched one.
     """
-    path = lease_mod.lease_path(settings)
+    path = loop_state.lease_path(settings)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(
             {
                 "pid": pid,
-                "host": lease_mod._this_host(),
+                "host": loop_state.this_host(),
                 "started": "2026-09-17T07:00:00+00:00",
                 "heartbeat": "2026-09-17T07:00:00+00:00",
                 "next_wake": "2026-09-17T08:00:00+00:00",
@@ -121,8 +122,8 @@ def test_the_lease_is_given_back_when_the_run_blows_up(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError):
         host.serve(settings, once=True)
 
-    assert lease_mod.read(settings) is None
-    assert not lease_mod.lease_path(settings).exists()
+    assert loop_state.read(settings) is None
+    assert not loop_state.lease_path(settings).exists()
 
 
 def test_a_run_leaves_the_lease_free_for_the_next_one(tmp_path):
@@ -131,7 +132,7 @@ def test_a_run_leaves_the_lease_free_for_the_next_one(tmp_path):
     records = host.serve(settings, once=True)
 
     assert [r["action"] for r in records] == ["off"], "trading is OFF in this fixture"
-    assert lease_mod.read(settings) is None
+    assert loop_state.read(settings) is None
 
 
 def test_the_lease_is_held_for_the_whole_run_but_not_after_it(tmp_path, monkeypatch):
@@ -142,7 +143,7 @@ def test_the_lease_is_held_for_the_whole_run_but_not_after_it(tmp_path, monkeypa
     real_run = orchestrator.run
 
     def watch(*args, **kwargs):
-        seen["held"] = lease_mod.read(settings)
+        seen["held"] = loop_state.read(settings)
         return real_run(*args, **kwargs)
 
     monkeypatch.setattr(host.orchestrator, "run", watch)

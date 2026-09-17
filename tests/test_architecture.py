@@ -310,6 +310,65 @@ def test_the_bar_grid_stays_below_both_processes() -> None:
     assert offenders == [], f"src.data.dataset reaches the live side: {offenders}"
 
 
+def test_the_lease_reader_is_below_both_processes() -> None:
+    """``src/config/loop_state.py`` may import ``src.config`` and nothing else.
+
+    It exists so the DASHBOARD can read the loop's lease — is a bot running, and when does
+    it next intend to act — without importing ``src.scheduler``, which the first test in
+    this section forbids outright and for good reason: the dashboard has to survive a broken
+    loop. One import of anything heavier here re-creates that path, and the failure would
+    only show up as a dashboard that cannot start because the loop will not.
+    """
+    imports = GRAPH["src.config.loop_state"]
+    allowed = {n for n in imports if n == "src.config" or n.startswith("src.config.")}
+    assert imports == allowed, f"loop_state must only import src.config, found: {sorted(imports - allowed)}"
+
+
+def test_the_loop_builds_its_claim_on_the_neutral_reader() -> None:
+    """The write side imports the read side, and keeps no copy of it.
+
+    The loop reaches the reader *through* the writer (it holds a ``Lease`` and refreshes it),
+    so the thing to pin is the direction of the arrow plus the absence of a second
+    implementation: a ``holder()`` re-written inside the loop package would compile, pass
+    every behavioural test, and be free to drift from the one the dashboard reads.
+    """
+    assert "src.config.loop_state" in GRAPH["src.scheduler.lease"]
+    assert "src.scheduler.lease" in GRAPH["src.scheduler.orchestrator"], (
+        "the loop refreshes its claim through the writer"
+    )
+    leaks = sorted(
+        n for n in GRAPH["src.config.loop_state"]
+        if n.startswith(("src.scheduler", "src.execution", "src.strategy", "src.web"))
+    )
+    assert leaks == [], f"the reader reaches back into a process: {leaks}"
+
+    paths = {name: path for name, path, _is_package in _modules()}
+    defined = {
+        node.name
+        for node in ast.walk(_tree(paths["src.scheduler.lease"]))
+        if isinstance(node, ast.FunctionDef)
+    }
+    copied = sorted(defined & {"holder", "read", "is_expired", "lease_path", "describe"})
+    assert copied == [], f"the loop has its own copy of the reader: {copied}"
+
+
+def test_the_armed_strategy_rule_has_exactly_one_home() -> None:
+    """Which strategy the bot is FOR is asked in one place, by both processes.
+
+    It used to live with the loop, which meant the dashboard could not answer it without
+    importing the loop — so the answer would have been re-implemented in the web layer and
+    the two would drift. A second definition anywhere under ``src`` fails here.
+    """
+    homes = []
+    for name, path, _is_package in _modules():
+        for node in ast.walk(_tree(path)):
+            if isinstance(node, ast.FunctionDef) and node.name == "armed_strategy":
+                homes.append(name)
+    assert homes == ["src.config.trading_state"], homes
+    assert "src.config.trading_state.armed_strategy" in GRAPH["src.scheduler.orchestrator"]
+    assert "src.config.trading_state.armed_strategy" in GRAPH["src.scheduler.host"]
+
+
 # --- the host's own guard ---------------------------------------------------
 
 

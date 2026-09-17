@@ -45,7 +45,7 @@ from typing import Any, Callable, Dict, List, Optional
 import pandas as pd
 
 from src.config.effective import active_strategy_name
-from src.config.trading_state import get_state, is_trading_on
+from src.config.trading_state import armed_strategy, get_state, is_trading_on
 from src.data import dataset
 from src.data import delta as delta_mod
 from src.data import live as live_data
@@ -62,7 +62,7 @@ from src.strategy.live import LiveDriver, NotEnoughHistory
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["armed_strategy", "build_driver", "run", "tick"]
+__all__ = ["build_driver", "run", "tick"]
 
 #: Actions worth a line in the day's log. The heartbeat is not one of them: a market that
 #: has been shut for eight hours would otherwise write eight hours of identical lines, and
@@ -72,20 +72,6 @@ LOGGED_ACTIONS = frozenset({"decided", "refused"})
 #: Seconds added to a boundary before asking. The provider's newest bar is not always in
 #: place the instant it closes, and one tick is cheap while a missed bar is not.
 PROVIDER_LAG_SECONDS = 5.0
-
-
-def armed_strategy(settings) -> str:
-    """The strategy this loop runs: the one the switch was armed with, else the active one.
-
-    The same rule the tick applies when it decides whether to refuse, in the one place a
-    host can ask it — the startup reconcile needs a driver before any tick has run, and
-    building it for a different strategy than the first tick would use would report on an
-    account the loop is not about to trade.
-    """
-    stamped = get_state(settings).get("strategy")
-    if stamped:
-        return str(stamped)
-    return str(active_strategy_name() or getattr(settings, "instrument", "strategy"))
 
 
 def build_driver(settings, *, name: Optional[str] = None, dry_run: bool = False, broker=None) -> LiveDriver:
