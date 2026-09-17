@@ -25,6 +25,7 @@ from src.web.routes import backtest as backtest_routes
 from src.web.routes import dataset as dataset_routes
 from src.web.routes import delta as delta_routes
 from src.web.routes import execution as execution_routes
+from src.web.routes import live as live_routes
 from src.web.routes import market as market_routes
 from src.web.routes import pages as page_routes
 from src.web.routes import report as report_routes
@@ -70,6 +71,7 @@ app.include_router(market_routes.router)
 app.include_router(chart_routes.router)
 app.include_router(account_routes.router)
 app.include_router(execution_routes.router)
+app.include_router(live_routes.router)
 app.include_router(trading_routes.router)
 app.include_router(rules_routes.router)
 app.include_router(signal_routes.router)
