@@ -59,11 +59,10 @@ class Settings(BaseSettings):
     data_delta_pull_time: str = Field(default="16:30", description="Daily time (HH:MM, exchange-local) the delta is pulled into the dataset")
 
     # ── Market data (OpenBB Platform) ────────────────────────────────
-    openbb_provider: str = Field(default="yfinance", description="OpenBB data provider")
-    openbb_api_key: Optional[str] = Field(default=None, description="API key for premium OpenBB providers")
-    openbb_backup_providers: str = Field(
-        default="yfinance,polygon,fmp", description="Comma-separated fallback providers"
-    )
+    # There is no provider setting: the bot fetches from exactly one — yfinance,
+    # see ``config.history.DATA_PROVIDER``. The premium fallbacks (polygon, fmp)
+    # were removed because they need API keys nobody has, and a chain that ends in
+    # "Missing credential" buries the real error (see ``data.openbb_client``).
     data_cache_enabled: bool = Field(default=True, description="Cache fetched candles locally")
     cache_dir: str = Field(default=".cache", description="Local data cache directory")
 
@@ -315,11 +314,6 @@ class Settings(BaseSettings):
     def ema_periods(self) -> List[int]:
         """EMA windows parsed from `FEATURES_EMA_PERIODS`."""
         return self._parse_int_list(self.features_ema_periods)
-
-    @property
-    def backup_providers(self) -> List[str]:
-        """Fallback OpenBB providers parsed from `OPENBB_BACKUP_PROVIDERS`."""
-        return [x.strip() for x in self.openbb_backup_providers.split(",") if x.strip()]
 
     @property
     def paper_trading(self) -> bool:

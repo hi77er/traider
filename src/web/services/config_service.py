@@ -159,7 +159,6 @@ _HINTS: Dict[str, str] = {
     "EXECUTION_MAX_RETRIES": "Attempts to send/fetch an order before giving up.",
     "EXECUTION_RETRY_BASE_DELAY_SECONDS": "Delay before the first retry; later retries back off.",
     "EXECUTION_ORDER_TIMEOUT_SECONDS": "Seconds to wait for an order acknowledgement before retrying.",
-    "OPENBB_PROVIDER": "Provider for candles/quotes — yfinance (free) or polygon/fmp (API key).",
     "BACKTEST_START_DATE": "Optional window start, YYYY-MM-DD; empty = start of the dataset.",
     "BACKTEST_END_DATE": "Optional window end, YYYY-MM-DD; empty = end of the dataset.",
     "TRAIN_TEST_SPLIT": "0.8 = use 80% for training, 20% held out.",
@@ -458,9 +457,10 @@ def strategy_config_groups(settings: Settings, overrides: Optional[Dict[str, str
     bar_size = str((overrides or {}).get("HISTORICAL_BAR_SIZE") or "").strip() or getattr(
         settings, "historical_bar_size", ""
     )
-    # ...and the provider that will answer the request, because a period the
-    # provider cannot fill is not offered at all (it would come back short).
-    provider = getattr(settings, "openbb_provider", None)
+    # ...and the provider that will answer the request. There is exactly one now
+    # (yfinance, see ``config.history.DATA_PROVIDER``), because a period the provider
+    # cannot fill is not offered at all — it would come back short.
+    provider = history.DATA_PROVIDER
     groups: List[dict] = []
     for name, keys in _STRATEGY_SCOPE:
         fields: List[dict] = []

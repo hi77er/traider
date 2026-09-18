@@ -2,9 +2,16 @@
 
 The rest of the bot never imports OpenBB directly; it goes through this
 client so backtest and live use the IDENTICAL normalized OHLCV schema.
-Provides provider failover and an optional local cache (see config keys
-``OPENBB_PROVIDER``, ``OPENBB_BACKUP_PROVIDERS``, ``DATA_CACHE_ENABLED``,
-``CACHE_DIR``).
+ONE provider answers — yfinance, named once in ``config.history.DATA_PROVIDER`` —
+plus an optional local cache (``DATA_CACHE_ENABLED``, ``CACHE_DIR``).
+
+Failures come in two shapes and callers must tell them apart:
+
+* ``NoDataError`` — the provider answered, and the answer was "no bars in that
+  window". A delta probe asks about windows nothing traded in, so this is a
+  normal answer, not a fault.
+* ``OpenBBError`` — the request itself failed, carrying the provider's OWN
+  message. There is no fallback chain left to bury it in.
 """
 
 from __future__ import annotations
@@ -50,7 +57,35 @@ _PANDAS_RULE = {
 
 
 class OpenBBError(RuntimeError):
-    """Raised when the OpenBB Platform is unavailable or every provider fails."""
+    """Raised when the data provider is unavailable or refuses the request."""
+
+
+class NoDataError(OpenBBError):
+    """The provider answered, and the answer was: no bars in that window.
+
+    OpenBB raises ``EmptyDataError`` for a symbol/window it has nothing for, which
+    looks exactly like a genuine outage at the call site. They are not the same
+    thing: a delta probe deliberately asks about windows that never traded (a thin
+    symbol, a quiet stretch, a window that has not happened yet), and treating that
+    as a failure is what made a perfectly healthy dataset report "Check failed".
+
+    A subclass of ``OpenBBError``, so a caller that only knows the old failure
+    still catches it.
+    """
+
+
+def _is_no_data(exc: BaseException) -> bool:
+    """True when OpenBB reported "no data" rather than a failure."""
+    try:
+        from openbb_core.provider.utils.errors import EmptyDataError
+    except ImportError:  # pragma: no cover - only without the platform installed
+        return False
+    return isinstance(exc, EmptyDataError)
+
+
+def _no_bars_message(symbol: str, interval: str, start: str, end: Optional[str]) -> str:
+    """Say WHICH window came back empty — a bare "no data" is not actionable."""
+    return f"No {interval} bars for {symbol} between {start or '?'} and {end or 'now'}"
 
 
 class OpenBBClient:
@@ -87,7 +122,6 @@ class OpenBBClient:
         start_date: str,
         end_date: Optional[str] = None,
         interval: str = "4h",
-        provider: Optional[str] = None,
         use_cache: Optional[bool] = None,
     ) -> pd.DataFrame:
         """Fetch OHLCV candles normalized to the canonical schema.
@@ -95,31 +129,36 @@ class OpenBBClient:
         ``start_date``/``end_date`` are ``YYYY-MM-DD`` strings (end optional).
         Returns a DataFrame indexed by datetime with columns
         open/high/low/close/volume.
+
+        Raises ``NoDataError`` when the provider has no bars for that window (a
+        normal answer for a probe) and ``OpenBBError`` — carrying the provider's
+        own message — when the request failed.
         """
         cache = use_cache if use_cache is not None else self.settings.data_cache_enabled
         if cache:
-            cached = self._load_cache(symbol, start_date, end_date, interval, provider)
+            cached = self._load_cache(symbol, start_date, end_date, interval)
             if cached is not None:
                 logger.info("Using cached candles for %s (%s)", symbol, interval)
                 return cached
 
         fetch_interval, resample_interval = self._resolve_interval(interval)
-        data = self._fetch_with_failover(symbol, start_date, end_date, fetch_interval, provider)
+        data = self._fetch_from_provider(symbol, start_date, end_date, fetch_interval)
         if resample_interval is not None and not data.empty:
             logger.info("Resampling %s -> %s for %s", fetch_interval, resample_interval, symbol)
             data = self._resample(data, resample_interval)
 
         if cache and not data.empty:
-            self._save_cache(data, symbol, start_date, end_date, interval, provider)
+            self._save_cache(data, symbol, start_date, end_date, interval)
         return data
 
-    def fetch_quote(self, symbol: str, provider: Optional[str] = None) -> pd.DataFrame:
+    def fetch_quote(self, symbol: str) -> pd.DataFrame:
         """Fetch a live quote (raw provider output, one row)."""
-        provider = provider or self.settings.openbb_provider
         try:
-            result = self.obb.equity.price.quote(symbol, provider=provider)
-        except Exception as exc:  # no failover for quotes; surface the error
-            raise OpenBBError(f"OpenBB quote failed for {symbol} via {provider}: {exc}") from exc
+            result = self.obb.equity.price.quote(symbol, provider=history.DATA_PROVIDER)
+        except Exception as exc:
+            # No failover for quotes, and no wrapper either: the provider's own
+            # message is what the operator needs to see.
+            raise OpenBBError(f"{type(exc).__name__}: {str(exc).strip()}") from exc
         return result.to_df()
 
     # -- interval handling ---------------------------------------------------
@@ -152,56 +191,40 @@ class OpenBBClient:
         return out
 
     # -- internals -----------------------------------------------------------
-    def _fetch_with_failover(
-        self, symbol: str, start: str, end: Optional[str], interval: str, provider: Optional[str]
+    def _fetch_from_provider(
+        self, symbol: str, start: str, end: Optional[str], interval: str
     ) -> pd.DataFrame:
-        last_error: Optional[Exception] = None
-        errors: List[str] = []
-        for p in self._provider_chain(provider):
-            try:
-                logger.info("Fetching %s %s from %s via %s", symbol, interval, start or "?", p)
-                result = self.obb.equity.price.historical(
-                    symbol,
-                    start_date=start,
-                    end_date=end,
-                    interval=interval,
-                    provider=p,
-                )
-                frame = result.to_df()
-                if frame is None or frame.empty:
-                    # No bars is a provider-level failure, not a request-level
-                    # one: record it and let the NEXT provider answer. Raising
-                    # our own OpenBBError here would be re-raised by the clause
-                    # below and abort the chain before the backups are tried.
-                    errors.append(f"{p}: empty response")
-                    logger.warning("Provider %s returned no bars for %s", p, symbol)
-                    continue
-                return self._drop_priceless(
-                    self._complete_trailing_bar(
-                        self._canonical(frame), symbol, interval, p
-                    )
-                )
-            except OpenBBError:
-                raise
-            except Exception as exc:
-                last_error = exc
-                errors.append(f"{p}: {exc}")
-                logger.warning("Provider %s failed for %s: %s", p, symbol, exc)
-        # List EVERY provider's reason, not just the last fallback — the last
-        # one is usually a keyless backup (e.g. fmp), which hides the real
-        # cause (e.g. yfinance rate-limiting) behind a misleading message.
-        raise OpenBBError(
-            f"All providers failed for {symbol} — " + "; ".join(errors)
-        ) from last_error
+        """One request, to the one provider we use. There is no fallback chain.
 
-    def _provider_chain(self, provider: Optional[str]) -> List[str]:
-        primary = provider or self.settings.openbb_provider
-        chain = [primary]
-        for backup in self.settings.backup_providers:
-            if backup != primary and backup not in chain:
-                chain.append(backup)
-        return chain
-
+        The chain was removed on purpose (2026-09-18). Its backups needed API keys
+        nobody had, so every genuine yfinance message arrived wrapped in their
+        "Missing credential" errors and the real cause — usually rate limiting —
+        was the hardest part of the message to find. With one provider there is
+        nothing to fail over TO, so the provider's own error is what gets raised.
+        """
+        logger.info("Fetching %s %s from %s via %s", symbol, interval, start or "?", history.DATA_PROVIDER)
+        try:
+            result = self.obb.equity.price.historical(
+                symbol,
+                start_date=start,
+                end_date=end,
+                interval=interval,
+                provider=history.DATA_PROVIDER,
+            )
+            frame = result.to_df()
+        except Exception as exc:
+            if _is_no_data(exc):
+                # The provider answered: nothing there. Not a failure.
+                raise NoDataError(_no_bars_message(symbol, interval, start, end)) from exc
+            # ...and when it DID fail, say what it said — the class name carries the
+            # actionable part (e.g. ``YFRateLimitError``) and the message the rest.
+            raise OpenBBError(f"{type(exc).__name__}: {str(exc).strip()}") from exc
+        if frame is None or frame.empty:
+            # A provider handing back an empty frame is the same answer.
+            raise NoDataError(_no_bars_message(symbol, interval, start, end))
+        return self._drop_priceless(
+            self._complete_trailing_bar(self._canonical(frame), symbol, interval)
+        )
     @staticmethod
     def _canonical(frame: pd.DataFrame) -> pd.DataFrame:
         """Lowercase OHLCV columns with a datetime index (no row filtering)."""
@@ -254,7 +277,7 @@ class OpenBBClient:
         return cls._drop_priceless(cls._canonical(frame))
 
     def _complete_trailing_bar(
-        self, bars: pd.DataFrame, symbol: str, interval: str, provider: str
+        self, bars: pd.DataFrame, symbol: str, interval: str
     ) -> pd.DataFrame:
         """Re-ask for a trailing bar the provider returned without a price.
 
@@ -281,7 +304,7 @@ class OpenBBClient:
                     start_date=day.date().isoformat(),
                     end_date=day.date().isoformat(),
                     interval=interval,
-                    provider=provider,
+                    provider=history.DATA_PROVIDER,
                 ).to_df()
             )
         except Exception as exc:  # noqa: BLE001 - recovery is best-effort
@@ -294,18 +317,15 @@ class OpenBBClient:
         return bars
 
     # -- cache ---------------------------------------------------------------
-    def _cache_path(
-        self, symbol: str, start: str, end: Optional[str], interval: str, provider: Optional[str]
-    ) -> Path:
+    def _cache_path(self, symbol: str, start: str, end: Optional[str], interval: str) -> Path:
         safe = symbol.replace("/", "_").replace("=", "_")
         end_part = end or "now"
-        prov = provider or self.settings.openbb_provider
-        return self.cache_dir / f"{safe}_{start}_{end_part}_{interval}_{prov}.csv"
+        return self.cache_dir / f"{safe}_{start}_{end_part}_{interval}_{history.DATA_PROVIDER}.csv"
 
     def _load_cache(
-        self, symbol: str, start: str, end: Optional[str], interval: str, provider: Optional[str]
+        self, symbol: str, start: str, end: Optional[str], interval: str
     ) -> Optional[pd.DataFrame]:
-        path = self._cache_path(symbol, start, end, interval, provider)
+        path = self._cache_path(symbol, start, end, interval)
         if not path.exists():
             return None
         try:
@@ -317,9 +337,9 @@ class OpenBBClient:
             return None
 
     def _save_cache(
-        self, df: pd.DataFrame, symbol: str, start: str, end: Optional[str], interval: str, provider: Optional[str]
+        self, df: pd.DataFrame, symbol: str, start: str, end: Optional[str], interval: str
     ) -> None:
-        path = self._cache_path(symbol, start, end, interval, provider)
+        path = self._cache_path(symbol, start, end, interval)
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             df.to_csv(path)

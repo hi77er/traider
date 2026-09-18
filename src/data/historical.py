@@ -44,12 +44,12 @@ def resolve_history_window(settings: Settings) -> tuple:
     parts = history.period_parts(settings.historical_lookback)
     if parts:
         n, unit = parts
-        cap = history.provider_max_days(settings.openbb_provider, settings.historical_bar_size)
+        cap = history.provider_max_days(history.DATA_PROVIDER, settings.historical_bar_size)
         days = history.period_days(settings.historical_lookback)
         if cap is not None and days is not None and days > cap:
             logger.warning(
                 "%s serves at most %d days of %s bars — clamping the %s window to %dd",
-                settings.openbb_provider,
+                history.DATA_PROVIDER,
                 cap,
                 settings.historical_bar_size,
                 settings.historical_lookback,
@@ -70,7 +70,6 @@ def fetch_candles(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     bar_size: Optional[str] = None,
-    provider: Optional[str] = None,
     persist: bool = True,
 ) -> pd.DataFrame:
     """Fetch OHLCV candles for the configured instrument & historical window.
@@ -94,14 +93,13 @@ def fetch_candles(
         bar_size,
         start_date or "?",
         end_date or "now",
-        provider or settings.openbb_provider,
+        history.DATA_PROVIDER,
     )
     df = client.fetch_historical(
         symbol=symbol,
         start_date=start_date,
         end_date=end_date,
         interval=bar_size,
-        provider=provider,
     )
     if persist and not df.empty:
         save_dataset(settings, df, symbol, bar_size)

@@ -55,8 +55,8 @@ def main() -> int:
         print(f"\nBackfill failed: {exc}")
         print(
             "\nTip: the yfinance provider is free but rate-limits aggressively "
-            "(YFRateLimitError). Wait a bit and retry, or set OPENBB_PROVIDER + a "
-            "free API key (FMP/Tiingo) in .env for reliability."
+            "(YFRateLimitError). Wait a bit and retry — there is deliberately no "
+            "fallback provider."
         )
         return 1
 

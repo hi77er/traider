@@ -101,7 +101,7 @@ def test_validate_strategy_config():
     ok, errs = config_service.validate_strategy_config({"FEATURE_RSI_ENABLED": "off"})  # bool spelling
     assert ok and not errs
     # A machine-level key is refused here: it is not a strategy's business.
-    ok, errs = config_service.validate_strategy_config({"OPENBB_PROVIDER": "yfinance"})
+    ok, errs = config_service.validate_strategy_config({"DATA_CACHE_ENABLED": "True"})
     assert not ok and errs
     # ...and so is one whose section was removed.
     ok, errs = config_service.validate_strategy_config({"MODEL_TYPE": "rule_based"})

@@ -439,8 +439,9 @@ TRADING_END_HOUR=16:00
 MARKET_TIMEZONE=America/New_York
 
 # Market data (OpenBB Platform)
-OPENBB_PROVIDER=yfinance        # free provider, no key needed (options: polygon, fmp, tradier...)
-# OPENBB_API_KEY=               # only for premium providers
+# ONE provider, yfinance (config/history.py: DATA_PROVIDER) — free, no key, and
+# deliberately no fallback: the premium backups needed keys nobody had, and their
+# "Missing credential" errors buried the real one.
 
 # Historical data period
 HISTORICAL_BAR_SIZE=1d

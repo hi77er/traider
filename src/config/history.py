@@ -4,8 +4,9 @@ ONE answer to "how much history, in bars of what size". The two are not
 independent: a window is only useful if the bar size can fill it at a sane
 number of bars, and — the harder constraint — the data PROVIDER only serves
 intraday bars for a short trailing window, and how short depends on WHICH
-provider answers. So a period is offered as a function of the bar size AND of
-the provider actually configured:
+provider answers. There is exactly one — ``DATA_PROVIDER`` (yfinance); the
+premium fallbacks were removed — so a period is offered as a function of the bar
+size and that provider's limits:
 
 | Bar size            | Periods (provider cap)                  |
 |---------------------|-----------------------------------------|
@@ -113,6 +114,14 @@ PROVIDER_MAX_DAYS: Dict[str, Dict[str, int]] = {
     },
 }
 
+# The ONE data provider this bot fetches from. The choice was removed on purpose
+# (2026-09-18): the fallback chain ended in keyless polygon/fmp, so every genuine
+# yfinance message arrived wrapped in their "Missing credential" errors and the
+# real cause (usually rate limiting) was the hardest part of the message to find.
+# The client requests THIS provider and the limits above describe it, so a
+# configured name can no longer disagree with the provider actually used.
+DATA_PROVIDER = "yfinance"
+
 _UNIT_DAYS = "d"
 _UNIT_YEARS = "y"
 
@@ -204,7 +213,7 @@ ALL_PERIODS: Tuple[str, ...] = tuple(
 def allowed_periods(bar_size: Optional[str], provider: Optional[str] = None) -> Tuple[str, ...]:
     """The periods ``bar_size`` may be fetched for (all of them if unknown).
 
-    ``provider`` is the data provider that will answer (``OPENBB_PROVIDER``).
+    ``provider`` is the data provider that will answer (``DATA_PROVIDER``).
     Periods longer than what it serves are dropped, so the dropdown cannot offer
     a window that would come back short; when EVERY offered period is too long the
     provider's own limit is offered instead, because that is the window it can

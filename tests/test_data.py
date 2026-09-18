@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 import pytest
 
+from src.config import history
 from src.config.settings import Settings
 from src.data.dataset import (
     bar_key,
@@ -28,7 +29,12 @@ from src.data.live import (
     is_market_open,
     required_bars,
 )
-from src.data.openbb_client import OHLCV_COLUMNS, OpenBBClient, OpenBBError
+from src.data.openbb_client import (
+    OHLCV_COLUMNS,
+    NoDataError,
+    OpenBBClient,
+    OpenBBError,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -81,8 +87,6 @@ def make_raw_df(rows: int = 3) -> pd.DataFrame:
 
 def make_settings(tmp_path) -> Settings:
     return Settings(
-        openbb_provider="yfinance",
-        openbb_backup_providers="yfinance,polygon,fmp",
         data_cache_enabled=True,
         cache_dir=str(tmp_path),
         market_timezone="America/New_York",
@@ -129,8 +133,6 @@ def test_trailing_bar_without_a_price_is_recovered(tmp_path):
     is recoverable instead of leaving the dataset permanently a day short.
     """
     settings = Settings(
-        openbb_provider="yfinance",
-        openbb_backup_providers="yfinance,polygon,fmp",
         data_cache_enabled=False,
         cache_dir=str(tmp_path),
     )
@@ -161,8 +163,6 @@ def test_trailing_bar_without_a_price_is_recovered(tmp_path):
 def test_trailing_bar_is_dropped_when_the_retry_has_no_price(tmp_path):
     """If the day has no settled bar at all, drop it (never store a null)."""
     settings = Settings(
-        openbb_provider="yfinance",
-        openbb_backup_providers="yfinance,polygon,fmp",
         data_cache_enabled=False,
         cache_dir=str(tmp_path),
     )
@@ -194,50 +194,69 @@ def test_fetch_historical_normalizes_and_caches(tmp_path):
     assert client._obb.equity.price.calls.count("yfinance") == 1
 
 
-def test_fetch_historical_failover(tmp_path):
-    settings = Settings(
-        openbb_provider="yfinance",
-        openbb_backup_providers="yfinance,polygon,fmp",
-        data_cache_enabled=False,
-        cache_dir=str(tmp_path),
-    )
-    client = OpenBBClient(settings)
-    client._obb = FakeOBB(FakePrice([RuntimeError("primary down"), make_raw_df()]))
+# ---------------------------------------------------------------------------
+# ONE provider: no fallback chain, and the real error reaches the caller
+# ---------------------------------------------------------------------------
+def test_only_the_one_provider_is_ever_called(tmp_path):
+    client = OpenBBClient(make_settings(tmp_path))
+    client._obb = FakeOBB(FakePrice([make_raw_df()]))
 
-    df = client.fetch_historical("AAPL", "2024-01-01", interval="4h")
-    assert not df.empty
-    assert client._obb.equity.price.calls == ["yfinance", "polygon"]
+    client.fetch_historical("AAPL", "2024-01-01", interval="4h")
+    assert client._obb.equity.price.calls == [history.DATA_PROVIDER]
 
 
-def test_fetch_historical_all_providers_fail(tmp_path):
-    settings = Settings(
-        openbb_provider="yfinance",
-        openbb_backup_providers="yfinance,polygon,fmp",
-        data_cache_enabled=False,
-        cache_dir=str(tmp_path),
-    )
-    client = OpenBBClient(settings)
-    client._obb = FakeOBB(
-        FakePrice([RuntimeError("a"), RuntimeError("b"), RuntimeError("c")])
-    )
-    with pytest.raises(OpenBBError):
+def test_a_provider_failure_carries_its_own_message(tmp_path):
+    """The operator gets the REAL error, not a wall of fallback noise.
+
+    The chain used to end in keyless polygon/fmp, so a genuine yfinance failure came
+    out as "All providers failed for AAPL — …; polygon: Missing credential …", which
+    buried the actionable part (usually rate limiting) in the least useful lines.
+    """
+    client = OpenBBClient(make_settings(tmp_path))
+    client._obb = FakeOBB(FakePrice([RuntimeError("Too Many Requests")]))
+
+    with pytest.raises(OpenBBError) as err:
+        client.fetch_historical("AAPL", "2024-01-01", interval="4h")
+    text = str(err.value)
+    assert "Too Many Requests" in text
+    assert "RuntimeError" in text  # the class name is what says how to react
+    assert "All providers failed" not in text
+    assert "Missing credential" not in text
+    assert "polygon" not in text
+    # ...and it was the only call: nothing to fail over to.
+    assert client._obb.equity.price.calls == [history.DATA_PROVIDER]
+
+
+def test_no_bars_is_no_data_not_a_failure(tmp_path):
+    """An empty answer is a SIGNAL — "nothing there" — which a probe must tolerate."""
+    client = OpenBBClient(make_settings(tmp_path))
+    client._obb = FakeOBB(FakePrice([pd.DataFrame()]))
+
+    with pytest.raises(NoDataError):
+        client.fetch_historical("AAPL", "2024-01-01", interval="4h")
+    assert client._obb.equity.price.calls == [history.DATA_PROVIDER]
+
+
+def test_openbb_s_empty_data_error_is_recognised(tmp_path):
+    """OpenBB's own "no results" exception maps onto that same signal.
+
+    It arrives as ``EmptyDataError``, which is exactly what a symbol/window with no
+    data raises — the same shape a real outage has. That is why the two are told
+    apart by TYPE and not by reading the provider's message text.
+    """
+    errors = pytest.importorskip("openbb_core.provider.utils.errors")
+
+    client = OpenBBClient(make_settings(tmp_path))
+    client._obb = FakeOBB(FakePrice([errors.EmptyDataError("No results found")]))
+
+    with pytest.raises(NoDataError):
         client.fetch_historical("AAPL", "2024-01-01", interval="4h")
 
 
-def test_failover_continues_past_an_empty_provider(tmp_path):
-    """An empty primary response must not abort the chain (backups still run)."""
-    settings = Settings(
-        openbb_provider="yfinance",
-        openbb_backup_providers="yfinance,polygon,fmp",
-        data_cache_enabled=False,
-        cache_dir=str(tmp_path),
-    )
-    client = OpenBBClient(settings)
-    client._obb = FakeOBB(FakePrice([pd.DataFrame(), make_raw_df()]))
+def test_no_data_error_is_still_an_openbb_error():
+    """A caller that only knows the old failure keeps catching it."""
+    assert issubclass(NoDataError, OpenBBError)
 
-    df = client.fetch_historical("AAPL", "2024-01-01", interval="4h")
-    assert not df.empty
-    assert client._obb.equity.price.calls == ["yfinance", "polygon"]
 def test_resample_4h_from_1h():
     # 12 x 1h bars starting on a day boundary -> 3 x 4h bars
     dates = pd.date_range("2024-01-01 00:00", periods=12, freq="1h", tz="UTC")
@@ -263,8 +282,6 @@ def test_resample_4h_from_1h():
 
 def test_fetch_historical_resamples_4h(tmp_path):
     settings = Settings(
-        openbb_provider="yfinance",
-        openbb_backup_providers="yfinance,polygon,fmp",
         data_cache_enabled=False,
         cache_dir=str(tmp_path),
     )

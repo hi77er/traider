@@ -4,7 +4,7 @@ Three layers are merged into the ONE ``Settings`` object every module consumes:
 
 | Layer | File | Example keys |
 |-------|------|--------------|
-| Global | ``.env`` | ``OPENBB_PROVIDER``, ``OPENBB_API_KEY`` |
+| Global | ``.env`` | the machine defaults every strategy inherits |
 | Account | ``data/account/account.json`` | ``DATA_DIR``, ``ALPACA_PAPER_API_KEY``, ``BACKTEST_SLIPPAGE_PERCENT`` |
 | Strategy | ``data/strategies/store.json`` | ``INSTRUMENT``, ``FEATURE_*``, ``MODEL_*``, ``GATE_*``, ``RISK_*`` |
 
