@@ -352,6 +352,10 @@ button.ghost:hover { border-color: var(--accent); color: var(--accent); }
 }
 
 .collapse-body { padding: 0 20px 20px; }
+/* Collapsed shows the title and its toggle only — the header controls go with the body.
+   Read from the body's own state, so a panel opened by code gets them back. */
+.card.collapsible:has(.collapse-body[hidden]) .settings-actions,
+.card.collapsible:has(.collapse-body[hidden]) .bt-actions { display: none; }
 /* The risk panel is collapsed by default; guard against any display override. */
 #risk-body[hidden] { display: none; }
 

@@ -161,6 +161,28 @@ def test_the_panel_link_is_in_the_header_next_to_the_refresh():
     assert "/log" not in body, "and only there, not in both places"
 
 
+def test_a_collapsed_panel_hides_every_control_but_its_toggle():
+    """A shut panel is a title and a +, not a toolbar.
+
+    Driven by the body's own ``hidden`` instead of a class something has to remember to set:
+    ``expandCard`` and ``ensureRulesOpen`` open a panel from code, and a panel whose controls
+    stayed pressable while its body was shut would be the bug this replaces.
+    """
+    collapsed = ".card.collapsible:has(.collapse-body[hidden])"
+
+    for controls in (".settings-actions", ".bt-actions"):
+        assert f"{collapsed} {controls}" in CSS, f"a collapsed panel must hide {controls}"
+    block = CSS[CSS.index(collapsed):]
+    assert "display: none" in block[:block.index("}")], "hidden, not merely moved"
+
+    # The five panels that carry header controls are all on that pattern, so the rule reaches
+    # every one of them: Configuration, Rules, Risk Management, Trading and Backtest.
+    for card in ("config-card", "rules-card", "risk-card", "live-card", "backtest"):
+        at = HTML.index(f'id="{card}"')
+        tag = HTML[HTML.rindex("<", 0, at):HTML.index(">", at)]
+        assert "card collapsible" in tag, f"{card} must opt into the collapse pattern"
+
+
 # ---------------------------------------------------------------------------
 # the Backtest panel collapses
 # ---------------------------------------------------------------------------
