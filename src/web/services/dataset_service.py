@@ -44,6 +44,9 @@ def dataset_status(settings: Optional[Settings] = None) -> dict:
         "exists": exists,
         "symbol": symbol,
         "interval": interval,
+        # The zone the bars are stamped in, sent so the chart's time axis can label
+        # each candle in exchange-local time instead of the browser's (or UTC).
+        "market_timezone": settings.market_timezone,
         "period": settings.historical_lookback,
         "period_label": history.format_period(settings.historical_lookback),
         "rows": 0,

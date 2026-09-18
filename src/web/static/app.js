@@ -10,12 +10,35 @@ const POLL_MS = 2000;
 const POSITION_SHADE = "rgba(110, 160, 255, 0.15)";
 const POSITION_SHADE_WIN = "rgba(38, 166, 154, 0.18)";
 const POSITION_SHADE_LOSS = "rgba(239, 83, 80, 0.18)";
+// A round trip that changed the equity by exactly nothing. Deliberately grey
+// and distinct from POSITION_SHADE: blue means "no outcome recorded" (an older
+// payload), grey means "recorded, and it was exactly break-even". Reading a
+// zero as a loss is how a zero-weight run painted every profitable trade red.
+const POSITION_SHADE_FLAT = "rgba(158, 158, 158, 0.20)";
 
 const state = {
   status: null,
   rows: [],
   total: 0,
   offset: 0,
+  // Row count of the dataset as of the last delta payload. A fetch is considered to
+  // have changed something when this moves — which is not the same as `synced`
+  // becoming true, because a fetch can add today's bars and still leave an older hole
+  // the provider cannot fill. Keying the chart refresh on `synced` left the chart
+  // showing the old window in exactly that case.
+  deltaRows: null,
+  // Whether the dashboard hides the intervals nobody traded (the "Hide all bars missing
+  // due to no liquidity" toggle in the Historical Delta panel). ON by default: those bars
+  // are listed for accounting, not as a to-do, and on a thin symbol they bury the handful
+  // that can actually be fetched. Untick to see them again — the state survives
+  // re-renders, which is why it lives here and not in the DOM.
+  hideNoTrades: true,
+  // The last delta payload, so that toggle can re-render the panel from what the server
+  // already said instead of asking again.
+  deltaStatus: null,
+  // Size of the cached `datasetRows` copy the chart is drawn from (see
+  // forgetDatasetRows). Null when nothing is cached.
+  chartRows: null,
   account: null, // GET /api/v1/account -> {file, file_exists, groups, error}
   chart: null,
   datasetRows: null,
@@ -63,8 +86,29 @@ async function refresh() {
   }
 }
 
+// Drop the chart's cached copy of the bars.
+//
+// `state.datasetRows` is fetched ONCE and kept (see loadChart) so that redrawing the
+// dashboard costs no request. A cached copy of a dataset that has since GROWN is worse
+// than no cache at all: `buildMainChart` would redraw the old window while every other
+// panel — all of which refetch — moved on, so a fetch appeared to add bars to the
+// table, the summary and the delta column but not to the chart.
+//
+// `state.chartRows` is the size of that copy. ANY change to the row count drops it,
+// which is what makes this path-independent: it does not matter whether a delta fetch,
+// the initial download or another process wrote the bars.
+function forgetDatasetRows() {
+  state.datasetRows = null;
+  state.chartRows = null;
+}
+
 function render(s) {
   state.status = s;
+  // Invalidate BEFORE loadChart() runs below, so the refetch happens in this same pass
+  // rather than one reload later.
+  if (typeof s.rows === "number" && state.chartRows !== null && state.chartRows !== s.rows) {
+    forgetDatasetRows();
+  }
   const hasData = s.exists;
   $("no-data").hidden = hasData;
   $("dashboard").hidden = !hasData;
@@ -171,6 +215,9 @@ async function loadChart() {
     if (!state.datasetRows) {
       const d = await api("/api/v1/dataset/data?limit=0"); // all rows for the chart
       state.datasetRows = d.rows;
+      // Record what the cached copy is a copy OF, so a later render can tell that the
+      // file has moved on (see forgetDatasetRows).
+      state.chartRows = (d.rows || []).length;
     }
     // A dataset with no usable bars has nothing to draw, and a blank pane is
     // indistinguishable from a broken chart — so say what is actually wrong
@@ -207,6 +254,46 @@ function toNum(v) {
   return Number.isFinite(n) ? n : null;
 }
 
+/* The exchange's time zone, as the dataset status reports it.
+ *
+ * A server started before the payload carried this field says nothing, and the labels
+ * would then be UTC — four hours off the table's numbers beside them. That is a restart
+ * pending, not a chart bug, so say it once in the console rather than leaving the axis
+ * quietly wrong. */
+let _warnedZone = false;
+function axisZone(s) {
+  const zone = s.market_timezone;
+  if (zone) return zone;
+  if (!_warnedZone) {
+    _warnedZone = true;
+    console.warn(
+      "TRAIDER: the dataset payload carries no market_timezone, so the time axis is " +
+      "labelled in UTC. Restart the server to pick the setting up."
+    );
+  }
+  return "UTC";
+}
+
+/* Time-axis options for the dataset on screen (see chart_time.js), merged onto a
+   chart's own timeScale settings. The bar size and the exchange's time zone both come
+   from the dataset status, which render() stores before any chart is built.
+
+   The `ChartTime` guard is for a stale cached page: an axis option is never worth
+   blanking every chart over. */
+function axisTimeScale(extra) {
+  const base = Object.assign({}, extra);
+  if (typeof ChartTime === "undefined") return base;
+  const s = state.status || {};
+  return Object.assign(base, ChartTime.timeScaleOptions(s.interval || "", axisZone(s)));
+}
+
+// ...and the matching crosshair-label options, so the crosshair names a bar the same
+// way the tables beside it do.
+function axisLocalization() {
+  const s = state.status || {};
+  return typeof ChartTime === "undefined" ? {} : ChartTime.localizationOptions(axisZone(s));
+}
+
 function buildMainChart() {
   // Remember the current zoom/scroll so a rebuild (indicator or marker
   // toggle) does NOT reset the view back to 100%.
@@ -223,8 +310,15 @@ function buildMainChart() {
     height: 380,
     layout: { background: { color: "#11141a" }, textColor: "#cfd6e4" },
     grid: { vertLines: { color: "#22262f" }, horzLines: { color: "#22262f" } },
-    timeScale: { timeVisible: false, borderColor: "#333a46", minBarSpacing: ChartZoom.MIN_BAR_SPACING },
+    // Each candle is labelled with the bar it actually IS — its own minute, hour or
+    // day — in exchange-local time (see chart_time.js).
+    timeScale: axisTimeScale({ borderColor: "#333a46", minBarSpacing: ChartZoom.MIN_BAR_SPACING }),
+    localization: axisLocalization(),
     rightPriceScale: { borderColor: "#333a46" },
+    // Free-floating crosshair (not snapped to a bar's extremes). Its vertical line keeps
+    // its boxed time label on the time axis: the axis names each candle's PERIOD, while
+    // the label is what gives the exact instant under the pointer — including between
+    // bars and in the whitespace past the last one (see chart_time.js).
     crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
     // Zoom happens ONLY on a trackpad/touch pinch, clamped to the data (see
     // chart_zoom.js). A plain mouse wheel must never zoom the chart, and dragging
@@ -458,7 +552,7 @@ function fillsNote(d) {
     }
   }
   const shaded = " — the shaded background marks the periods a position was actually " +
-    "held (green = the round trip made money, red = it lost" +
+    "held (green = the round trip made money, red = it lost, grey = it broke even" +
     (risk.applied && (risk.stop_exits || risk.take_exits) ? ", ✕ marks a stop/take exit" : "") +
     ")";
   return `<p class="muted signal-fills">actual fills: ${rounds} round-trip(s)${sized}` +
@@ -601,9 +695,18 @@ function applyPositionShades() {
     }
   };
   // The outcome is carried by the round trip's CLOSE fill; a fill without one
-  // (an older payload) keeps the neutral tint rather than guessing.
-  const shadeFor = (f) => (f.win === true ? POSITION_SHADE_WIN
-    : f.win === false ? POSITION_SHADE_LOSS : POSITION_SHADE);
+  // (an older payload) keeps the neutral tint rather than guessing. `outcome`
+  // is the three-state field — win / loss / flat — and `win` is the older
+  // boolean, still honoured so a cached payload keeps its colours. A flat
+  // round trip is grey: neither a win nor a loss.
+  const shadeFor = (f) => {
+    const outcome = f.outcome != null ? String(f.outcome)
+      : (f.win === true ? "win" : f.win === false ? "loss" : "");
+    if (outcome === "win") return POSITION_SHADE_WIN;
+    if (outcome === "loss") return POSITION_SHADE_LOSS;
+    if (outcome === "flat") return POSITION_SHADE_FLAT;
+    return POSITION_SHADE;
+  };
   fills.forEach((f) => {
     const i = idx.get(String(f.time));
     if (i == null) return; // fill time not on this dataset (shouldn't happen)
@@ -894,7 +997,7 @@ function switchDataset(symbol) {
   state.overlayLines = [];
   state.selected = {};
   state.indicators = null;
-  state.datasetRows = null;
+  forgetDatasetRows(); // a different instrument's bars are not this chart's copy
   state.rows = [];
   state.total = 0;
   state.offset = 0;
@@ -1941,7 +2044,10 @@ function drawOscPanes() {
         height: 110,
         layout: { background: { color: "transparent" }, textColor: "#8a93a6" },
         grid: { vertLines: { color: "#22262f" }, horzLines: { color: "#22262f" } },
-        timeScale: { timeVisible: false, borderColor: "#333a46", minBarSpacing: ChartZoom.MIN_BAR_SPACING },
+        // The panes sit under the price chart and are range-synced to it, so their
+        // axis must label the same bars the same way (see chart_time.js).
+        timeScale: axisTimeScale({ borderColor: "#333a46", minBarSpacing: ChartZoom.MIN_BAR_SPACING }),
+        localization: axisLocalization(),
         rightPriceScale: { borderColor: "#333a46" },
         // Same wheel policy as the main chart: a plain wheel pans, only a pinch
         // zooms, and ChartZoom stops it at this pane's own data.
@@ -1950,8 +2056,9 @@ function drawOscPanes() {
           mouseWheel: false,
           axisPressedMouseMove: { time: false, price: true },
         },
-        // Same free-floating crosshair as the main chart, so the synced
-        // horizontal line is not snapped to a bar's extremes.
+        // Same free-floating crosshair as the main chart, so the synced horizontal line
+        // is not snapped to a bar's extremes, and the same boxed time label under the
+        // vertical line.
         crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
       });
       watchPaneInteraction(chart, canvas); // gestures here drive the main chart
@@ -2053,10 +2160,128 @@ function setDeltaAction(html) {
   if (state.tradingLocked) host.querySelectorAll("button").forEach((b) => { b.disabled = true; });
 }
 
+/* How a listed gap is DRAWN, one entry per reason the data layer reports
+   (``src/data/delta.py``, REASON_*). Three kinds of absence that are NOT interchangeable:
+
+     fetchable    the provider HAS this bar and the file does not — press Fetch bars.
+     no_trades    the provider traded that day but has no bar for this interval, so
+                  nobody traded in it. Nothing to fetch, ever, and nothing to wait for.
+     unconfirmed  a normal slot of a session we hold bars for, and no provider check has
+                  answered for it yet.
+
+   All three are LISTED — an interval with no trades is a real feature of the symbol, and
+   an operator looking at holes in a chart needs to know which holes are theirs to fix —
+   and each is drawn differently, so two of them can never be read as the same thing.
+   `tests/test_web/test_delta_reasons.py` runs this table in node. */
+const DELTA_CHIP = {
+  fetchable: {
+    cls: "chip date-chip",
+    title: "the provider has this bar and the dataset does not — Fetch bars will add it",
+  },
+  no_trades: {
+    cls: "chip date-chip no-trades",
+    title:
+      "no trades in this interval — the provider has no bar for it either, so there is " +
+      "nothing to fetch",
+  },
+  unconfirmed: {
+    cls: "chip date-chip inferred",
+    title: "a normal slot of this session's grid, and no provider check has confirmed it yet",
+  },
+};
+
+// An unknown reason is treated as the cautious one: unconfirmed still blocks a run, so a
+// payload from a newer server cannot silently look harmless.
+function deltaChip(reason) {
+  return DELTA_CHIP[reason] || DELTA_CHIP.unconfirmed;
+}
+
+/* Is there anything for the hide-toggle to hide? Drawn only when there is: an empty
+   control is a question with no subject. */
+function showsNoTradeToggle(s) {
+  return ((s && s.no_trades_bars_total) || 0) > 0;
+}
+
+/* The listed gaps the panel actually draws. Only the no-trades rows are ever hidden, and
+   only when the operator asked: a fetchable bar is a to-do, and a view toggle must never
+   be able to scroll it off the list. */
+function visibleDeltaBars(s, hideNoTrades) {
+  const bars = (s && s.missing_bars) || [];
+  return bars.filter((b) => !(hideNoTrades && b.reason === "no_trades"));
+}
+
+/* How many untraded intervals the toggle is keeping out of the list right now — the
+   payload's TOTAL, not the number of them the capped list happens to name. The toggle
+   hides all 959 of IMCC's untraded bars even though only 500 fit in the list, and a
+   count of 500 printed beside a toggle that says 959 is just wrong. */
+function hiddenNoTradeCount(s, hideNoTrades) {
+  return hideNoTrades ? (s && s.no_trades_bars_total) || 0 : 0;
+}
+
+/* The toggle's label carries the COUNT — "Hide all 959 bars missing due to no liquidity"
+   — and flips to "Show all …" once they are out of the way, because the control now
+   describes the way back. The number is the reason to press it: on a thin symbol the
+   handful of bars that can be fetched is what is left once these are hidden. */
+function noTradeToggleLabel(n, hidden) {
+  const what = `${n.toLocaleString("en-US")} ${barWord(n)}`;
+  return hidden
+    ? `Show all ${what} missing due to no liquidity`
+    : `Hide all ${what} missing due to no liquidity`;
+}
+
+/* The toggle itself, in its own row above the list it filters. */
+function deltaToggleHtml(noTrades) {
+  return (
+    `<label class="delta-toggle" title="Intervals nobody traded in — the provider has ` +
+    `no bar for them, so no fetch can produce one. Hiding them leaves only the bars that ` +
+    `CAN still be fetched.">` +
+    `<input type="checkbox" class="switch" id="hide-no-trades"` +
+    `${state.hideNoTrades ? " checked" : ""} ` +
+    `onchange="toggleNoTrades(this.checked)">` +
+    `<span>${noTradeToggleLabel(noTrades, state.hideNoTrades)}</span></label>`
+  );
+}
+
+function toggleNoTrades(on) {
+  state.hideNoTrades = !!on;
+  if (state.deltaStatus) renderDelta(state.deltaStatus);
+}
+
+/* The one line of prose above the list. It has to be ONE line — the panel is read at a
+   glance and the chips already say which bar is which kind — and it says only what the
+   reader is looking at right now. Max two short sentences, pinned by
+   tests/test_web/test_delta_reasons.py. ``hidden`` is passed in, not counted off the
+   list, so the number in the note is the same one the toggle's label shows. */
+function deltaNoteText(s, shown, hidden) {
+  const listed = (s && s.missing_bars) || [];
+  const blocking =
+    s && s.missing_bars_total != null ? s.missing_bars_total : listed.length;
+  const noTrades = (s && s.no_trades_bars_total) || 0;
+  const unconfirmed = shown.filter((b) => b.reason === "unconfirmed").length;
+
+  let note = "";
+  if (shown.length && blocking && noTrades) {
+    note = "Struck chips have no trades anywhere; ⬇ Fetch bars adds the rest.";
+  } else if (shown.length && blocking) {
+    note =
+      unconfirmed === blocking
+        ? "Not checked against the provider yet — ⬇ Fetch bars retries."
+        : "The provider has these — ⬇ Fetch bars adds them.";
+  }
+  // A list of nothing but untraded chips gets no line at all: the struck chips and the
+  // "✓ Nothing to fetch" headline above already say it.
+  if (hidden && shown.length) note += ` (${hidden.toLocaleString()} hidden)`;
+  return note;
+}
+
 function renderDelta(s) {
   const body = $("delta-body");
   if (!body) return;
+  // Remembered so the hide-toggle can redraw this panel from the payload already in hand.
+  state.deltaStatus = s;
   setDeltaAction(""); // header action depends on the state below
+  // Remember what the fetch is measured against (see syncDelta).
+  state.deltaRows = typeof s.rows === "number" ? s.rows : null;
 
   if (s.error) {
     setDeltaAction(`<button class="ghost small" onclick="loadDelta()">↻ Retry</button>`);
@@ -2072,11 +2297,18 @@ function renderDelta(s) {
     return;
   }
 
-  if (s.synced) {
+  const bars = s.missing_bars || [];
+  const blocking = s.missing_bars_total != null ? s.missing_bars_total : bars.length;
+  const noTrades = s.no_trades_bars_total || 0;
+  const shown = visibleDeltaBars(s, state.hideNoTrades);
+  // Against the payload's total, never the capped list — see hiddenNoTradeCount.
+  const hiddenNoTrades = hiddenNoTradeCount(s, state.hideNoTrades);
+
+  if (s.synced && !noTrades) {
     const rows = (s.recent || [])
       .map(
         (r) =>
-          `<tr><td>${r.date}</td><td>${r.open.toFixed(2)}</td><td>${r.high.toFixed(2)}</td>` +
+          `<tr><td>${r.datetime || r.date}</td><td>${r.open.toFixed(2)}</td><td>${r.high.toFixed(2)}</td>` +
           `<td>${r.low.toFixed(2)}</td><td>${r.close.toFixed(2)}</td><td>${r.volume.toLocaleString()}</td></tr>`
       )
       .join("");
@@ -2088,25 +2320,102 @@ function renderDelta(s) {
       <h4 class="delta-title">Last 5 bars</h4>
       <div class="delta-table">
         <table>
-          <thead><tr><th>Date</th><th>Open</th><th>High</th><th>Low</th><th>Close</th><th>Volume</th></tr></thead>
+          <thead><tr><th>Date / time</th><th>Open</th><th>High</th><th>Low</th><th>Close</th><th>Volume</th></tr></thead>
           <tbody>${rows || `<tr><td colspan="6" class="muted">—</td></tr>`}</tbody>
         </table>
       </div>`;
     return;
   }
 
-  const chips = Array.from(new Set(s.missing || []))
-    .map((d) => `<span class="chip date-chip">${d}</span>`)
+  // A missing DAY and a missing BAR are different sizes of the same problem, so the
+  // count that leads is the bar count: a session short by one hour has no missing day
+  // at all and would otherwise read "✓ synced" while being incomplete. The bars
+  // themselves are listed one per row of the grid — grouped by day so a 390-bar 1m hole
+  // stays readable — because "3 days missing" does not tell you WHICH bars, and that is
+  // the question the panel is being asked.
+  const days = Array.from(new Set(s.missing || []));
+  const byDay = new Map();
+  shown.forEach((b) => {
+    if (!byDay.has(b.date)) byDay.set(b.date, []);
+    byDay.get(b.date).push(b);
+  });
+
+  const dayBlocks = Array.from(byDay.entries())
+    .map(([day, rows]) => {
+      const chips = rows
+        .map((b) => {
+          // The stock clock alone for an intraday grid; a daily bar has no time and
+          // says so with its date, which is already the block heading.
+          const label = b.time || "bar";
+          const spec = deltaChip(b.reason);
+          return `<span class="${spec.cls}" title="${escapeHtml(spec.title)}">${escapeHtml(label)}</span>`;
+        })
+        .join("");
+      const held = rows.filter((b) => b.reason !== "no_trades").length;
+      const note = held
+        ? `${held} ${barWord(held)} missing`
+        : `no trades in ${rows.length} ${barWord(rows.length)}`;
+      return `<div class="delta-day">
+          <div class="delta-day-head"><b>${escapeHtml(day)}</b>
+            <span class="muted">${note}</span></div>
+          <div class="missing-chips">${chips}</div>
+        </div>`;
+    })
     .join("");
-  const missingCount = (s.missing || []).length;
+
+  const more = blocking > 0 && blocking + noTrades > bars.length
+    ? `<p class="muted">Showing ${bars.length.toLocaleString()} of ${(blocking + noTrades).toLocaleString()} listed gaps.</p>`
+    : "";
+  const dayLine = days.length
+    ? `<span class="muted">${days.length} whole ${days.length === 1 ? "session" : "sessions"} absent.</span>`
+    : "";
+  const headline = blocking
+    ? `<span class="delta-badge warn">⚠ ${blocking.toLocaleString()} ${barWord(blocking)} missing</span>`
+    : `<span class="delta-badge ok">✓ Nothing to fetch</span>`;
+  const note = deltaNoteText(s, shown, hiddenNoTrades);
+
   body.innerHTML = `
     <div class="delta-head">
-      <span class="delta-badge warn">⚠ ${missingCount} ${barWord(missingCount)} missing</span>
-      <p class="muted">Dataset is current through ${s.last_date}. Missing completed bars:</p>
-      <div class="missing-chips">${chips}</div>
-      <p id="delta-msg" class="muted"></p>
-    </div>`;
-  setDeltaAction(`<button id="sync-delta-btn" class="primary small" onclick="syncDelta()">⬇ Fetch bars</button>`);
+      ${headline}
+      <span class="muted">through ${s.last_date}</span>
+      ${dayLine}
+    </div>
+    ${note ? `<p class="muted">${note}</p>` : ""}
+    ${
+      showsNoTradeToggle(s)
+        ? `<div class="delta-toggle-row">${deltaToggleHtml(noTrades)}</div>`
+        : ""
+    }
+    ${
+      dayBlocks ||
+      `<p class="muted">${
+        hiddenNoTrades
+          ? `All ${hiddenNoTrades.toLocaleString()} intervals with no trades are hidden by the toggle above.`
+          : "No individual bars identified."
+      }</p>`
+    }
+    ${more}
+    <p id="delta-msg" class="muted"></p>`;
+  setDeltaAction(
+    blocking
+      ? `<button id="sync-delta-btn" class="primary small" onclick="syncDelta()">⬇ Fetch bars</button>`
+      : `<button id="sync-delta-btn" class="small" onclick="syncDelta()">⬇ Re-check</button>`
+  );
+}
+
+// Did a delta fetch actually change the dataset?
+//
+// Everything drawn FROM the dataset — the price chart, its indicator panes, the data
+// table, the signal series, the position bands — is read once when the page loads, so
+// this is the question that decides whether a reload is owed.
+//
+// It is deliberately NOT "did the fetch come back synced". A fetch that pulls in
+// today's bars while an older gap remains (the usual case: only the provider can
+// settle a gap and it often cannot) has changed the dataset and must redraw the chart,
+// but is still not "synced". Gating on `synced` left the chart showing the old window
+// in exactly that case. Unknown on either side reloads, which is the safe default.
+function fetchChangedDataset(before, after) {
+  return before == null || after == null || after !== before;
 }
 
 async function syncDelta() {
@@ -2114,13 +2423,14 @@ async function syncDelta() {
   const msg = $("delta-msg");
   if (btn) btn.disabled = true;
   if (msg) msg.textContent = "Fetching bars…";
+  const rowsBefore = state.deltaRows;
   try {
     const s = await api("/api/v1/delta/sync", { method: "POST" });
     renderDelta(s);
     // Dataset currency drives the Run-backtest gate — refresh it after a sync.
     btDelta = s;
     renderBacktest(btPayload, s);
-    if (s.synced) refresh(); // dataset changed -> update summary/chart/table
+    if (fetchChangedDataset(rowsBefore, s.rows)) refresh();
   } catch (err) {
     if (msg) msg.textContent = `Failed: ${err.message}`;
     if (btn) btn.disabled = false;
@@ -2628,7 +2938,7 @@ function setStrategyMsg(text) {
 
 function setActionButtonsDisabled(disabled) {
   const off = !!disabled || !!state.tradingLocked; // the lock can never be undone here
-  ["rules-add-buy", "rules-add-sell", "rules-reset", "save-rules", "save-pconfig", "save-risk"].forEach((id) => {
+  ["rules-add-buy", "rules-add-sell", "rules-copy", "save-rules", "save-pconfig", "save-risk"].forEach((id) => {
     const b = $(id);
     if (b) b.disabled = off;
   });
@@ -2642,13 +2952,12 @@ async function loadRules() {
     renderPConfig();
     renderRiskPanel();
     renderStrategyBar();
-    setMsg(
-      d.error
-        ? `⚠ ${d.error} — no file written.`
-        : d.file_exists
-          ? `Editing ${d.file}`
-          : `New file will be created at ${d.file}.`
-    );
+    // NO line about where the rules are stored. A load that succeeded has nothing to
+    // report — "Editing <path>" is a description of the file, it said the same thing on
+    // every single load, and it was the first thing under the header. What stays is the
+    // one case that is NOT static news: a store that could not be read, which would
+    // otherwise fail silently and leave the panel looking empty-but-fine.
+    setMsg(d.error ? `⚠ ${d.error} — no file written.` : "");
     syncBtRules(); // rules payload is now loaded -> recompute the backtest gate
   } catch (err) {
     state.rulesPayload = null;
@@ -2806,6 +3115,10 @@ function renderStrategyBar() {
     });
     rulesEl.hidden = !lines.length;
   }
+
+  // "Copy rules from" is available exactly when there is another strategy to copy from,
+  // and never while trading is on (see setActionButtonsDisabled for the same rule).
+  updateCopyButton();
 }
 
 async function onStrategySelect() {
@@ -3280,6 +3593,123 @@ function addRule(side) {
   syncBtRules();
 }
 
+/* ---------- Copy rules from another strategy ----------
+   Building the same rulebook twice is the normal case: a second strategy on another
+   symbol usually wants the first one's conditions as a starting point. So the panel can
+   take EVERY rule of another strategy — enabled and disabled alike — and append them to
+   this one's.
+
+   It is a local edit like `+ Buy`/`+ Sell`, not a server operation: the rules land in the
+   panel's in-memory copy of the active strategy and are persisted by 💾 Save, which is
+   also what keeps the trading lock meaningful (the server refuses the write, so this
+   refuses to pretend). Nothing is ever REMOVED here — existing rules stay exactly where
+   they are, and the copies follow them in the source's own order. */
+
+/* Strategies a copy can come FROM: every live strategy except the active one — and only
+   the ones that actually HAVE rules. A source with an empty rulebook is not a choice,
+   it is a dead end, so it is not offered at all. */
+function copySources() {
+  const all = rulesStrategies();
+  // The payload's `active` is the fallback for the first render, before renderRules has
+  // normalised state.activeName: copying a strategy into itself is never a feature.
+  const me = state.activeName || (state.rulesPayload && state.rulesPayload.active);
+  return Object.keys(all).filter((n) => n !== me && copiedCount(n) > 0);
+}
+
+/* The copy itself, as a pure function so it can be exercised without a DOM: what is
+   already here, followed by deep copies of everything the source has. Cloning matters —
+   the two strategies must not share rule objects, or editing one would silently rewrite
+   the other (and a later Save would push the edit into a strategy the user never
+   touched). */
+function appendedRules(existing, incoming) {
+  const cur = Array.isArray(existing) ? existing : [];
+  const add = Array.isArray(incoming) ? incoming : [];
+  return cur.concat(JSON.parse(JSON.stringify(add)));
+}
+
+function copiedCount(srcName) {
+  const src = rulesStrategies()[srcName];
+  return src && Array.isArray(src.rules) ? src.rules.length : 0;
+}
+
+/* The picker's contents. Every candidate is a button because clicking the strategy IS
+   the action the user asked for. */
+function renderCopySources(names) {
+  const host = $("rules-copy-list");
+  if (!host) return;
+  const list = names || copySources();
+  host.innerHTML = list.length
+    ? list
+        .map(
+          (n) =>
+            `<button type="button" class="ghost small copy-src" data-src="${escapeHtml(n)}" ` +
+            `title="Append every rule of “${escapeHtml(n)}” to “${escapeHtml(state.activeName || "")}”">` +
+            `${escapeHtml(n)} <span class="copy-n">(${copiedCount(n)})</span></button>`
+        )
+        .join("")
+    : `<span class="muted">No other strategy has rules yet — add them with “+ Buy” / “+ Sell” in that strategy first.</span>`;
+}
+
+/* Enable/disable the header button. Called from renderStrategyBar, which runs both when
+   the payload loads and whenever the trading lock changes, so the lock can never leave a
+   stale clickable button behind. */
+function updateCopyButton() {
+  const btn = $("rules-copy");
+  const names = copySources();
+  if (btn) {
+    btn.disabled = !names.length || !!state.tradingLocked;
+    btn.title = names.length
+      ? "Copy every rule (enabled and disabled) of another strategy into this one"
+      : "No other strategy has rules to copy yet";
+  }
+  const row = $("rules-copy-row");
+  if (row && !row.hidden) renderCopySources(names); // keep an open picker in step
+}
+
+function toggleCopyRules() {
+  const row = $("rules-copy-row");
+  if (!row) return;
+  if (row.hidden) {
+    ensureRulesOpen(); // the picker lives in the panel body, so show it
+    renderCopySources();
+  }
+  row.hidden = !row.hidden;
+}
+
+/* Expand the Rules panel if it is collapsed — the picker is useless out of sight. */
+function ensureRulesOpen() {
+  const body = $("rules-body");
+  const btn = $("toggle-rules");
+  if (body && body.hidden) {
+    body.hidden = false;
+    if (btn) { btn.textContent = "−"; btn.title = "Collapse rules"; }
+  }
+}
+
+function copyRulesFrom(srcName) {
+  const rs = activeRuleset();
+  const src = rulesStrategies()[srcName];
+  if (!rs) { setMsg("No active strategy to copy into."); return; }
+  if (!src) { setMsg(`Strategy “${srcName}” is not available.`); return; }
+  const incoming = src.rules || [];
+  if (!incoming.length) {
+    setMsg(`“${srcName}” has no rules to copy.`);
+    return;
+  }
+  const had = (rs.rules || []).length;
+  rs.rules = appendedRules(rs.rules, incoming);
+  renderRules();        // existing rules are kept; the copied ones follow them
+  renderStrategyBar();  // the header's rule lines are part of the same view
+  syncBtRules();
+  const off = incoming.filter((r) => r.enabled === false).length;
+  const dis = off ? `, ${off} of them disabled` : "";
+  setMsg(
+    `Copied ${incoming.length} rule${incoming.length === 1 ? "" : "s"}${dis} from “${srcName}” — ` +
+    `“${state.activeName}” now has ${rs.rules.length}` +
+    `${had ? ` (its own ${had} kept)` : ""}. Press 💾 Save to keep them.`
+  );
+}
+
 /* One Save path for both panels: sync rules + config, persist the strategy. */
 async function saveStrategyFull(kind) {
   const rs = activeRuleset();
@@ -3432,31 +3862,11 @@ async function pollRebuild() {
 function saveRules() { saveStrategyFull("rules"); }
 function savePConfig() { saveStrategyFull("pconfig"); }
 
-async function resetRules() {
-  const name = (state.activeName || "").trim();
-  if (!name) { setMsg("No active strategy to reset."); return; }
-  const ok = await confirmDialog({
-    title: "Reset this strategy's rules?",
-    messageHtml:
-      `<p>Replace the rules of <b>“${escapeHtml(name)}”</b> with the default BUY/SELL example?</p>` +
-      `<p class="muted">Only this strategy's rules are replaced. Other strategies and this strategy's ` +
-      `configuration are kept.</p>`,
-    confirmText: "Reset rules",
-    cancelText: "Cancel",
-  });
-  if (!ok) { setMsg("Reset cancelled."); return; }
-  setMsg(`Resetting rules of “${escapeHtml(name)}”…`);
-  try {
-    const r = await api("/api/v1/rules/reset", { method: "POST" });
-    if (r.ok) {
-      window.location.reload();
-    } else {
-      setMsg(r.message || "Reset failed.");
-    }
-  } catch (err) {
-    setMsg(`Reset failed: ${err.message}`);
-  }
-}
+/* There is no "↺ Default rules" handler here any more: the button was never used, and a
+   reset that overwrites a strategy's own rulebook is the one action in this panel that
+   can only destroy work. The server endpoint it called is left in place (it is pinned by
+   the trading-gate tests and is still the way a first strategy gets seeded) — the panel
+   simply no longer offers it. */
 
 /* ---------- Strategy delete (soft) ---------- */
 function openDeleteStrategy() {
@@ -3560,6 +3970,16 @@ async function confirmDeleteStrategy() {
     host.addEventListener("change", onRulesChange);
     host.addEventListener("click", onRulesClick);
   }
+  // The picker is rebuilt on every render, so the click is caught on its container
+  // rather than on buttons that stop existing. Delegated, not inline: a strategy name
+  // is user text, and it must never be interpolated into an onclick attribute.
+  const copyHost = $("rules-copy-list");
+  if (copyHost) {
+    copyHost.addEventListener("click", (e) => {
+      const btn = e.target.closest("button[data-src]");
+      if (btn) copyRulesFrom(btn.dataset.src);
+    });
+  }
   const delBackdrop = $("delete-modal-backdrop");
   if (delBackdrop) {
     delBackdrop.addEventListener("click", (e) => {
@@ -3613,7 +4033,7 @@ function setBtBusyControls(busy) {
     "save-pconfig", // strategy configuration
     "save-rules", // strategy rules
     "save-risk", // risk management
-    "rules-add-buy", "rules-add-sell", "rules-reset", // rule editing (dead-ended without a save)
+    "rules-add-buy", "rules-add-sell", "rules-copy", // rule editing (dead-ended without a save)
     "exec-env", // switching paper<->live mid-run is the worst case of all
     "strategy-create-btn", // ＋ New (inline Create)
     "strategy-rename", "strategy-rename-btn", // ✏ Rename
@@ -3694,10 +4114,34 @@ function renderBacktest(d, delta) {
     if (dd.error) dataTxt = `⚠ Could not verify the dataset is up to date (${dd.error}) — Run backtest stays disabled.`;
     else if (dd.exists === false) dataTxt = "⚠ No historical data for this strategy yet — download it before backtesting.";
     else if (dd.exists === true && !dd.synced) {
-      const uniq = Array.from(new Set(dd.missing || []));
-      const n = (dd.missing || []).length;
-      dataTxt = `⚠ Historical data is missing ${n} completed ${barWord(n)}` +
-        `${uniq.length ? `: ${uniq.join(", ")}` : ""}. ` +
+      // Counted in BARS, like the Historical Delta panel it points at. Counting
+      // whole days here reported "missing 0 completed bars" for a session that is
+      // merely short by an hour — a number that contradicts the panel right below
+      // it and hides the very gap the gate is refusing to run on.
+      //
+      // The session list comes from the BARS rather than from `missing`: a short
+      // session has bars missing without being an absent day, so naming only the
+      // absent days would point at one of three affected sessions and imply the
+      // other two were fine.
+      // Name the sessions the BLOCKING bars belong to. Untraded intervals spread across
+      // most of a thin symbol's history, so letting them into this list named 29 sessions
+      // for a five-bar gap — and told the operator to go and fix intervals that have no
+      // bar at any provider.
+      const fromBars = Array.from(
+        new Set(
+          (dd.missing_bars || [])
+            .filter((b) => b.reason !== "no_trades")
+            .map((b) => b.date)
+        )
+      );
+      const days = fromBars.length ? fromBars : Array.from(new Set(dd.missing || []));
+      const bars = dd.missing_bars_total != null
+        ? dd.missing_bars_total
+        : (dd.missing || []).length;
+      const where = days.length
+        ? ` across ${days.length} ${days.length === 1 ? "session" : "sessions"}: ${days.join(", ")}`
+        : "";
+      dataTxt = `⚠ Historical data is missing ${bars} completed ${barWord(bars)}${where}. ` +
         "Use Historical Delta → “Fetch bars” to sync; " +
         "Run backtest stays disabled until data is up to date.";
     }
@@ -3847,13 +4291,19 @@ function drawBtCurve(points, runBarSize) {
       layout: { background: { color: "transparent" }, textColor: "#8a93a6" },
       grid: { vertLines: { color: "#22262f" }, horzLines: { color: "#22262f" } },
       rightPriceScale: { borderColor: "#333a46" },
-      timeScale: { borderColor: "#333a46", visible: false, minBarSpacing: ChartZoom.MIN_BAR_SPACING },
+      // The axis itself stays hidden (the curve rides the price chart's bars, which
+      // already carry the labels), but the crosshair readout is shared with every
+      // other chart, so it must name the instant the same way (see chart_time.js).
+      timeScale: axisTimeScale({ borderColor: "#333a46", visible: false, minBarSpacing: ChartZoom.MIN_BAR_SPACING }),
+      localization: axisLocalization(),
       // Same wheel policy as the price chart and the panes (see chart_zoom.js).
       handleScroll: { mouseWheel: true },
       handleScale: {
         mouseWheel: false,
         axisPressedMouseMove: { time: false, price: true },
       },
+      // Same free-floating crosshair, and the same boxed time label under it: this curve
+      // rides the price chart's bars.
       crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
     });
     const line = chart.addLineSeries({ color: "#4c8dff", lineWidth: 2, priceLineVisible: false, lastValueVisible: true });

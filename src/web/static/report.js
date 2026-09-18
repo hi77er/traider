@@ -511,13 +511,39 @@
     }
   }
 
+  /* Time-axis options for THIS run's bars (see chart_time.js): the report knows its own
+     bar size and the zone the bars were stamped in, so every chart in the report
+     labels each candle with the period it actually is — the minute, the hour, the day.
+
+     The `ChartTime` guard is for a stale cached page: an axis option is never worth
+     blanking every chart over. */
+  function runZone() {
+    const rep = (state.data && state.data.report) || {};
+    return ((rep.inputs || {}).settings || {}).market_timezone || "UTC";
+  }
+
+  function axisTimeScale(extra) {
+    const base = Object.assign({}, extra);
+    if (typeof ChartTime === "undefined") return base;
+    const rep = (state.data && state.data.report) || {};
+    return Object.assign(base, ChartTime.timeScaleOptions(rep.bar_size || "", runZone()));
+  }
+
+  // ...and the matching crosshair-label options, so the crosshair names a bar the same
+  // way the report's own tables do.
+  function axisLocalization() {
+    return typeof ChartTime === "undefined" ? {} : ChartTime.localizationOptions(runZone());
+  }
+
   function chart(host, height) {
     const c = LightweightCharts.createChart(host, {
       height,
       layout: { background: { color: "transparent" }, textColor: "#8a93a6" },
       grid: { vertLines: { color: "#22262f" }, horzLines: { color: "#22262f" } },
       rightPriceScale: { borderColor: "#333a46" },
-      timeScale: { borderColor: "#333a46", minBarSpacing: ChartZoom.MIN_BAR_SPACING },
+      // Each candle is labelled with the bar it actually IS, in exchange-local time.
+      timeScale: axisTimeScale({ borderColor: "#333a46", minBarSpacing: ChartZoom.MIN_BAR_SPACING }),
+      localization: axisLocalization(),
       // Same wheel policy as the dashboard (see chart_zoom.js): a plain wheel
       // pans, only a pinch zooms, and the zoom stops at this chart's own data
       // rather than being clamped by the library after the fact.
@@ -527,7 +553,8 @@
         axisPressedMouseMove: { time: false, price: true },
       },
       // Free-floating crosshair, so the synced horizontal line is not snapped to
-      // a sample's extremes (same mode the dashboard uses).
+      // a sample's extremes, with the boxed time label under the vertical line
+      // (see chart_time.js).
       crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
     });
     state.charts.push(c);

@@ -225,16 +225,16 @@
             <div class="settings-actions" onclick="event.stopPropagation()">
               <button id="rules-add-buy" class="ghost small" onclick="addRule('BUY')" title="Add a BUY rule">+ Buy</button>
               <button id="rules-add-sell" class="ghost small" onclick="addRule('SELL')" title="Add a SELL rule">+ Sell</button>
-              <button id="rules-reset" class="ghost small" onclick="resetRules()" title="Reset only the active strategy's rules to the default example (keeps other strategies)">↺ Default rules</button>
+              <button id="rules-copy" class="ghost small" onclick="toggleCopyRules()" title="Copy every rule (enabled and disabled) from another strategy into this one">⧉ Copy rules from</button>
               <button id="save-rules" class="primary small" onclick="saveRules()">💾 Save</button>
             </div>
           </div>
           <div class="collapse-body" id="rules-body" hidden>
             <p id="rules-msg" class="muted"></p>
-            <p class="muted note">Rule-based conditions for the active strategy (consumed by the future
-              <code>simple_model</code>). Stored with the strategy in
-              <code id="rules-file">data/strategies/store.json</code>. Each rule fires when its conditions hold; a
-              condition compares a feature to a number or to another feature.</p>
+            <div id="rules-copy-row" class="rules-copy-row" hidden>
+              <span class="muted">Copy every rule (enabled and disabled) of:</span>
+              <div id="rules-copy-list" class="rules-copy-list"></div>
+            </div>
             <div id="rules-list"></div>
           </div>
         </section>
@@ -277,7 +277,7 @@
               <div id="table-wrap">
                 <table id="data-table">
                   <thead>
-                    <tr><th>Date</th><th>Open</th><th>High</th><th>Low</th><th>Close</th><th>Volume</th></tr>
+                    <tr><th>Date / time</th><th>Open</th><th>High</th><th>Low</th><th>Close</th><th>Volume</th></tr>
                   </thead>
                   <tbody></tbody>
                 </table>
@@ -355,6 +355,7 @@
 
   <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
   <script src="/static/chart_zoom.js"></script>
+  <script src="/static/chart_time.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

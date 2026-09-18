@@ -386,7 +386,7 @@ button.chip-ind.active { border-color: var(--accent); color: var(--accent); back
 .osc-title { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 2px; }
 .osc-canvas { width: 100%; }
 
-.field input[type="checkbox"].switch {
+input[type="checkbox"].switch {
   appearance: none;
   -webkit-appearance: none;
   width: 40px;
@@ -402,7 +402,7 @@ button.chip-ind.active { border-color: var(--accent); color: var(--accent); back
   margin: 0;
 }
 
-.field input[type="checkbox"].switch::before {
+input[type="checkbox"].switch::before {
   content: "";
   position: absolute;
   top: 2px;
@@ -414,8 +414,8 @@ button.chip-ind.active { border-color: var(--accent); color: var(--accent); back
   transition: left 0.15s ease;
 }
 
-.field input[type="checkbox"].switch:checked { background: var(--accent); }
-.field input[type="checkbox"].switch:checked::before { left: 20px; }
+input[type="checkbox"].switch:checked { background: var(--accent); }
+input[type="checkbox"].switch:checked::before { left: 20px; }
 
 /* ---------- Read-only fields (INSTRUMENT) ---------- */
 .field label.locked::after { content: " 🔒"; font-size: 11px; }
@@ -475,6 +475,22 @@ button.chip-ind.active { border-color: var(--accent); color: var(--accent); back
    with those Save buttons. */
 .delta-actions { margin-left: auto; margin-right: -4px; }
 
+/* The "hide bars missing due to no liquidity" toggle. It is the control for the list of
+   missing bars, so it sits in its own row directly above that list — not squeezed into the
+   panel header beside the button that changes data. */
+.delta-toggle-row { margin: 10px 0 8px; }
+
+.delta-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+}
+.delta-toggle:hover { color: var(--text); }
+
 .delta-badge {
   display: inline-block;
   padding: 4px 12px;
@@ -495,6 +511,40 @@ button.chip-ind.active { border-color: var(--accent); color: var(--accent); back
 .missing-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 12px; }
 
 .chip.date-chip { font-variant-numeric: tabular-nums; }
+
+/* One block per session with missing bars: the day, its count, then the bars
+   themselves as chips in grid order. */
+.delta-day {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px 2px;
+  margin: 0 0 8px;
+}
+.delta-day-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+.delta-day .missing-chips { margin: 6px 0 8px; }
+
+/* Inferred from the dataset's own session shape rather than confirmed against
+   the provider: dimmed, so "we know" and "we think" never look alike. */
+.chip.inferred {
+  color: var(--muted);
+  border-style: dashed;
+}
+
+/* An interval nobody traded: a real absence the OPERATOR did not cause and cannot fix,
+   so it reads as quiet, not as a to-do. Distinct from `.inferred` (which may yet turn
+   out to be a gap) so the two are never confused in a list that mixes them. */
+.chip.no-trades {
+  color: var(--muted);
+  border-style: dotted;
+  opacity: 0.65;
+  text-decoration: line-through;
+}
 
 #delta-msg { margin: 8px 0 0; }
 
@@ -634,6 +684,24 @@ button.danger:disabled { opacity: 0.45; cursor: not-allowed; }
 #rules-body p.note { margin-bottom: 2px; }
 
 #rules-workbench { display: flex; flex-direction: column; gap: 14px; }
+
+/* "Copy rules from": the sources as buttons, one click per source — the choice IS the
+   action, so there is no select-then-confirm step to get wrong. Sits above the list it
+   will extend, and only appears once the button in the header is pressed. */
+.rules-copy-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+}
+.rules-copy-row[hidden] { display: none; }
+.rules-copy-list { display: flex; flex-wrap: wrap; gap: 6px; }
+button.copy-src { white-space: nowrap; }
+button.copy-src .copy-n { color: var(--muted); font-variant-numeric: tabular-nums; }
 
 #rules-list { display: flex; flex-direction: column; gap: 14px; }
 
