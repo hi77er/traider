@@ -263,3 +263,34 @@ def test_the_helper_is_a_shared_global():
     src = CHART_ZOOM_JS.read_text(encoding="utf-8")
     assert "window.ChartZoom = (function ()" in src
     assert "\nconst ChartZoom" not in src, "a lexical global cannot be checked by callers"
+
+
+def test_every_chart_can_show_its_whole_series():
+    """Zooming out stopped at a fortnight instead of the 60 days that were loaded.
+
+    The clamp below allows the whole series, but the LIBRARY silently refuses to
+    draw more bars than fit at its own ``minBarSpacing`` (0.5 px per bar by default)
+    and applies a NARROWER range than the one it was handed. A 528px plot therefore
+    capped out at ~1,056 bars, so 60 days of 5-minute candles (3,191 bars) could
+    never be viewed in full however far the user pinched — and because the applied
+    range then never matched the range we asked for, the gesture also stopped
+    registering as satisfied. Every chart now sets a much denser floor, taken from
+    this module so the app's limit and the library's cannot drift apart.
+    """
+    zoom_src = CHART_ZOOM_JS.read_text(encoding="utf-8")
+    assert "MIN_BAR_SPACING: MIN_BAR_SPACING" in zoom_src, "the constant must be exported"
+    decl = [ln for ln in zoom_src.splitlines() if "const MIN_BAR_SPACING" in ln][0]
+    value = float(decl.split("=")[1].strip().rstrip(";"))
+    assert value <= 0.05, "0.5 px per bar (the library default) is what caused the bug"
+    # 60 days of 5-minute RTH bars is 3,191, and it must fit a narrow pane.
+    assert 500 / value > 3200, f"{value} px/bar cannot fit 3,191 bars into 500px"
+
+    assets = CHART_ZOOM_JS.parent
+    for name in ("app.js", "report.js"):
+        src = (assets / name).read_text(encoding="utf-8")
+        charts = src.count("LightweightCharts.createChart(")
+        fixed = src.count("minBarSpacing: ChartZoom.MIN_BAR_SPACING")
+        assert charts and charts == fixed, (
+            f"{name}: {charts} charts but {fixed} set minBarSpacing — a chart without "
+            "it silently caps how far the user can zoom out"
+        )

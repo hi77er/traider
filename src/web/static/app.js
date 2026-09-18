@@ -223,7 +223,7 @@ function buildMainChart() {
     height: 380,
     layout: { background: { color: "#11141a" }, textColor: "#cfd6e4" },
     grid: { vertLines: { color: "#22262f" }, horzLines: { color: "#22262f" } },
-    timeScale: { timeVisible: false, borderColor: "#333a46" },
+    timeScale: { timeVisible: false, borderColor: "#333a46", minBarSpacing: ChartZoom.MIN_BAR_SPACING },
     rightPriceScale: { borderColor: "#333a46" },
     crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
     // Zoom happens ONLY on a trackpad/touch pinch, clamped to the data (see
@@ -1941,7 +1941,7 @@ function drawOscPanes() {
         height: 110,
         layout: { background: { color: "transparent" }, textColor: "#8a93a6" },
         grid: { vertLines: { color: "#22262f" }, horzLines: { color: "#22262f" } },
-        timeScale: { timeVisible: false, borderColor: "#333a46" },
+        timeScale: { timeVisible: false, borderColor: "#333a46", minBarSpacing: ChartZoom.MIN_BAR_SPACING },
         rightPriceScale: { borderColor: "#333a46" },
         // Same wheel policy as the main chart: a plain wheel pans, only a pinch
         // zooms, and ChartZoom stops it at this pane's own data.
@@ -3847,7 +3847,7 @@ function drawBtCurve(points, runBarSize) {
       layout: { background: { color: "transparent" }, textColor: "#8a93a6" },
       grid: { vertLines: { color: "#22262f" }, horzLines: { color: "#22262f" } },
       rightPriceScale: { borderColor: "#333a46" },
-      timeScale: { borderColor: "#333a46", visible: false },
+      timeScale: { borderColor: "#333a46", visible: false, minBarSpacing: ChartZoom.MIN_BAR_SPACING },
       // Same wheel policy as the price chart and the panes (see chart_zoom.js).
       handleScroll: { mouseWheel: true },
       handleScale: {

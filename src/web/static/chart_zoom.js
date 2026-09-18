@@ -36,6 +36,21 @@
  * is what makes that contract visible — the same way `LightweightCharts` arrives.
  */
 window.ChartZoom = (function () {
+  // Pixels per bar at maximum zoom-out. Every chart here passes this as its
+  // ``minBarSpacing``, and it has to be small: the library will not draw more bars
+  // than fit at ITS ``minBarSpacing`` (0.5 by default), silently applying a NARROWER
+  // range than the one it was given. A 528px-wide plot therefore refused anything
+  // past ~1,056 bars, so 60 days of 5-minute candles (3,191 bars) could only ever be
+  // zoomed out to about a fortnight — even though the clamp below allows the whole
+  // series, and even though asking for the whole series is exactly what "zoom out as
+  // far as it goes" means. Nothing was wrong with the clamp; the two limits simply
+  // disagreed, and the library's was the smaller one.
+  //
+  // 0.01 leaves room for far more bars than a 60-day window can hold at any bar size
+  // (60 days of 1-minute RTH bars is ~23,400). It only ever bites at extreme
+  // zoom-out, where the candles are sub-pixel anyway.
+  const MIN_BAR_SPACING = 0.01;
+
   const resolvers = new WeakMap(); // element -> () => {chart, barCount}
   const bound = new WeakSet(); // elements that already carry the listener
 
@@ -87,5 +102,5 @@ window.ChartZoom = (function () {
     }, { passive: false });
   }
 
-  return { bind: bind, clampRange: clampRange };
+  return { bind: bind, clampRange: clampRange, MIN_BAR_SPACING: MIN_BAR_SPACING };
 })();

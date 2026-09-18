@@ -517,7 +517,7 @@
       layout: { background: { color: "transparent" }, textColor: "#8a93a6" },
       grid: { vertLines: { color: "#22262f" }, horzLines: { color: "#22262f" } },
       rightPriceScale: { borderColor: "#333a46" },
-      timeScale: { borderColor: "#333a46" },
+      timeScale: { borderColor: "#333a46", minBarSpacing: ChartZoom.MIN_BAR_SPACING },
       // Same wheel policy as the dashboard (see chart_zoom.js): a plain wheel
       // pans, only a pinch zooms, and the zoom stops at this chart's own data
       // rather than being clamped by the library after the fact.
