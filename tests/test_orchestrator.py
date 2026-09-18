@@ -835,8 +835,14 @@ def test_run_sleeps_to_the_next_boundary_after_a_tick(tmp_path, armed):
         sync_call=lambda: {}, clock_call=Calls().clock, driver=_driver(settings),
     )
 
-    # 14:05 -> the 13:30 bar closes at 14:30, plus the provider-lag allowance.
-    assert slept == [pytest.approx(25 * 60 + orchestrator.PROVIDER_LAG_SECONDS, abs=1)]
+    # 14:05 -> the 13:30 bar closes at 14:30, plus the provider-lag allowance. The wait is
+    # SLICED so that turning trading off stops the loop mid-sleep rather than at the boundary
+    # (``_wait_for_the_boundary``), so what is asserted is the TOTAL wait — and that no single
+    # slice outlasts the check interval, which is the property that makes the switch responsive.
+    total = 25 * 60 + orchestrator.PROVIDER_LAG_SECONDS
+    assert sum(slept) == pytest.approx(total, abs=1)
+    assert len(slept) > 1, "one long sleep would not notice the switch until the boundary"
+    assert max(slept) <= orchestrator.STOP_CHECK_SECONDS
 
 
 def test_a_run_that_starts_late_decides_only_on_the_newest_closed_bar(tmp_path, armed):
@@ -901,9 +907,11 @@ def test_each_tick_uses_the_settings_resolved_for_that_tick(tmp_path, armed):
     with no restart, no signal and no IPC. The record's own ``day`` is what proves which of
     the two settings the tick was actually handed: 23:00 in New York is already tomorrow
     in UTC, so the two produce different dates from the same moment.
+
+    The switch stays ARMED for both ticks: a run that is off stops after one tick, which
+    would make this a test about the switch rather than about resolution.
     """
     settings = armed()
-    write_state(settings, {"on": False, "since": None})
     elsewhere = _settings(tmp_path, market_timezone="UTC")
     resolved = [settings, elsewhere]
     moments = [_at("2024-01-04 23:00"), _at("2024-01-04 23:00")]

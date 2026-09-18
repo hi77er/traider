@@ -179,6 +179,11 @@ def test_the_notes_about_an_odd_bar_come_back_with_the_tick(api_settings):
 
     What was odd about a bar was decided when the bar was decided (``src.data.quality``), and
     a page that recomputed it later from today's data would describe a different bar.
+
+    The day is ASKED FOR rather than left to the endpoint's default. Without ``day`` the
+    reader falls back to the newest day in the strategy's index, and then to the exchange's
+    today — and ``append_tick`` does not write an index entry, so a tick written for a fixed
+    date would be looked for in today's file instead.
     """
     settings = api_settings
     at = datetime(2026, 9, 17, 14, 0, tzinfo=timezone.utc)
@@ -188,14 +193,18 @@ def test_the_notes_about_an_odd_bar_come_back_with_the_tick(api_settings):
     )
     store.append_tick(settings, "Alpha", record, when=at)
 
-    body = client.get("/api/v1/log").json()
+    body = client.get("/api/v1/log", params={"day": "2026-09-17"}).json()
 
     assert body["ticks"][0]["notes"] == ["the bar has a volume of 0"]
 
 
 def test_a_tick_written_before_notes_existed_is_still_readable(api_settings):
     """Old logs stay readable. The field is new, the file is append-only, and a page that
-    assumed it was there would show an empty table for every day before it existed."""
+    assumed it was there would show an empty table for every day before it existed.
+
+    The day is asked for, for the reason given in the test above: an index entry is not
+    written here, so the endpoint's default would look in today's file.
+    """
     settings = api_settings
     at = datetime(2026, 9, 17, 13, 0, tzinfo=timezone.utc)
     old = {
@@ -204,7 +213,7 @@ def test_a_tick_written_before_notes_existed_is_still_readable(api_settings):
     }
     store.append_tick(settings, "Alpha", old, when=at)
 
-    body = client.get("/api/v1/log").json()
+    body = client.get("/api/v1/log", params={"day": "2026-09-17"}).json()
 
     assert [tick["action"] for tick in body["ticks"]] == ["decided"]
     assert "notes" not in body["ticks"][0], "the row is passed through as it was written"
