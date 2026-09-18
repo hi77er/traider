@@ -14,14 +14,12 @@ from typing import Dict, Optional
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from src.web.auth import require_auth
 from src.web.services import config_service
 from src.web.services.trading_service import require_trading_off
 
 router = APIRouter(
     prefix="/api/v1/account",
     tags=["account"],
-    dependencies=[Depends(require_auth)],
 )
 
 

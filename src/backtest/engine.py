@@ -41,7 +41,7 @@ import pandas as pd
 from src.config.settings import Settings
 from src.data.dataset import bar_label, chart_time, load_dataset
 from src.execution.config import execution_status
-from src.model.simple_model import RuleBasedSignalGenerator
+from src.model.simple_model import MODEL_KIND, RuleBasedSignalGenerator
 
 from . import metrics
 from . import risk_sim
@@ -196,7 +196,7 @@ def _inputs_snapshot(
     return {
         "settings": _settings_snapshot(settings),
         "execution": _execution_snapshot(settings),
-        "model_type": str(settings.model_type),
+        "model_type": MODEL_KIND,
         "rules": rules,
         "skipped_rules": skipped,
         "rules_hash": hashlib.sha256(blob.encode("utf-8")).hexdigest()[:12],
@@ -209,8 +209,6 @@ def _inputs_snapshot(
             "start": str(df.index.min()),
             "end": str(df.index.max()),
             "periods_per_year": int(ppy),
-            "backtest_start_date": getattr(settings, "backtest_start_date", None),
-            "backtest_end_date": getattr(settings, "backtest_end_date", None),
         },
     }
 
@@ -227,7 +225,7 @@ def run_backtest(settings: Settings, dataset: Optional[pd.DataFrame] = None) -> 
         "ok": False,
         "symbol": settings.instrument,
         "bar_size": settings.historical_bar_size,
-        "model_type": settings.model_type,
+        "model_type": MODEL_KIND,
         "error": None,
         "metrics": None,
         "gate": None,
@@ -237,25 +235,17 @@ def run_backtest(settings: Settings, dataset: Optional[pd.DataFrame] = None) -> 
         "rule_stats": {"evaluated": 0, "skipped": 0},
     }
 
-    if str(settings.model_type).lower() != "rule_based":
-        base["error"] = (
-            f"Backtest requires MODEL_TYPE=rule_based (current: {settings.model_type}). "
-            f"Set it in the active strategy's Configuration, then re-run."
-        )
-        return base
-
-    df = dataset if dataset is not None else load_dataset(settings, settings.instrument, settings.historical_bar_size)
+    df = dataset if dataset is not None else load_dataset(
+        settings, settings.instrument, settings.historical_bar_size
+    )
     if df is None or df.empty:
         base["error"] = "No dataset yet for this strategy — download historical data first."
         return base
     df = df.sort_index()
-    if settings.backtest_start_date:
-        df = df[df.index >= pd.Timestamp(settings.backtest_start_date)]
-    if settings.backtest_end_date:
-        df = df[df.index <= pd.Timestamp(settings.backtest_end_date)]
-    if df.empty:
-        base["error"] = "Dataset is empty after applying the backtest window."
-        return base
+    # The WHOLE dataset, deliberately: no window setting narrows it. The window a strategy
+    # trades is the one its own HISTORICAL_LOOKBACK fetched, and a run over a slice of that
+    # would be gated on a period the strategy never chose. The replayed range is reported
+    # instead ("window" in ``inputs``), so what was tested is still attributable.
 
     generator = RuleBasedSignalGenerator(settings=settings)
     dec = generator.evaluate_frame(df)  # same index as df
@@ -412,7 +402,7 @@ def run_backtest(settings: Settings, dataset: Optional[pd.DataFrame] = None) -> 
         "error": None,
         "symbol": settings.instrument,
         "bar_size": settings.historical_bar_size,
-        "model_type": settings.model_type,
+        "model_type": MODEL_KIND,
         "inputs": inputs,
         "rows": int(len(df)),
         "start": str(df.index.min()),

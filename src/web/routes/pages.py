@@ -7,9 +7,8 @@ from pathlib import Path
 from fastapi import APIRouter, Depends
 from fastapi.responses import FileResponse
 
-from src.web.auth import require_auth
 
-router = APIRouter(dependencies=[Depends(require_auth)])
+router = APIRouter()
 
 _INDEX = Path(__file__).resolve().parents[1] / "templates" / "index.html"
 _MARKET = Path(__file__).resolve().parents[1] / "templates" / "market.html"

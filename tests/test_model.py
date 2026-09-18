@@ -32,7 +32,6 @@ def _settings(tmp_path) -> Settings:
         _env_file=None,
         strategy_rules_file=str(tmp_path / "rules" / "active.json"),
         instrument="AAPL",
-        model_type="rule_based",
         model_buy_threshold=0.6,
         model_sell_threshold=0.6,
     )
@@ -179,7 +178,7 @@ def _candles(n=25, step=0.5):
 def test_evaluate_frame_raw_rule_and_hold():
     # BUY when open < high (fires every bar except when equal) with conf .75.
     rules = [_rule("BUY", conf=0.75, conditions=[_cond("open", "<", ref="high")])]
-    settings = Settings(_env_file=None, model_type="rule_based", model_buy_threshold=0.6, model_sell_threshold=0.6)
+    settings = Settings(_env_file=None, model_buy_threshold=0.6, model_sell_threshold=0.6)
     gen = M.RuleBasedSignalGenerator(settings=settings, rules=rules)
     df = _candles()
     out = gen.evaluate_frame(df)
@@ -197,7 +196,7 @@ def test_evaluate_frame_raw_rule_and_hold():
 def test_evaluate_frame_feature_warmup_and_latest_identical():
     # SELL when close > sma_20 (feature from the shared FeatureEngineer).
     rules = [_rule("SELL", conf=0.75, conditions=[_cond("close", ">", ref="sma_20")])]
-    settings = Settings(_env_file=None, model_type="rule_based", model_buy_threshold=0.6, model_sell_threshold=0.6)
+    settings = Settings(_env_file=None, model_buy_threshold=0.6, model_sell_threshold=0.6)
     gen = M.RuleBasedSignalGenerator(settings=settings, rules=rules)
     df = _candles()
     out = gen.evaluate_frame(df)
@@ -211,13 +210,13 @@ def test_evaluate_frame_feature_warmup_and_latest_identical():
 
 
 def test_evaluate_latest_empty_input():
-    gen = M.RuleBasedSignalGenerator(settings=Settings(_env_file=None, model_type="rule_based"), rules=[])
+    gen = M.RuleBasedSignalGenerator(settings=Settings(_env_file=None), rules=[])
     sig = gen.evaluate_latest(pd.DataFrame())
     assert sig.signal == "HOLD"
 
 
 def test_no_rules_always_hold_over_frame():
-    gen = M.RuleBasedSignalGenerator(settings=Settings(_env_file=None, model_type="rule_based"), rules=[])
+    gen = M.RuleBasedSignalGenerator(settings=Settings(_env_file=None), rules=[])
     out = gen.evaluate_frame(_candles())
     assert (out["signal"] == "HOLD").all()
 
@@ -264,32 +263,12 @@ def test_generator_for_strategy_loads_named_rules(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# MODEL_TYPE gate + disabled-feature skipping
+# disabled-feature skipping
 # ---------------------------------------------------------------------------
 
 
-def test_rule_based_generator_rejects_other_model_types(tmp_path):
-    st = _settings(tmp_path)
-    store = R.StrategyStore(active="a", strategies={"a": R.default_ruleset("AAPL").model_copy(update={"name": "a"})})
-    R.save_store(st, store)
-    logistic = Settings(
-        _env_file=None,
-        strategy_rules_file=str(tmp_path / "rules" / "active.json"),
-        model_type="logistic_regression",
-    )
-    # loader path (reads the active strategy) must refuse…
-    with pytest.raises(ValueError):
-        M.RuleBasedSignalGenerator(settings=logistic)
-    # …and so must explicitly-provided rules under a different model type.
-    with pytest.raises(ValueError):
-        M.RuleBasedSignalGenerator(
-            settings=logistic,
-            rules=[_rule("BUY", conditions=[_cond("close", "<", value=999)])],
-        )
-
-
 def test_skips_rules_referencing_disabled_features():
-    settings = Settings(_env_file=None, model_type="rule_based", feature_sma_enabled=False)
+    settings = Settings(_env_file=None, feature_sma_enabled=False)
     avail = allowed_series(settings)
     assert "close" in avail and "sma_20" not in avail  # sma disabled
 
@@ -306,9 +285,9 @@ def test_skips_rules_referencing_disabled_features():
 
 
 def test_allowed_series_follows_feature_toggles():
-    on = Settings(_env_file=None, model_type="rule_based")
+    on = Settings(_env_file=None)
     assert "sma_50" in allowed_series(on) and "rsi_14" in allowed_series(on)
-    off = Settings(_env_file=None, model_type="rule_based", feature_rsi_enabled=False)
+    off = Settings(_env_file=None, feature_rsi_enabled=False)
     assert "rsi_14" not in allowed_series(off)
     assert "sma_50" in allowed_series(off)
     for raw in ("open", "high", "low", "close", "volume"):  # always available

@@ -28,7 +28,6 @@ from fastapi import APIRouter, Depends, Query
 from src.config.effective import get_effective_settings_dep
 from src.execution import accounts, positions
 from src.execution.config import execution_status
-from src.web.auth import require_auth
 from src.web.services import clock_service, loop_service
 
 logger = logging.getLogger(__name__)
@@ -36,7 +35,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter(
     prefix="/api/v1",
     tags=["live"],
-    dependencies=[Depends(require_auth)],
 )
 
 #: The fields of Alpaca's order payload this UI shows, in the order it shows them. A

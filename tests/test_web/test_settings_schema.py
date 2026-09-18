@@ -13,7 +13,6 @@ exist.
 
 import json
 
-import pytest
 from fastapi.testclient import TestClient
 
 from src.config.settings import Settings as S
@@ -49,10 +48,9 @@ def test_strategy_config_groups_schema():
 
 
 def test_the_model_section_is_gone():
-    """The only model that exists is the rule-based one — the backtester and the
-    signal service both refuse to run under any other — so MODEL_TYPE was a switch
-    between a working model and a non-existent one, and the thresholds beside it fed
-    the model that is not implemented."""
+    """There is one model kind — rule-based — and it is a constant, not a setting, so
+    MODEL_TYPE was a switch between a working model and a non-existent one. The
+    thresholds beside it fed a model that is not implemented."""
     groups = config_service.strategy_config_groups(S(_env_file=None))
     assert "Model" not in [g["name"] for g in groups]
     offered = {f["key"] for g in groups for f in g["fields"]}
@@ -61,22 +59,22 @@ def test_the_model_section_is_gone():
                  "MODEL_RETRAIN_INTERVAL_DAYS"):
         assert gone not in config_service.STRATEGY_SCOPED_KEYS, "nor writable as a strategy key"
         assert gone in config_service.RETIRED_STRATEGY_KEYS, "...and dropped, not rejected"
-    # The settings themselves stay: the code that reads them is still there, and
-    # `.env` is where they are set now.
-    s = S(_env_file=None)
-    assert s.model_type == "rule_based" and s.model_buy_threshold == 0.6
-    assert s.model_retrain_interval_days == 30
+    # MODEL_TYPE is gone from the settings model too, and what it reported is now the
+    # module constant. The confidence thresholds stay: the generator still gates on them.
+    assert "model_type" not in S.model_fields
+    # ...as did the retrain cadence, which had no subject: nothing retrains a rule-based
+    # generator.
+    assert "model_retrain_interval_days" not in S.model_fields
+    assert S(_env_file=None).model_buy_threshold == 0.6
 
 
-def test_rule_based_is_the_model_in_force_by_default():
-    """rule_based is the only model implemented, and both the backtester and the
-    signal service refuse to run under anything else — so a fresh install must not
-    start on a model that cannot run. The other value stays legal for the day it is
-    built; a typo is still refused."""
-    assert S(_env_file=None).model_type == "rule_based"
-    assert S(_env_file=None, model_type="logistic_regression").model_type == "logistic_regression"
-    with pytest.raises(Exception):
-        S(_env_file=None, model_type="nope")
+def test_rule_based_is_the_model_in_force():
+    """Exactly one model kind exists, so it is a constant rather than a setting: the
+    module own it, and the backtest and the signal endpoint report it."""
+    from src.model import simple_model
+
+    assert simple_model.MODEL_KIND == "rule_based"
+    assert "MODEL_KIND" in simple_model.__all__
 
 
 def test_the_confidence_thresholds_still_gate_signals():
@@ -130,7 +128,7 @@ def test_strategy_scope_carries_trading_gates():
     by_key = {f["key"]: f for g in config_service.strategy_config_groups(S(_env_file=None))
               for f in g["fields"]}
     for key in ("MARKET_TIMEZONE", "TRADING_START_HOUR",
-                "TRADING_END_HOUR", "DATA_DELTA_PULL_TIME",
+                "TRADING_END_HOUR",
                 "GATE_MIN_SHARPE", "GATE_MAX_DRAWDOWN_PERCENT",
                 "GATE_MIN_WIN_RATE_PERCENT", "GATE_MAX_WEEKLY_LOSS_PERCENT"):
         assert key in by_key, key
@@ -197,22 +195,19 @@ def test_the_removed_account_settings_are_gone_from_the_form():
                  "BACKTEST_START_DATE", "BACKTEST_END_DATE", "TRAIN_TEST_SPLIT"):
         assert gone not in by_key, f"{gone} must not be offered any more"
         assert gone not in config_service.ACCOUNT_SCOPED_KEYS, "nor writable through the API"
-    # ...and the settings themselves still exist on the model: the dataset code and the
-    # backtester read them. Unset is a real value here — no backtest window means the
-    # strategy's whole period, which is exactly the behaviour wanted.
-    for field in ("historical_start_date", "backtest_start_date", "backtest_end_date",
-                  "train_test_split"):
-        assert field in S.model_fields, field
-    defaults = S(_env_file=None)
-    assert defaults.backtest_start_date is None and defaults.backtest_end_date is None
-    assert defaults.train_test_split == 0.8
+    # The historical dates are gone from the model too, not just from the form: a window
+    # counted back from now is the only one a fetch uses, so a fixed start/end could only
+    # disagree with the period the strategy reports.
+    assert not [k for k in S.model_fields if k.startswith("historical_start") or k.startswith("historical_end")]
+    assert "historical_lookback" in S.model_fields, "the period is the window"
+    # The split fraction is the exception of a different kind: nothing trains, so it is gone.
+    assert "train_test_split" not in S.model_fields
 
 
 def test_cloud_and_state_storage_are_not_account_settings():
     """Both are INFRASTRUCTURE, not properties of a trading account: one dataset copy
-    per bucket, one state table per deployment. Neither is being developed yet, so
-    they are not offered here at all — their settings stay on the model and come from
-    `.env`, where the values already live."""
+    per bucket, one state table per deployment. Neither is offered here at all — they
+    come from `.env`."""
     by_key = {f["key"] for g in config_service.account_sections(S(_env_file=None))
               for f in g["fields"]}
     for gone in ("S3_ENABLED", "S3_BUCKET", "S3_PREFIX", "S3_ENDPOINT_URL",
@@ -220,13 +215,18 @@ def test_cloud_and_state_storage_are_not_account_settings():
                  "DYNAMODB_ENDPOINT_URL"):
         assert gone not in by_key, f"{gone} must not be offered in Account Settings"
         assert gone not in config_service.ACCOUNT_SCOPED_KEYS, "nor writable through the API"
-    # The sections are gone with them.
-    names = [g["name"] for g in config_service.account_sections(S(_env_file=None))]
-    assert not [n for n in names if "Storage" in n], names
-    # ...but the S3 sync still works off the settings, so the fields must remain.
+    # Neither the S3 mirror nor the DynamoDB state table exists any more, so the fields
+    # are gone from the model rather than offered as dead switches.
     s = S(_env_file=None)
-    assert s.s3_enabled is False and s.s3_prefix == "traider/historical"
-    assert s.aws_region == "us-east-1" and s.dynamodb_table == "traider-state"
+    assert not [k for k in ("s3_enabled", "s3_bucket", "s3_prefix", "s3_endpoint_url",
+                            "aws_region", "dynamodb_table", "dynamodb_ttl_days",
+                            "dynamodb_endpoint_url") if k in S.model_fields], "removed, not inert"
+    assert not [k for k in S.model_fields if k.startswith("s3_") or k.startswith("aws_")]
+    # The dataset is a local Parquet file and nothing else — no off-site copy to fall
+    # back to, so a missing file is simply "no dataset yet".
+    from src.data import dataset as ds
+
+    assert not [n for n in dir(ds) if "s3" in n.lower()], "the mirror code went with the fields"
 
 
 def test_update_account_persists_json_and_drives_folders(tmp_path, monkeypatch):
@@ -258,9 +258,9 @@ def test_update_account_persists_json_and_drives_folders(tmp_path, monkeypatch):
     # it — otherwise there would be two competing places to set it.
     res4 = config_service.update_account({"EXECUTION_ENV": "live"})
     assert res4["ok"] is False and res4["errors"]
-    # ...and so must a dropped IBKR key, a date the form no longer offers, or a
+    # ...and so must a dropped IBKR key, a date the form does not offer, or a
     # cloud/state key that moved out of this layer.
-    for gone in ("IBKR_ACCOUNT_ID", "BACKTEST_START_DATE", "TRAIN_TEST_SPLIT",
+    for gone in ("IBKR_ACCOUNT_ID", "HISTORICAL_START_DATE", "TRAIN_TEST_SPLIT",
                  "S3_BUCKET", "DYNAMODB_TABLE"):
         refused = config_service.update_account({gone: "x"})
         assert refused["ok"] is False and refused["errors"], gone

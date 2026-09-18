@@ -47,11 +47,17 @@ def test_resolve_history_window_uses_days_from_now(tmp_path):
     assert pd.Timestamp(start).date() == expected
 
 
-def test_resolve_history_window_falls_back_to_dates(tmp_path):
-    s = _settings(tmp_path, historical_lookback=None, historical_start_date="2020-01-01")
-    start, end = resolve_history_window(s)
-    assert start == "2020-01-01"
-    assert end is None
+def test_resolve_history_window_needs_a_period(tmp_path):
+    """No period is an ERROR, not another window.
+
+    The start/end dates that used to answer this are gone. A silent fallback is how a
+    strategy set to "30 days" came back fetched from 2022-01-01, and the panel had no way
+    to show the disagreement — so an unreadable period is refused where the operator can
+    see it (the backfill job reports this message) rather than turned into something else.
+    """
+    s = _settings(tmp_path, historical_lookback=None)
+    with pytest.raises(ValueError, match="HISTORICAL_LOOKBACK"):
+        resolve_history_window(s)
 
 
 def test_a_bare_number_still_means_years(tmp_path):

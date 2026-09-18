@@ -14,10 +14,9 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import FileResponse
 
-from src.web.auth import require_auth
 from src.web.services import report_service
 
-router = APIRouter(dependencies=[Depends(require_auth)])
+router = APIRouter()
 
 _REPORT_PAGE = Path(__file__).resolve().parents[1] / "templates" / "report.html"
 

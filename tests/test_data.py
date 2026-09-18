@@ -607,13 +607,9 @@ def test_fetch_candles_persists_dataset(tmp_path):
 
 
 def test_fetch_candles_empty_end_date_becomes_none(tmp_path):
-    """An empty HISTORICAL_END_DATE (i.e. "until now") must reach the
-    provider as None — not "" — or OpenBB rejects the request."""
-    settings = Settings(
-        historical_data_dir=str(tmp_path),
-        historical_start_date="2024-01-01",
-        historical_end_date="",
-    )
+    """A blank end ("until now") must reach the provider as None — not "" — or OpenBB
+    rejects the request. The start comes from the period when it is not given."""
+    settings = Settings(historical_data_dir=str(tmp_path), historical_lookback="30d")
     seen = {}
 
     class RecordingClient:
@@ -622,71 +618,26 @@ def test_fetch_candles_empty_end_date_becomes_none(tmp_path):
             seen["end_date"] = end_date
             return OpenBBClient._normalize(make_raw_df(1))
 
-    fetch_candles(settings, client=RecordingClient(), symbol="AAPL", bar_size="1d")
-    assert seen["start_date"] == "2024-01-01"
+    fetch_candles(settings, client=RecordingClient(), symbol="AAPL", end_date="", bar_size="1d")
     assert seen["end_date"] is None
+    # No start given, so the configured period decided it — counted back from today, not
+    # from a date stored anywhere.
+    expected = (pd.Timestamp.now(tz=settings.market_timezone).normalize() - pd.DateOffset(days=30)).date()
+    assert pd.Timestamp(seen["start_date"]).date() == expected
 
 
-def test_empty_optional_date_fields_normalize_to_none():
-    s = Settings(
-        historical_start_date="",
-        historical_end_date="",
-        backtest_start_date="  ",
-        backtest_end_date="",
+def test_an_explicit_start_date_still_wins(tmp_path):
+    """The period is the default, not a cage: a caller may fetch any window."""
+    settings = Settings(historical_data_dir=str(tmp_path), historical_lookback="30d")
+    seen = {}
+
+    class RecordingClient:
+        def fetch_historical(self, symbol, start_date, end_date, interval, provider=None):
+            seen.update(start_date=start_date, end_date=end_date)
+            return OpenBBClient._normalize(make_raw_df(1))
+
+    fetch_candles(
+        settings, client=RecordingClient(), symbol="AAPL",
+        start_date="2024-01-01", end_date="2024-06-01", bar_size="1d",
     )
-    assert s.historical_start_date is None
-    assert s.historical_end_date is None
-    assert s.backtest_start_date is None
-    assert s.backtest_end_date is None
-
-
-# ---------------------------------------------------------------------------
-# S3 sync (durable source of truth) — boto3 is mocked
-# ---------------------------------------------------------------------------
-def test_dataset_uploads_to_s3_when_enabled(tmp_path, monkeypatch):
-    import src.data.dataset as ds
-
-    calls = {}
-
-    class FakeS3:
-        def upload_file(self, filename, bucket, key):
-            calls["upload"] = (filename, bucket, key)
-
-        def download_file(self, bucket, key, filename):
-            calls["download"] = (bucket, key, filename)
-
-    monkeypatch.setattr(ds, "_s3_client", lambda settings: FakeS3())
-    settings = Settings(
-        historical_data_dir=str(tmp_path),
-        s3_enabled=True,
-        s3_bucket="traider-dataset",
-        s3_prefix="traider/historical",
-    )
-    df = OpenBBClient._normalize(make_raw_df(3))
-    save_dataset(settings, df, "AAPL", "1d")
-
-    assert dataset_path(settings, "AAPL", "1d").exists()  # local always written
-    assert calls["upload"][1] == "traider-dataset"
-    assert calls["upload"][2] == "traider/historical/AAPL_1d.parquet"
-
-
-def test_dataset_restores_from_s3_when_local_missing(tmp_path, monkeypatch):
-    import src.data.dataset as ds
-
-    class FakeS3:
-        def download_file(self, bucket, key, filename):
-            # Simulate S3 holding the file: materialize it locally.
-            df = OpenBBClient._normalize(make_raw_df(3))
-            Path(filename).parent.mkdir(parents=True, exist_ok=True)
-            df.to_parquet(filename)
-
-    monkeypatch.setattr(ds, "_s3_client", lambda settings: FakeS3())
-    settings = Settings(
-        historical_data_dir=str(tmp_path / "hist"),
-        s3_enabled=True,
-        s3_bucket="traider-dataset",
-        s3_prefix="traider/historical",
-    )
-    loaded = load_dataset(settings, "AAPL", "1d")
-    assert len(loaded) == 3
-    assert dataset_path(settings, "AAPL", "1d").exists()  # restored to local
+    assert seen["start_date"] == "2024-01-01" and seen["end_date"] == "2024-06-01"

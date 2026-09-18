@@ -19,7 +19,7 @@ from typing import Dict, List
 from src.backtest import risk_sim
 from src.config.effective import get_effective_settings
 from src.data.dataset import bar_label, chart_time, load_dataset
-from src.model.simple_model import RuleBasedSignalGenerator
+from src.model.simple_model import MODEL_KIND, RuleBasedSignalGenerator
 
 logger = logging.getLogger(__name__)
 
@@ -39,8 +39,7 @@ def _rule_view(rule) -> dict:
 def signal_payload() -> dict:
     """Evaluate the active strategy's rules over the dataset and report it.
 
-    Rule-based generation is only valid under ``MODEL_TYPE=rule_based``; for
-    any other model type the endpoint reports why no rule signals are shown.
+    Every signal in this app is rule-based: there is no other model kind to switch to.
     """
     settings = get_effective_settings()
     symbol = settings.instrument
@@ -49,11 +48,11 @@ def signal_payload() -> dict:
     payload: Dict[str, object] = {
         "ok": True,
         "available": False,
-        "model_type": settings.model_type,
+        "model_type": MODEL_KIND,
         "context": {
             "instrument": symbol,
             "bar_size": interval,
-            "model_type": settings.model_type,
+            "model_type": MODEL_KIND,
         },
         "enabled_rules": [],
         "latest": None,
@@ -61,14 +60,6 @@ def signal_payload() -> dict:
         "fills": [],
         "counts": {},
     }
-
-    if str(settings.model_type).lower() != "rule_based":
-        payload["reason"] = (
-            f"Rule-based signals only run when MODEL_TYPE=rule_based "
-            f"(current: {settings.model_type}). Set it in the active strategy's "
-            f"Configuration or in .env, then save."
-        )
-        return payload
 
     gen = RuleBasedSignalGenerator(settings=settings)  # loads ACTIVE strategy rules
     payload["context"]["buy_threshold"] = gen.buy_threshold

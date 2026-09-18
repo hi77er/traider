@@ -16,6 +16,7 @@ from src.backtest import metrics
 from src.backtest.engine import position_intervals, run_backtest, simulate_frame
 from src.config.settings import Settings
 from src.model import rules as rules_mod
+from src.model import simple_model
 
 
 # A run with NO risk settings: the raw strategy replay, which is what these tests
@@ -36,7 +37,6 @@ def _settings(tmp_path, **kw) -> Settings:
         strategy_rules_file=str(tmp_path / "active.json"),
         instrument="TEST",
         historical_bar_size="1d",
-        model_type="rule_based",
         # These tests pin the RAW strategy simulation (no sizing, no stops),
         # which is what simulate_frame() does. A raw run is now expressed by
         # leaving the risk settings EMPTY rather than by a master switch, so they
@@ -233,14 +233,6 @@ def _same_day_candles(n=8, freq="1h") -> pd.DataFrame:
     )
 
 
-def test_run_backtest_requires_rule_based(tmp_path):
-    settings = _settings(tmp_path, model_type="logistic_regression")
-    _store_buy_all(tmp_path, settings)
-    res = run_backtest(settings, dataset=_rising_df(10))
-    assert res["ok"] is False
-    assert "rule_based" in (res["error"] or "")
-
-
 def test_run_backtest_empty_dataset(tmp_path):
     settings = _settings(tmp_path)
     _store_buy_all(tmp_path, settings)
@@ -291,7 +283,6 @@ def test_backtest_service_run_and_payload(tmp_path, monkeypatch):
         return SimpleNamespace(
             instrument="TEST",
             historical_bar_size="1d",
-            model_type="rule_based",
             historical_data_dir=str(tmp_path / "historical"),
         )
 
@@ -423,7 +414,6 @@ def test_ui_view_trims_for_panel_but_run_file_keeps_everything(tmp_path, monkeyp
         return SimpleNamespace(
             instrument="TEST",
             historical_bar_size="1d",
-            model_type="rule_based",
             historical_data_dir=str(tmp_path / "historical"),
         )
 
@@ -491,7 +481,6 @@ def test_legacy_flat_result_still_loads(tmp_path, monkeypatch):
         return SimpleNamespace(
             instrument="TEST",
             historical_bar_size="1d",
-            model_type="rule_based",
             historical_data_dir=str(tmp_path / "historical"),
         )
 
@@ -519,9 +508,7 @@ def test_run_backtest_records_provenance(tmp_path):
     assert window["start"].startswith("2024-01-02")
     assert window["end"] > window["start"]
     assert window["periods_per_year"] > 0
-    assert window["backtest_start_date"] is None
-    assert window["backtest_end_date"] is None
-    assert inputs["model_type"] == "rule_based"
+    assert inputs["model_type"] == simple_model.MODEL_KIND
     assert inputs["allow_short"] is False
     # The rule set is pinned (and hashed) so the verdict is attributable.
     assert [r["side"] for r in inputs["rules"]] == ["BUY"]

@@ -55,8 +55,9 @@ class Settings(BaseSettings):
     # newly generated bar: the signal for a bar is computed at that bar's close and
     # filled at the NEXT bar's open, so a "how often" setting would only be able to
     # skip bars the strategy was built to see. What limits the cadence is the bar
-    # size (HISTORICAL_BAR_SIZE) and the trading window.
-    data_delta_pull_time: str = Field(default="16:30", description="Daily time (HH:MM, exchange-local) the delta is pulled into the dataset")
+    # size (HISTORICAL_BAR_SIZE) and the trading window. A "pull the delta at HH:MM"
+    # setting sat here too and was read by nobody: the dataset is kept current by the
+    # delta check and by the tick, whenever they happen to run.
 
     # ── Market data (OpenBB Platform) ────────────────────────────────
     # There is no provider setting: the bot fetches from exactly one — yfinance,
@@ -68,15 +69,26 @@ class Settings(BaseSettings):
 
     # ── Historical data period (backtest & training) ─────────────────
     historical_bar_size: str = Field(default="1d", description="Candle size to fetch (1m, 15m, 1h, 4h, 1d, ...)")
-    historical_start_date: Optional[str] = Field(default="2022-01-01", description="Fetch history from (YYYY-MM-DD)")
-    historical_end_date: Optional[str] = Field(default=None, description="Fetch history until (YYYY-MM-DD); empty = now")
     historical_lookback: Optional[str] = Field(
         default="2y",
         description="How much history to fetch, as <N>y years or <N>d days (e.g. 2y, 30d) up to now",
     )
-    backtest_start_date: Optional[str] = Field(default=None, description="Backtest window start; empty = historical start")
-    backtest_end_date: Optional[str] = Field(default=None, description="Backtest window end; empty = historical end")
-    train_test_split: float = Field(default=0.8, ge=0.0, le=1.0, description="Fraction of data used for training")
+    # The PERIOD above IS the window, and the only one: there is no HISTORICAL_START_DATE /
+    # HISTORICAL_END_DATE. Those named a window counted from a fixed DATE rather than back
+    # from now, which on a strategy that keeps running means the dataset stops growing while
+    # the panel still reports the period — and nothing ever offered them (the History
+    # dropdown lists periods only, and the panel's period is a per-strategy setting). The
+    # period is resolved against the EXCHANGE's today, so "60d" always means the last 60
+    # days and the dataset grows with the strategy.
+    # There is no BACKTEST_START_DATE / BACKTEST_END_DATE. A backtest runs on the WHOLE
+    # dataset the strategy has, which is already the window its own HISTORICAL_LOOKBACK
+    # produced: a second pair of dates could only ever narrow that, and a narrowed run is
+    # not the period the strategy gates were measured over. What the run actually replayed
+    # is recorded per run instead — ``engine.run_backtest`` reports the first and last bar
+    # and the row count under "window", so provenance is kept without a setting.
+    # No TRAIN_TEST_SPLIT either: there is nothing to train. The only model is
+    # rule-based and its "training" is the rules the user writes, so a split fraction
+    # would divide a set nothing ever fits on.
     live_lookback_days: int = Field(
         default=10, ge=1,
         description=(
@@ -109,12 +121,8 @@ class Settings(BaseSettings):
             "trades and the driver's state); empty = <DATA_DIR>/live_results"
         ),
     )
-    # Optional S3 sync: the dataset is written locally, then uploaded to S3 as
-    # the durable source of truth. Disabled (local-only) until deployment.
-    s3_enabled: bool = Field(default=False, description="Sync the canonical dataset to S3")
-    s3_bucket: str = Field(default="", description="S3 bucket for the dataset")
-    s3_prefix: str = Field(default="traider/historical", description="S3 object key prefix")
-    s3_endpoint_url: Optional[str] = Field(default=None, description="e.g. MinIO for local dev")
+    # No S3 sync here: the dataset is the Parquet file under <DATA_DIR>/historical and
+    # nothing else. See the note where the mirror settings used to sit.
 
     # ── Features — Feature Engineering toggles (on/off) ──────────────
     # Each indicator produced by the Features Engineering module can be
@@ -173,19 +181,22 @@ class Settings(BaseSettings):
     features_min_lookback: int = Field(default=50, ge=1, description="Warmup bars before emitting features")
 
     # ── Model (signal generator) ─────────────────────────────────────
-    # rule_based is the only model implemented: the backtester and the signal service
-    # both refuse to run under anything else, so it is the default rather than a value
-    # that has to be set correctly in .env to get a working bot.
-    model_type: str = Field(
-        default="rule_based",
-        description="rule_based (the only implemented model) | logistic_regression (planned)",
-    )
+    # There is no MODEL_TYPE any more. ``rule_based`` is the only model that was ever
+    # implemented, and the value existed to be CHECKED and refused: the backtester and
+    # the signal service both raised unless it said ``rule_based``, so the setting could
+    # only ever be either a no-op or an outage. The kind of model is now what it always
+    # effectively was — a constant (``model.simple_model.MODEL_KIND``), reported in the
+    # signal payload and in each stored run so a report says what produced it.
+    #
+    # The two thresholds stay: the rule-based generator really does read them, gating a
+    # fired rule on its confidence.
     model_buy_threshold: float = Field(default=0.6, ge=0.0, le=1.0)
     model_sell_threshold: float = Field(default=0.6, ge=0.0, le=1.0)
-    model_retrain_interval_days: int = Field(default=30, ge=1)
+    # MODEL_RETRAIN_INTERVAL_DAYS used to sit here. Nothing retrains: the generator is
+    # rule-based, so a cadence was a setting with no subject.
     strategy_rules_file: str = Field(
         default="data/strategies/store.json",
-        description="JSON file holding the strategy store (all strategies + which one is active; MODEL_TYPE=rule_based)",
+        description="JSON file holding the strategy store (all strategies + which one is active)",
     )
     account_settings_file: str = Field(
         default="data/account/account.json",
@@ -289,19 +300,27 @@ class Settings(BaseSettings):
     # that still carries them has them DROPPED on the next save rather than being
     # rejected — the same handling the two risk master switches got.
 
-    # ── State storage (DynamoDB) ─────────────────────────────────────
-    aws_region: str = Field(default="us-east-1")
-    dynamodb_table: str = Field(default="traider-state")
-    dynamodb_ttl_days: int = Field(default=30, ge=0)
-    dynamodb_endpoint_url: Optional[str] = Field(default=None, description="e.g. DynamoDB Local")
+    # ── Off-site mirror (S3) ────────────────────────────────────────
+    # Nothing here, deliberately. ``data/dataset.py`` used to carry a boto3 mirror of
+    # the canonical file — upload on write, download when the local copy was missing,
+    # delete alongside it — behind S3_ENABLED + S3_BUCKET, with S3_PREFIX,
+    # S3_ENDPOINT_URL and AWS_REGION beside them. It was never switched on (the flag
+    # defaulted off and no bucket was ever configured) and it is gone: the Parquet file
+    # under <DATA_DIR>/historical is the dataset, one copy, on this machine.
+    #
+    # The DynamoDB state table that once sat here never had an implementation at all.
+    # Both halves are in ``config_service.RETIRED_STRATEGY_KEYS`` where it matters (a
+    # stored strategy carrying them drops them on save rather than being rejected).
 
     # ── Web Portal (dashboard: progress, charts, config, alerts) ─────
-    web_portal_enabled: bool = Field(default=True, description="Serve the web dashboard")
-    web_portal_host: str = Field(default="0.0.0.0", description="Bind host for the web portal")
-    web_portal_port: int = Field(default=8000, ge=1, le=65535, description="Port for the web portal")
-    web_portal_auth_enabled: bool = Field(default=True, description="Require login to view the portal")
-    web_portal_username: str = Field(default="admin", description="Portal login username")
-    web_portal_password: Optional[str] = Field(default=None, description="Portal login password (secret)")
+    # No host, port, enable switch or auth either, and the rest of this section is the
+    # reason: the portal IS how this app is used, it is started by hand (uvicorn, or
+    # scripts/run-dashboard.sh) with its address as an argument, and it listens on the
+    # machine that runs it. The three switches that used to be here were read by
+    # ``web.auth``, which is gone with them — a login that could only be reached by
+    # setting a password nobody sets is not a gate, it is a setting that lies.
+    # WEB_PORTAL_PASSWORD went the same way; a portal that needs keeping out of reach
+    # belongs behind a reverse proxy, not behind a variable defaulting to empty.
 
     # ── Parsed helpers ───────────────────────────────────────────────
 
@@ -384,15 +403,6 @@ class Settings(BaseSettings):
             )
         return self
 
-    @field_validator("model_type")
-    @classmethod
-    def _validate_model_type(cls, v: str) -> str:
-        if v not in ("logistic_regression", "rule_based"):
-            raise ValueError(
-                f"MODEL_TYPE must be 'logistic_regression' or 'rule_based', got {v!r}"
-            )
-        return v
-
     @field_validator("position_sizing_mode")
     @classmethod
     def _validate_position_sizing_mode(cls, v: str) -> str:
@@ -412,16 +422,6 @@ class Settings(BaseSettings):
         if val not in ("paper", "live"):
             raise ValueError(f"EXECUTION_ENV must be 'paper' or 'live', got {v!r}")
         return val
-
-    @field_validator("data_delta_pull_time")
-    @classmethod
-    def _validate_hhmm(cls, v: str) -> str:
-        """Schedule times are HH:MM (24h) in MARKET_TIMEZONE."""
-        import re
-
-        if not re.fullmatch(r"([01]?[0-9]|2[0-3]):[0-5][0-9]", v.strip()):
-            raise ValueError(f"must be HH:MM in 24h format, got {v!r}")
-        return v.strip()
 
     @field_validator(
         "max_exposure_percent",
@@ -447,21 +447,6 @@ class Settings(BaseSettings):
             return None
         return v
 
-    @field_validator(
-        "historical_start_date",
-        "historical_end_date",
-        "backtest_start_date",
-        "backtest_end_date",
-        mode="before",
-    )
-    @classmethod
-    def _empty_optional_date_to_none(cls, v):
-        """An empty date in .env means unset (e.g. end date = now)."""
-        if v is None:
-            return v
-        if isinstance(v, str) and not v.strip():
-            return None
-        return v
 
     @field_validator(
         "feature_sma_enabled", "feature_ema_enabled", "feature_macd_enabled",

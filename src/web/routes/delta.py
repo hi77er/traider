@@ -5,14 +5,12 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from src.config.settings import Settings, get_settings
-from src.web.auth import require_auth
 from src.web.services import delta_service
 from src.web.services.trading_service import require_trading_off
 
 router = APIRouter(
     prefix="/api/v1/delta",
     tags=["delta"],
-    dependencies=[Depends(require_auth)],
 )
 
 

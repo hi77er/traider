@@ -14,13 +14,11 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from src.config.effective import get_effective_settings_dep
-from src.web.auth import require_auth
 from src.web.services import trading_service
 
 router = APIRouter(
     prefix="/api/v1/trading",
     tags=["trading"],
-    dependencies=[Depends(require_auth)],
 )
 
 

@@ -26,18 +26,16 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Fetch initial historical data")
     parser.add_argument("--symbol", default=None, help="Override INSTRUMENT")
     parser.add_argument("--bar-size", default=None, help="Override HISTORICAL_BAR_SIZE")
-    parser.add_argument("--start", default=None, help="Override HISTORICAL_START_DATE")
-    parser.add_argument("--end", default=None, help="Override HISTORICAL_END_DATE")
+    parser.add_argument("--start", default=None, help="Override the period's start date")
+    parser.add_argument("--end", default=None, help="Stop at this date (default: now)")
     args = parser.parse_args()
 
     settings = get_settings()
     symbol = args.symbol or settings.instrument
     bar_size = args.bar_size or settings.historical_bar_size
-    # The configured PERIOD is the window; HISTORICAL_START_DATE is only the
-    # fallback when no period is set (``resolve_history_window`` decides, and also
-    # clamps to what the provider can actually serve). Using the raw start date
-    # here ignored the period the operator had just chosen in the panel: a
-    # strategy set to "30 days" was fetched from 2022-01-01.
+    # The configured PERIOD is the window — ``resolve_history_window`` decides it and
+    # also clamps it to what the provider can actually serve. ``--start``/``--end``
+    # narrow or extend it for a one-off fetch only; nothing here is stored.
     start, end = resolve_history_window(settings)
     start = args.start or start
     end = args.end or end

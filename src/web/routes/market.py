@@ -8,13 +8,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from src.config.settings import Settings, get_settings
 from src.data import screener as screener_data
-from src.web.auth import require_auth
 from src.web.services import market_service
 
 router = APIRouter(
     prefix="/api/v1/market",
     tags=["market"],
-    dependencies=[Depends(require_auth)],
 )
 
 

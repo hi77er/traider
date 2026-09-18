@@ -1,4 +1,4 @@
-"""Rule-based signal generation (``MODEL_TYPE=rule_based``).
+"""Rule-based signal generation.
 
 Turns a strategy's rule set (schema in ``src/model/rules.py``) plus a candle /
 feature frame into ``BUY`` / ``SELL`` / ``HOLD`` decisions with a confidence.
@@ -46,7 +46,15 @@ from src.model import rules as rules_mod
 
 logger = logging.getLogger(__name__)
 
+# The kind of model this module is: rule-based, and the only one there is. ``MODEL_TYPE``
+# used to be a setting that switched between model kinds, with this generator (and the
+# backtest, and the signal endpoint) refusing to run unless it read ``rule_based``. It was
+# a switch with one position, so the switch is gone; this constant is what those three
+# places report and what a stored run records.
+MODEL_KIND = "rule_based"
+
 __all__ = [
+    "MODEL_KIND",
     "Signal",
     "condition_holds",
     "rule_fires",
@@ -292,13 +300,6 @@ class RuleBasedSignalGenerator:
         rules: Optional[Sequence[rules_mod.Rule]] = None,
     ) -> None:
         self.settings = settings or get_effective_settings()
-        # This generator implements MODEL_TYPE=rule_based — it must never run
-        # under a different model type.
-        if str(self.settings.model_type).lower() != "rule_based":
-            raise ValueError(
-                f"Rule-based signals require MODEL_TYPE=rule_based "
-                f"(current model_type={self.settings.model_type!r})"
-            )
         if rules is None:
             rs = resolve_ruleset(self.settings)
             rules = list(rs.rules) if rs else []

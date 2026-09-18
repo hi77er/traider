@@ -284,17 +284,6 @@ def bar_label(ts, interval: Optional[str]) -> str:
     return str(t.to_pydatetime())[:16]
 
 
-def s3_enabled(settings: Settings) -> bool:
-    """True when S3 sync is configured (enabled + a bucket is set)."""
-    return bool(getattr(settings, "s3_enabled", False) and settings.s3_bucket)
-
-
-def s3_key(settings: Settings, symbol: str, interval: str) -> str:
-    """S3 object key for a symbol/interval dataset."""
-    prefix = settings.s3_prefix.strip("/")
-    return f"{prefix}/{symbol}_{interval}.parquet" if prefix else f"{symbol}_{interval}.parquet"
-
-
 def _drop_invalid_bars(df: pd.DataFrame) -> pd.DataFrame:
     """Drop bars with no usable price (NaN in any of ``PRICE_COLUMNS``).
 
@@ -333,13 +322,10 @@ def load_dataset(
 ) -> pd.DataFrame:
     """Load the canonical dataset (optionally sliced to a date window).
 
-    Reads the local Parquet file; when it's missing and S3 sync is enabled,
-    the dataset is first restored from S3. Returns an empty DataFrame when no
-    dataset exists yet. Result is indexed by datetime with canonical OHLCV.
+    Reads the local Parquet file and returns an empty DataFrame when no dataset exists
+    yet. Result is indexed by datetime with canonical OHLCV.
     """
     path = dataset_path(settings, symbol, interval)
-    if not path.exists() and s3_enabled(settings):
-        _s3_download(settings, symbol, interval, path)
     if not path.exists():
         logger.info("No dataset yet at %s", path)
         return pd.DataFrame()
@@ -354,7 +340,7 @@ def load_dataset(
 
 
 def delete_dataset(settings: Settings, symbol: str, interval: str) -> bool:
-    """Delete the canonical dataset file for symbol/interval (local + S3).
+    """Delete the canonical dataset file for symbol/interval.
 
     Returns True when a local file existed and was removed.
     """
@@ -364,13 +350,6 @@ def delete_dataset(settings: Settings, symbol: str, interval: str) -> bool:
         path.unlink()
         removed = True
         logger.info("Deleted dataset %s", path)
-    if s3_enabled(settings):
-        try:
-            _s3_client(settings).delete_object(
-                Bucket=settings.s3_bucket, Key=s3_key(settings, symbol, interval)
-            )
-        except Exception as exc:  # noqa: BLE001 - object may be missing
-            logger.warning("Could not delete dataset from S3: %s", exc)
     return removed
 
 
@@ -383,9 +362,7 @@ def save_dataset(
     """Merge ``df`` into the canonical dataset for symbol/interval and write.
     New rows are deduped against existing ones (last-write-wins per timestamp)
     so repeated backfills or appended daily bars never create duplicates.
-    After writing locally, the file is uploaded to S3 when sync is enabled
-    (write-then-upload keeps the local file consistent; enable bucket
-    versioning for crash safety).
+    The Parquet file under <DATA_DIR>/historical is the dataset, one copy.
     """
     path = dataset_path(settings, symbol, interval)
     if df is None or df.empty:
@@ -401,42 +378,7 @@ def save_dataset(
     merged = _merge(existing, df)
     merged.to_parquet(path)
     logger.info("Saved %s rows to dataset %s", len(merged), path)
-
-    if s3_enabled(settings):
-        _s3_upload(settings, symbol, interval, path)
     return path
-
-
-# -- S3 sync (durable source of truth) --------------------------------------
-def _s3_client(settings: Settings):
-    """Lazy boto3 S3 client (raises a clear error if boto3 is missing)."""
-    try:
-        import boto3
-    except ImportError as exc:  # pragma: no cover - depends on environment
-        raise RuntimeError(
-            "S3 sync is enabled but boto3 is not installed. Run `pip install boto3`."
-        ) from exc
-    kwargs = {"region_name": settings.aws_region}
-    if settings.s3_endpoint_url:
-        kwargs["endpoint_url"] = settings.s3_endpoint_url
-    return boto3.client("s3", **kwargs)
-
-
-def _s3_upload(settings: Settings, symbol: str, interval: str, path: Path) -> None:
-    client = _s3_client(settings)
-    key = s3_key(settings, symbol, interval)
-    client.upload_file(str(path), settings.s3_bucket, key)
-    logger.info("Uploaded dataset to s3://%s/%s", settings.s3_bucket, key)
-
-
-def _s3_download(settings: Settings, symbol: str, interval: str, path: Path) -> None:
-    client = _s3_client(settings)
-    key = s3_key(settings, symbol, interval)
-    try:
-        client.download_file(settings.s3_bucket, key, str(path))
-        logger.info("Restored dataset from s3://%s/%s", settings.s3_bucket, key)
-    except Exception as exc:  # object missing / no access -> leave local missing
-        logger.warning("Could not restore dataset from S3: %s", exc)
 
 
 def _merge(existing: pd.DataFrame, new: pd.DataFrame) -> pd.DataFrame:

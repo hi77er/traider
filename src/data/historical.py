@@ -26,11 +26,19 @@ logger = logging.getLogger(__name__)
 def resolve_history_window(settings: Settings) -> tuple:
     """(start_date, end_date) for a full historical fetch, YYYY-MM-DD strings.
 
-    Prefers the period window (``HISTORICAL_LOOKBACK``, e.g. ``2y`` or ``30d``,
-    counted back from now) and falls back to the legacy free-text start/end dates
-    when no period is set. A day-based period is what intraday bar sizes use:
-    the provider only serves a short trailing window of minute bars, so the
-    window is measured in days there and in years for the coarser bars.
+    The window is the configured PERIOD (``HISTORICAL_LOOKBACK``, e.g. ``2y`` or
+    ``30d``) counted back from the exchange's today, and the end is always now. It
+    is the only window this bot fetches, and counting it back from NOW rather than
+    forward from a fixed date is what lets a dataset grow with the strategy it
+    belongs to. A day-based period is what intraday bar sizes use: the provider
+    only serves a short trailing window of minute bars, so the window is measured
+    in days there and in years for the coarser bars.
+
+    An unusable period RAISES rather than quietly becoming a different window. A
+    silent fallback is how a strategy set to "30 days" was once fetched from
+    2022-01-01 with nothing in the panel to show the disagreement. Every caller is
+    interactive (the backfill, the window re-fetch, the CLI) and reports the
+    message where the operator can see it.
 
     The window is CLAMPED to what the configured provider can actually serve (see
     ``config.history.PROVIDER_MAX_DAYS``). A period longer than that is not a
@@ -40,27 +48,29 @@ def resolve_history_window(settings: Settings) -> tuple:
     stored config, a hand-edited ``.env`` or a provider whose limits are unknown
     here — and it says so in the log rather than quietly shortening the window.
     """
-    end = settings.historical_end_date or None
     parts = history.period_parts(settings.historical_lookback)
-    if parts:
-        n, unit = parts
-        cap = history.provider_max_days(history.DATA_PROVIDER, settings.historical_bar_size)
-        days = history.period_days(settings.historical_lookback)
-        if cap is not None and days is not None and days > cap:
-            logger.warning(
-                "%s serves at most %d days of %s bars — clamping the %s window to %dd",
-                history.DATA_PROVIDER,
-                cap,
-                settings.historical_bar_size,
-                settings.historical_lookback,
-                cap,
-            )
-            n, unit = cap, history.UNIT_DAYS
-        today = pd.Timestamp.now(tz=settings.market_timezone).normalize()
-        offset = pd.DateOffset(days=n) if unit == history.UNIT_DAYS else pd.DateOffset(years=n)
-        start = (today - offset).strftime("%Y-%m-%d")
-        return start, end
-    return (settings.historical_start_date or None), end
+    if not parts:
+        raise ValueError(
+            "HISTORICAL_LOOKBACK must be a period like '60d' or '2y' "
+            f"(got {settings.historical_lookback!r}) — set the strategy's History period"
+        )
+    n, unit = parts
+    cap = history.provider_max_days(history.DATA_PROVIDER, settings.historical_bar_size)
+    days = history.period_days(settings.historical_lookback)
+    if cap is not None and days is not None and days > cap:
+        logger.warning(
+            "%s serves at most %d days of %s bars — clamping the %s window to %dd",
+            history.DATA_PROVIDER,
+            cap,
+            settings.historical_bar_size,
+            settings.historical_lookback,
+            cap,
+        )
+        n, unit = cap, history.UNIT_DAYS
+    today = pd.Timestamp.now(tz=settings.market_timezone).normalize()
+    offset = pd.DateOffset(days=n) if unit == history.UNIT_DAYS else pd.DateOffset(years=n)
+    start = (today - offset).strftime("%Y-%m-%d")
+    return start, None
 
 
 def fetch_candles(
@@ -75,16 +85,19 @@ def fetch_candles(
     """Fetch OHLCV candles for the configured instrument & historical window.
 
     Overrides: pass ``symbol``/``start_date``/``end_date``/``bar_size`` to
-    fetch a different window without touching config. When ``persist`` is
-    True (default) the result is merged into the canonical Parquet dataset.
-    Returns a DataFrame indexed by datetime with canonical
-    open/high/low/close/volume columns.
+    fetch a different window without touching config. With no ``start_date`` the
+    configured period decides it (``resolve_history_window``), so a caller that
+    wants "the strategy's history" does not have to restate the rule — and an
+    empty ``end_date`` means "until now". When ``persist`` is True (default) the
+    result is merged into the canonical Parquet dataset. Returns a DataFrame
+    indexed by datetime with canonical open/high/low/close/volume columns.
     """
     client = client or OpenBBClient(settings)
     symbol = symbol or settings.instrument
-    # A blank date in .env means "not specified" (end = now, start = default).
-    start_date = (start_date or settings.historical_start_date) or None
-    end_date = (end_date or settings.historical_end_date) or None
+    if start_date is None:
+        start_date = resolve_history_window(settings)[0]
+    # A blank date means "not specified"; the provider wants None, not "".
+    end_date = end_date or None
     bar_size = bar_size or settings.historical_bar_size
 
     logger.info(

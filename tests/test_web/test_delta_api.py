@@ -78,22 +78,29 @@ def test_endpoint_status_error(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# schedule fields: rendered by the strategy panel, validated by Settings
+# schedule fields: gone, and dropped from stored strategies rather than refused
 # ---------------------------------------------------------------------------
-def test_the_delta_pull_time_is_per_strategy():
+def test_the_delta_pull_time_is_no_longer_a_setting():
+    """The dataset is kept current by the delta CHECK and by the tick, whenever those
+    happen to run — so a stored "pull at 16:30" was a schedule nothing kept. It was
+    offered in the strategy panel and read by no code, and it is now gone from
+    ``Settings`` too, so a leftover line in ``.env`` cannot set a time nothing honours.
+    """
     from src.config.settings import Settings as S
     from src.web.services import config_service
 
-    # The schedules are per-strategy, so they render in the strategy panel. There is
-    # no global .env form to keep them out of any more.
+    assert "DATA_DELTA_PULL_TIME" not in {name.upper() for name in S.model_fields}
     groups = config_service.strategy_config_groups(S(_env_file=None))
-    by_key = {f["key"]: f for g in groups for f in g["fields"]}
-    assert by_key["DATA_DELTA_PULL_TIME"]["value"] == "16:30"
+    offered = {f["key"] for g in groups for f in g["fields"]}
+    assert "DATA_DELTA_PULL_TIME" not in offered
     trading = next(g for g in groups if g["name"] == "Trading")
     assert [f["key"] for f in trading["fields"]] == [
         "MARKET_TIMEZONE", "TRADING_START_HOUR", "TRADING_END_HOUR",
-        "DATA_DELTA_PULL_TIME",
     ]
+    # Retired, not hidden: a strategy stored while it existed still carries it, and the
+    # panel posts that strategy back verbatim, so a save must DROP it rather than
+    # refuse the whole config.
+    assert "DATA_DELTA_PULL_TIME" in config_service.RETIRED_STRATEGY_KEYS
 
 
 def test_the_decision_cadence_is_not_a_setting():
@@ -106,18 +113,21 @@ def test_the_decision_cadence_is_not_a_setting():
     from src.web.services import config_service
 
     fields = {name.upper() for name in S.model_fields}
-    assert "DECISION_INTERVAL_HOURS" not in fields and "DECISION_TIME" not in fields
+    schedule = {"DECISION_INTERVAL_HOURS", "DECISION_TIME", "DATA_DELTA_PULL_TIME"}
+    assert not schedule & fields
     offered = {f["key"] for g in config_service.strategy_config_groups(S(_env_file=None))
                for f in g["fields"]}
-    assert not {"DECISION_INTERVAL_HOURS", "DECISION_TIME"} & offered
+    assert not schedule & offered
     # Retired, not hidden: a strategy stored while they existed still carries them and
     # the panel posts it back verbatim, so a save must DROP them rather than refuse it.
-    assert {"DECISION_INTERVAL_HOURS", "DECISION_TIME"} <= config_service.RETIRED_STRATEGY_KEYS
+    assert schedule <= config_service.RETIRED_STRATEGY_KEYS
 
 
-def test_schedule_time_validation():
-    Settings(data_delta_pull_time="16:45")
-    with pytest.raises(ValidationError):
-        Settings(data_delta_pull_time="25:00")
-    with pytest.raises(ValidationError):
-        Settings(data_delta_pull_time="4pm")
+def test_no_setting_validates_a_schedule_any_more():
+    """The HH:MM validator went with the field it guarded.
+
+    It is worth pinning the ABSENCE: a leftover ``DATA_DELTA_PULL_TIME=25:00`` in
+    someone's `.env` must be inert (unknown keys are ignored), not a startup error.
+    """
+    s = Settings(data_delta_pull_time="25:00", data_delta_pull_time_typo="4pm")
+    assert not hasattr(s, "data_delta_pull_time")

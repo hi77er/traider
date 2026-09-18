@@ -26,6 +26,7 @@ from src.backtest import store as bt_store
 from src.backtest.engine import run_backtest
 from src.backtest.store import jsonable
 from src.config.effective import active_strategy_name, get_effective_settings
+from src.model.simple_model import MODEL_KIND
 
 logger = logging.getLogger(__name__)
 
@@ -196,7 +197,7 @@ def start_backtest() -> dict:
         name,
         settings.instrument,
         settings.historical_bar_size,
-        settings.model_type,
+        MODEL_KIND,
     )
     threading.Thread(target=_run, args=(settings, name), daemon=True).start()
     with _JOB_LOCK:
@@ -222,7 +223,7 @@ def _run(settings, name: Optional[str]) -> None:
             "error": f"Backtest crashed: {exc}",
             "symbol": getattr(settings, "instrument", None),
             "bar_size": getattr(settings, "historical_bar_size", None),
-            "model_type": getattr(settings, "model_type", None),
+            "model_type": MODEL_KIND,
             "metrics": None,
             "gate": None,
             "equity_curve": [],

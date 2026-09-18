@@ -126,12 +126,12 @@ def start_backfill(settings: Optional[Settings] = None) -> dict:
 def _run_backfill(settings: Settings) -> None:
     """Fetch + persist the configured historical window (same path as backfill CLI).
 
-    The window comes from the resolved PERIOD (``HISTORICAL_LOOKBACK`` — what the
-    "History" dropdown in the panel sets), not from the legacy
-    ``HISTORICAL_START_DATE``: passing that free-text date here ignored the period
-    the operator had just chosen, so a strategy set to "30 days" still fetched
-    from 2022-01-01. ``resolve_history_window`` falls back to the start/end dates
-    only when no period is set, which is what makes both settings coherent.
+    The window is the PERIOD (``HISTORICAL_LOOKBACK`` — what the "History" dropdown in
+    the panel sets) counted back from now, and it is the only one there is: a free-text
+    ``HISTORICAL_START_DATE`` used to sit beside it and win on some paths, so a strategy
+    set to "30 days" could still fetch from 2022-01-01. ``resolve_history_window`` is the
+    single rule, and it raises rather than falling back when the period is unreadable —
+    the job reports that message, so a mismatch is visible instead of silent.
     """
     try:
         start, end = resolve_history_window(settings)

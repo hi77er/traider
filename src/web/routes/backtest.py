@@ -8,14 +8,12 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from src.web.auth import require_auth
 from src.web.services import backtest_service
 from src.web.services.trading_service import require_trading_off
 
 router = APIRouter(
     prefix="/api/v1/backtest",
     tags=["backtest"],
-    dependencies=[Depends(require_auth)],
 )
 
 

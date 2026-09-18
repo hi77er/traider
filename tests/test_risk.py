@@ -32,7 +32,6 @@ def _settings(tmp_path, **kw) -> Settings:
         strategy_rules_file=str(tmp_path / "active.json"),
         instrument="TEST",
         historical_bar_size="1d",
-        model_type="rule_based",
     )
     defaults.update(kw)
     return Settings(**defaults)

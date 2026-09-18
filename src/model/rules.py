@@ -11,8 +11,9 @@ active one, so it can be:
 - read by the backtester and by ``simple_model.py`` through ONE loader, and
 - versioned / copied per experiment without touching ``.env``.
 
-Rules are the input for ``MODEL_TYPE=rule_based``. Example rule (all must
-hold): BUY when ``close < sma_50`` and ``rsi_14 < 30``.
+Rules are the input for the rule-based generator (the only one there is, see
+``simple_model.MODEL_KIND``). Example rule (all must hold): BUY when
+``close < sma_50`` and ``rsi_14 < 30``.
 """
 
 from __future__ import annotations

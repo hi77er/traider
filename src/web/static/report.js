@@ -869,8 +869,6 @@
       kv("Bars / year", int(win.periods_per_year)) +
       kv("Slippage", isNum(costs.slippage) ? num(Number(costs.slippage) * 100, 3) + "%" : "—") +
       kv("Commission", isNum(costs.commission) ? num(Number(costs.commission) * 100, 3) + "%" : "—") +
-      kv("Backtest start", esc(win.backtest_start_date || "full history")) +
-      kv("Backtest end", esc(win.backtest_end_date || "latest bar")) +
       `</div>` +
       (gateRows ? `<h4 class="rp-sub-head">Gate thresholds</h4><div class="rp-kv-grid">${gateRows}</div>` : "") +
       `<details class="rp-details"><summary>Effective settings snapshot (${Object.keys(settings).length})</summary>` +

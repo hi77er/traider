@@ -17,7 +17,6 @@ from pydantic import BaseModel
 
 from src.config.effective import get_effective_settings_dep
 from src.execution.config import execution_status
-from src.web.auth import require_auth
 from src.web.services import rules_service
 from src.web.services import trading_service
 from src.web.services.trading_service import require_trading_off
@@ -25,7 +24,6 @@ from src.web.services.trading_service import require_trading_off
 router = APIRouter(
     prefix="/api/v1/execution",
     tags=["execution"],
-    dependencies=[Depends(require_auth)],
 )
 
 

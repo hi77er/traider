@@ -1,13 +1,12 @@
 """Tests for the signals API service (src/web/services/signal_service.py).
 
 Uses monkeypatched effective settings + dataset so no network or real strategy
-file is touched. Covers the MODEL_TYPE=rule_based gate and the rule-skipping
-for disabled features, end to end.
+file is touched. Covers the rule-skipping for disabled features, end to end, and
+that the reported model kind is the module constant (there is only one model).
 """
 
 import numpy as np
 import pandas as pd
-import pytest
 
 from src.config.settings import Settings
 from src.model import rules as R
@@ -27,13 +26,11 @@ _NO_RISK = dict(
 )
 
 
-def _settings(tmp_path, model_type="rule_based", feature_sma_enabled=True,
-              risk=True, **kw) -> Settings:
+def _settings(tmp_path, feature_sma_enabled=True, risk=True, **kw) -> Settings:
     values = dict(
         strategy_rules_file=str(tmp_path / "rules" / "active.json"),
         instrument="AAPL",
         historical_bar_size="1d",
-        model_type=model_type,
         feature_sma_enabled=feature_sma_enabled,
     )
     if not risk:
@@ -89,14 +86,17 @@ def _save_store(settings, rules):
     R.save_store(settings, R.StrategyStore(active="a", strategies={"a": rs}))
 
 
-def test_not_rule_based_returns_reason_without_signals(monkeypatch, tmp_path):
-    settings = _settings(tmp_path, model_type="logistic_regression")
+def test_the_reported_model_kind_is_the_only_model_there_is(monkeypatch, tmp_path):
+    """MODEL_TYPE is gone, so the payload reports the constant and there is no
+    configuration that can produce a payload without rule signals."""
+    settings = _settings(tmp_path)
+    _save_store(settings, _ALWAYS_BUY)
     monkeypatch.setattr(signal_service, "get_effective_settings", lambda: settings)
+    monkeypatch.setattr(signal_service, "load_dataset", lambda *a, **k: _candles(5))
     payload = signal_service.signal_payload()
-    assert payload["available"] is False
-    assert payload["model_type"] == "logistic_regression"
-    assert "MODEL_TYPE=rule_based" in payload["reason"]
-    assert payload["latest"] is None and payload["series"] == [] and payload["counts"] == {}
+    assert payload["model_type"] == signal_service.MODEL_KIND == "rule_based"
+    assert payload["context"]["model_type"] == signal_service.MODEL_KIND
+    assert "reason" not in payload
 
 
 def test_rule_based_runs_and_reports_signals(monkeypatch, tmp_path):

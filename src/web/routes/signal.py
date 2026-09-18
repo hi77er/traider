@@ -5,13 +5,11 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends
 
 from src.config.settings import Settings, get_settings
-from src.web.auth import require_auth
 from src.web.services import signal_service
 
 router = APIRouter(
     prefix="/api/v1/signal",
     tags=["signal"],
-    dependencies=[Depends(require_auth)],
 )
 
 

@@ -7,14 +7,12 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Query
 
 from src.config.settings import Settings, get_settings
-from src.web.auth import require_auth
 from src.web.services import dataset_service
 from src.web.services.trading_service import require_trading_off
 
 router = APIRouter(
     prefix="/api/v1/dataset",
     tags=["dataset"],
-    dependencies=[Depends(require_auth)],
 )
 
 

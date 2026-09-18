@@ -23,7 +23,6 @@ def _settings(tmp_path) -> Settings:
         historical_data_dir=str(tmp_path),
         instrument="AAPL",
         historical_bar_size="1d",
-        historical_start_date="2024-01-01",
     )
 
 
@@ -173,16 +172,18 @@ def test_backfill_blocks_second_start(tmp_path, monkeypatch):
         time.sleep(0.05)
 
 
-def test_backfill_uses_the_period_not_the_legacy_start_date(tmp_path, monkeypatch):
-    """The window comes from HISTORICAL_LOOKBACK ("30 days") even when the legacy
-    free-text HISTORICAL_START_DATE is set: passing that date through ignored the
-    period the operator had just picked in the panel."""
+def test_backfill_uses_the_strategy_period(tmp_path, monkeypatch):
+    """The window is HISTORICAL_LOOKBACK ("30 days") counted back from today.
+
+    This replaced a free-text HISTORICAL_START_DATE that was passed through on this path
+    and so ignored the period the operator had just picked in the panel — a strategy set
+    to "30 days" fetched from 2022-01-01.
+    """
     st = Settings(
         historical_data_dir=str(tmp_path),
         instrument="NVDA",
         historical_bar_size="15m",
         historical_lookback="30d",
-        historical_start_date="2022-01-01",
     )
     seen = {}
 
@@ -197,7 +198,9 @@ def test_backfill_uses_the_period_not_the_legacy_start_date(tmp_path, monkeypatc
             break
         time.sleep(0.05)
 
-    assert seen["start_date"] != "2022-01-01"
+    expected = (pd.Timestamp.now(tz=st.market_timezone).normalize() - pd.DateOffset(days=30)).date()
+    assert pd.Timestamp(seen["start_date"]).date() == expected
+    assert seen["end_date"] is None, "the window always ends now"
     expected = (
         pd.Timestamp.now(tz=st.market_timezone).normalize() - pd.DateOffset(days=30)
     ).strftime("%Y-%m-%d")

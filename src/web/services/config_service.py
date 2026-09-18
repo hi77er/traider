@@ -159,9 +159,6 @@ _HINTS: Dict[str, str] = {
     "EXECUTION_MAX_RETRIES": "Attempts to send/fetch an order before giving up.",
     "EXECUTION_RETRY_BASE_DELAY_SECONDS": "Delay before the first retry; later retries back off.",
     "EXECUTION_ORDER_TIMEOUT_SECONDS": "Seconds to wait for an order acknowledgement before retrying.",
-    "BACKTEST_START_DATE": "Optional window start, YYYY-MM-DD; empty = start of the dataset.",
-    "BACKTEST_END_DATE": "Optional window end, YYYY-MM-DD; empty = end of the dataset.",
-    "TRAIN_TEST_SPLIT": "0.8 = use 80% for training, 20% held out.",
     # ── Risk Management ────────────────────────────────────────────────
     # Every one of these says the same thing in its own terms: an empty box is a
     # decision (leave it out), and the example is the size of number the field wants.
@@ -264,9 +261,10 @@ _STRATEGY_SCOPE: List[Tuple[str, Tuple[str, ...]]] = [
             # instrument can trade different sessions. There is no decision CADENCE
             # setting: a decision is made on every newly generated bar (signal at the
             # bar's close, fill at the next bar's open), so the bar size and the
-            # window are what limit it.
+            # window are what limit it. A "pull the delta at HH:MM" setting was here
+            # too and is retired — see RETIRED_STRATEGY_KEYS.
             "MARKET_TIMEZONE", "TRADING_START_HOUR",
-            "TRADING_END_HOUR", "DATA_DELTA_PULL_TIME",
+            "TRADING_END_HOUR",
         ),
     ),
     (
@@ -345,6 +343,11 @@ RETIRED_STRATEGY_KEYS = frozenset(
         # they are deleted from ``Settings`` as well as retired here.
         "DECISION_INTERVAL_HOURS",
         "DECISION_TIME",
+        # And the daily delta time goes the same way, for the same reason: the dataset
+        # is kept current by the delta CHECK and by the tick, whenever those run, so a
+        # stored "pull at 16:30" was a schedule nothing kept. It was offered in the
+        # Trading group and read by no code.
+        "DATA_DELTA_PULL_TIME",
         # The Scheduler group is gone, and with it both of its settings. Nothing ever
         # read either of them. ``SCHEDULER_ENABLED`` asked a question the TRADING
         # SWITCH already answers — the loop runs when its process runs, and the switch
