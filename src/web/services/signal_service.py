@@ -166,9 +166,14 @@ def signal_payload() -> dict:
         )
         # The outcome of the WHOLE round trip rides on its close fill: the
         # chart colours the held-period band by it (green when the position
-        # made money, red when it lost). ``equity_ret`` is the return after
-        # position sizing, i.e. the actual equity change.
+        # made money, red when it lost, grey when it made exactly nothing).
+        # ``equity_ret`` is the return after position sizing, i.e. the actual
+        # equity change. Three states rather than a boolean because "broke
+        # even" is neither a win nor a loss: with a zero weight every trade
+        # lands here, and calling that a loss is what painted a profitable
+        # strategy entirely red.
         equity_ret = float(leg.get("equity_ret") or 0.0)
+        outcome = "win" if equity_ret > 0.0 else ("loss" if equity_ret < 0.0 else "flat")
         fills.append(
             {
                 "time": chart_time(df.index[x], interval, tz),
@@ -178,7 +183,11 @@ def signal_payload() -> dict:
                 "reason": str(leg.get("reason") or "signal"),
                 "ret_pct": round(float(leg.get("ret") or 0.0) * 100.0, 3),
                 "equity_ret_pct": round(equity_ret * 100.0, 3),
-                "win": equity_ret > 0.0,
+                "outcome": outcome,
+                # Kept for older readers that only understand a boolean; it is
+                # deliberately False for a flat round trip so nothing reads it
+                # as a win.
+                "win": outcome == "win",
             }
         )
     stats = risk_result.stats or {}

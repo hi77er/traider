@@ -185,6 +185,36 @@ def test_fills_carry_the_round_trips_outcome(monkeypatch, tmp_path):
     # equity_ret_pct is the return after sizing, so it can never exceed the
     # price move it came from.
     assert all(abs(f["equity_ret_pct"]) <= abs(f["ret_pct"]) + 1e-9 for f in rounds)
+    # Every closed round trip states its outcome, and the three states are the
+    # only ones a reader has to know.
+    assert all(f["outcome"] in ("win", "loss", "flat") for f in rounds)
+    assert all(f["outcome"] == ("win" if f["win"] else "loss") for f in rounds)
+
+
+def test_a_round_trip_that_changed_nothing_is_flat_not_a_loss(monkeypatch, tmp_path):
+    """Zero exposure: the band must be neither green nor red.
+
+    A zero deploy weight makes every leg's equity return exactly 0, so ``equity_ret
+    > 0`` is False for every round trip. Reporting that as a loss is what painted a
+    profitable strategy entirely red and sent the operator hunting for a charting
+    bug — the trades were fine, the SIZE was zero. "Broke even" is its own answer.
+    """
+    settings = _settings(tmp_path, max_exposure_percent=0.0)
+    _save_store(settings, _ALWAYS_BUY)
+    monkeypatch.setattr(signal_service, "get_effective_settings", lambda: settings)
+    monkeypatch.setattr(signal_service, "load_dataset", lambda *a, **k: _candles())
+
+    payload = signal_service.signal_payload()
+    rounds = [f for f in payload["fills"] if f["kind"] == "close"]
+    assert rounds
+    assert payload["risk"]["weight"] == 0.0
+    assert all(f["equity_ret_pct"] == 0.0 for f in rounds)
+    assert all(f["outcome"] == "flat" for f in rounds)
+    # `win` stays a bool for older readers, and is not a win.
+    assert all(f["win"] is False for f in rounds)
+    # The PRICE return is still reported, which is what proves the trades were
+    # fine and only the sizing was zero.
+    assert any(f["ret_pct"] != 0.0 for f in rounds)
 
 
 def test_an_empty_risk_config_shows_the_raw_strategy(monkeypatch, tmp_path):
