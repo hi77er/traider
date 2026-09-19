@@ -250,7 +250,7 @@ class LiveDriver:
             return (
                 f"local state holds a position in {self.name} but the broker is flat, and "
                 "its order history does not show what closed it — refusing to trade until "
-                "they agree"
+                "they agree" + self._refused_entry_note()
             )
         if local is not None and local.short != bool(actual.short):
             return (
@@ -259,6 +259,26 @@ class LiveDriver:
                 "until they agree"
             )
         return None
+
+    def _refused_entry_note(self) -> str:
+        """Why the local state may hold a position the broker never opened.
+
+        Nothing is rolled back when an entry is refused (the position was recorded when the
+        intent was built, which is what keeps the report and the state in step), so the
+        mismatch the caller reports is usually the ordinary consequence of a refusal. Saying
+        which entry, and what the broker said, is the difference between an operator who
+        knows what to clear and one who cannot tell why the bot stopped.
+        """
+        refused = self.state.refused_entry or {}
+        if not refused:
+            return ""
+        when = refused.get("bar") or "the last entry"
+        said = refused.get("detail") or refused.get("status") or "refused"
+        return (
+            f". The entry for bar {when} was REFUSED ({said}) — its position was recorded "
+            "locally anyway, so nothing is open at the broker. Clear the position in this "
+            "strategy's state file to resume"
+        )
 
     # -- the tick ----------------------------------------------------------
     def on_bar_closed(self, candles: pd.DataFrame, next_bar: Optional[Bar] = None) -> Dict[str, Any]:
@@ -369,6 +389,18 @@ class LiveDriver:
             "client_order_id": fill.client_order_id or client_order_id or None,
         }
         if intent.action == OPEN:
+            # An entry that did not fill leaves a position only the local state knows about,
+            # so remember what was said about it: the next tick refuses on the mismatch and
+            # this is the only thing that can explain why.
+            self.state.refused_entry = (
+                None if real is not None
+                else {
+                    "bar": str(getattr(bar, "time", "") or ""),
+                    "status": fill.status,
+                    "detail": fill.detail,
+                    **identity,
+                }
+            )
             report = {
                 "intent": intent.action,
                 "reason": intent.reason,
@@ -384,6 +416,7 @@ class LiveDriver:
                     report["exits"] = exits
             return report
         if intent.action == CLOSE:
+            self.state.refused_entry = None
             self.engine.settle(self.ledger, self.state, bar, intent, exit_price=real)
             return {
                 "intent": intent.action,

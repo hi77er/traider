@@ -74,6 +74,10 @@ class StrategyState:
     # The first weight the sizing produced, reported as "the" weight of the run.
     first_weight: float = 1.0
     weight_seen: bool = False
+    # The last entry the BROKER refused, and what it said. The engine records a position when
+    # it builds the intent, before the order is sent, so a refused entry leaves a position the
+    # broker never opened — and this is the only thing that can explain it to an operator.
+    refused_entry: Optional[Dict[str, Any]] = None
 
     # -- serialization -----------------------------------------------------
     def as_dict(self) -> Dict[str, Any]:
@@ -83,6 +87,7 @@ class StrategyState:
             "last_decided_bar": self.last_decided_bar,
             "first_weight": self.first_weight,
             "weight_seen": self.weight_seen,
+            "refused_entry": dict(self.refused_entry) if self.refused_entry else None,
         }
 
     @classmethod
@@ -102,6 +107,7 @@ class StrategyState:
             state.last_decided_bar = data.get("last_decided_bar")
             state.first_weight = float(data.get("first_weight", 1.0) or 1.0)
             state.weight_seen = bool(data.get("weight_seen", False))
+            state.refused_entry = data.get("refused_entry") or None
         except (TypeError, ValueError, KeyError) as exc:  # noqa: BLE001
             logger.warning("Unreadable strategy state — starting flat: %s", exc)
             return cls()

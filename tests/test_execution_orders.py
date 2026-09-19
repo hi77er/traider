@@ -802,6 +802,109 @@ def test_a_live_tick_places_a_bracketed_order_through_the_shared_engine(tmp_path
 
 
 # ---------------------------------------------------------------------------
+# a refused entry, and the mismatch it leaves behind
+# ---------------------------------------------------------------------------
+def _always_buy_driver(tmp_path, session):
+    """A driver whose generator always says BUY, wired to the stubbed broker."""
+    import pandas as pd
+
+    from src.strategy import StrategyConfig, StrategyEngine, bar_from_row
+    from src.strategy.live import LiveDriver
+
+    settings = _settings()
+    executor = AlpacaExecutor(
+        settings, client=AlpacaClient(resolve_execution_target(settings), session=session),
+        sleep=lambda _s: None, guard=lambda: None,
+    )
+
+    class AlwaysBuy:
+        def evaluate_frame(self, df):
+            return df.assign(signal="BUY")
+
+    driver = LiveDriver(
+        settings=settings,
+        engine=StrategyEngine(StrategyConfig.from_settings(settings, slippage=0.0, commission=0.0)),
+        generator=AlwaysBuy(),
+        broker=AlpacaBroker(settings, executor=executor),
+        state_path=tmp_path / "state.json",
+        name="TEST",
+    )
+    need = driver.required_bars
+    bars = need + 4
+    frame = pd.DataFrame(
+        {
+            "open": [100.0 + i for i in range(bars)],
+            "high": [101.0 + i for i in range(bars)],
+            "low": [99.0 + i for i in range(bars)],
+            "close": [100.5 + i for i in range(bars)],
+            "volume": [1_000] * bars,
+        },
+        index=pd.date_range("2026-09-14 09:00", periods=bars, freq="1h"),
+    )
+    bars_list = [bar_from_row(i, ts, row) for i, (ts, row) in enumerate(frame.iterrows())]
+    return driver, frame, bars_list, need
+
+
+def test_a_refused_entry_is_named_when_the_next_tick_stops_on_the_mismatch(tmp_path):
+    """An entry the broker refuses still leaves a position locally, so the loop stops.
+
+    Nothing is rolled back — the engine records the position when it builds the intent, which
+    is what keeps the report and the state in step — so the tick after a refusal refuses on
+    "local holds a position, the broker is flat" and goes on refusing every bar. That message
+    on its own blames a position that never existed; what it has to carry is the CAUSE, or an
+    operator cannot tell what to clear.
+    """
+    session = StubSession()
+    driver, frame, bars, need = _always_buy_driver(tmp_path, session)
+
+    session.queue("GET", "/v2/positions/AAPL", StubResponse(404, {"message": "no position"}))
+    session.queue("GET", "/v2/account", StubResponse(200, {"equity": "20000"}))
+    session.queue(
+        "POST", "/v2/orders",
+        StubResponse(403, {"code": 40310000, "message": "insufficient buying power"}),
+    )
+
+    first = driver.on_bar_closed(frame.iloc[: need + 1], next_bar=bars[need + 1])
+
+    assert first["action"] == "decided", "a refusal is reported, not raised"
+    assert first["intents"][0]["status"] == REJECTED
+    # The position IS recorded: that is the fact the next tick trips over.
+    assert driver.state.position is not None
+    assert "insufficient buying power" in driver.state.refused_entry["detail"]
+
+    session.queue("GET", "/v2/positions/AAPL", StubResponse(404, {"message": "no position"}))
+    session.queue("GET", "/v2/orders", StubResponse(200, []))
+
+    second = driver.on_bar_closed(frame.iloc[: need + 2], next_bar=bars[need + 2])
+
+    assert second["action"] == "refused"
+    assert "the broker is flat" in second["reason"], second["reason"]
+    assert "REFUSED" in second["reason"], "the refusal that caused it is named"
+    assert "insufficient buying power" in second["reason"], "in the broker's own words"
+    assert "state file" in second["reason"], "and what to do about it"
+
+
+def test_a_filled_entry_leaves_no_refusal_to_explain(tmp_path):
+    """The note only survives while it is true: a real fill is not a refusal."""
+    session = StubSession()
+    driver, frame, bars, need = _always_buy_driver(tmp_path, session)
+
+    session.queue("GET", "/v2/positions/AAPL", StubResponse(404, {"message": "no position"}))
+    session.queue("GET", "/v2/account", StubResponse(200, {"equity": "20000"}))
+    session.queue("POST", "/v2/orders", _filled(price="110.50", qty="90"))
+
+    report = driver.on_bar_closed(frame.iloc[: need + 1], next_bar=bars[need + 1])
+
+    assert report["action"] == "decided"
+    assert driver.state.position is not None
+    assert driver.state.refused_entry is None, "a fill is not a refusal"
+    # ...and it is not persisted either, so a restart does not resurrect it.
+    import json
+
+    assert json.loads((tmp_path / "state.json").read_text())["refused_entry"] is None
+
+
+# ---------------------------------------------------------------------------
 # the name a broker deduplicates on
 # ---------------------------------------------------------------------------
 def test_the_order_id_is_stable_and_says_what_it_is():
