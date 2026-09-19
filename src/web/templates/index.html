@@ -104,9 +104,9 @@
               <h2>Backtest</h2>
               <div class="bt-actions" onclick="event.stopPropagation()">
                 <span id="bt-spinner" class="bt-spinner" title="Backtest running…" hidden></span>
-                <button id="bt-report" class="ghost small" onclick="openBacktestReport()" hidden
+                <button id="bt-report" class="ghost small keep-visible" onclick="openBacktestReport()" hidden
                         title="Open the full report in a new tab">📊 Open full report</button>
-                <button id="bt-run" class="primary small" onclick="runBacktest()">▶ Run backtest</button>
+                <button id="bt-run" class="primary small keep-visible" onclick="runBacktest()">▶ Run backtest</button>
               </div>
             </div>
             <div class="collapse-body" id="bt-panel">
@@ -158,13 +158,13 @@
                     title="Expand the trading view">+</button>
             <h2>Trading</h2>
             <div class="settings-actions" onclick="event.stopPropagation()">
-              <span id="live-chip" class="chip">…</span>
+              <span id="live-chip" class="chip keep-visible">…</span>
               <button id="trading-off-btn" class="ghost small danger" onclick="toggleTrading()" hidden>⏹ Turn trading off</button>
               <button id="trading-flatten-btn" class="ghost small danger" onclick="stopAndFlatten()" hidden
                       title="Turn trading off and close whatever is open — the stop button does not close anything">✂ Stop trading &amp; flatten</button>
-              <button id="live-refresh" class="ghost small" onclick="loadLive(true)"
+              <button id="live-refresh" class="ghost small keep-visible" onclick="loadLive(true)"
                       title="Re-read the loop's records and the broker">↻</button>
-              <a class="btn-link" href="/log">Open trading log →</a>
+              <a class="btn-link keep-visible" href="/log">Open trading log →</a>
             </div>
           </div>
           <div class="collapse-body" id="live-body" hidden>

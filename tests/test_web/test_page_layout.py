@@ -170,8 +170,8 @@ def test_a_collapsed_panel_hides_every_control_but_its_toggle():
     """
     collapsed = ".card.collapsible:has(.collapse-body[hidden])"
 
-    for controls in (".settings-actions", ".bt-actions"):
-        assert f"{collapsed} {controls}" in CSS, f"a collapsed panel must hide {controls}"
+    assert f"{collapsed} .settings-actions > *:not(.keep-visible)" in CSS, "the act not the group"
+    assert f"{collapsed} .bt-actions > *:not(.keep-visible)" in CSS
     block = CSS[CSS.index(collapsed):]
     assert "display: none" in block[:block.index("}")], "hidden, not merely moved"
 
@@ -181,6 +181,38 @@ def test_a_collapsed_panel_hides_every_control_but_its_toggle():
         at = HTML.index(f'id="{card}"')
         tag = HTML[HTML.rindex("<", 0, at):HTML.index(">", at)]
         assert "card collapsible" in tag, f"{card} must opt into the collapse pattern"
+
+
+def test_the_trading_panel_keeps_its_state_and_log_reachable_when_collapsed():
+    """Reading whether trading is on, and getting to the log, must not need the panel open.
+
+    The two ways to STOP trading hide with it — the master switch in the top bar turns trading
+    off without them — so what stays is the chip, the reload and the link to the log.
+    """
+    head = HTML[HTML.index('id="live-card"'):HTML.index('id="live-body"')]
+    actions = head[head.index('class="settings-actions"'):]
+    actions = actions[:actions.index("</div>")]
+
+    for kept in ('id="live-chip"', 'id="live-refresh"', 'href="/log"'):
+        at = actions.index(kept)
+        tag = actions[actions.rindex("<", 0, at):actions.index(">", at)]
+        assert "keep-visible" in tag, f"{kept} must stay visible when the panel is collapsed"
+    for hidden_with_the_body in ('id="trading-off-btn"', 'id="trading-flatten-btn"'):
+        at = actions.index(hidden_with_the_body)
+        tag = actions[actions.rindex("<", 0, at):actions.index(">", at)]
+        assert "keep-visible" not in tag, "stopping trading hides with the panel"
+
+
+def test_the_backtest_keeps_its_run_and_report_buttons_when_collapsed():
+    """Run and Open report act on the stored run, which is readable with the panel shut; the
+    body it hides is the result, not the controls."""
+    card = HTML[HTML.index('id="backtest"'):HTML.index('id="bt-panel"')]
+    actions = card[card.index('class="bt-actions"'):]
+
+    for kept in ('id="bt-run"', 'id="bt-report"'):
+        at = actions.index(kept)
+        tag = actions[actions.rindex("<", 0, at):actions.index(">", at)]
+        assert "keep-visible" in tag, f"{kept} must stay visible when the panel is collapsed"
 
 
 # ---------------------------------------------------------------------------

@@ -2455,6 +2455,10 @@ const LIVE_STATE = {
   running: { text: "running", cls: "good", note: "a loop is running" },
 };
 
+// The chip's classes are rebuilt from the table above on every render, so the base ones are
+// named once here: ``keep-visible`` is what leaves it on screen while the panel is collapsed.
+const LIVE_CHIP_CLASSES = "chip keep-visible";
+
 // The loop is a SEPARATE process and this dashboard never starts one — that is the whole
 // point of the two-process split. So "armed" and "trading" are two different facts, and only
 // one of them is a switch: the chip above says "stopped" whether the switch is on or off,
@@ -2506,7 +2510,7 @@ function showLiveError(message) {
   const state_ = $("live-state");
   if (state_) state_.textContent = message;
   const chip = $("live-chip");
-  if (chip) { chip.textContent = "?"; chip.className = "chip bad"; }
+  if (chip) { chip.textContent = "?"; chip.className = `${LIVE_CHIP_CLASSES} bad`; }
 }
 
 // The panel polls; the page does not. Two cadences, because the two halves cost very
@@ -2657,7 +2661,7 @@ function renderLive(loop, orders, market, accounts) {
   const chip = $("live-chip");
   if (chip) {
     chip.textContent = info.text;
-    chip.className = `chip ${info.cls}`;
+    chip.className = `${LIVE_CHIP_CLASSES} ${info.cls}`;
     chip.title = info.note;
   }
 
