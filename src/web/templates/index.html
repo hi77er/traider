@@ -8,22 +8,13 @@
 </head>
 <body>
   <header>
-    <!-- Left: identity, the account type, and the master switch. Which account the
-         bot trades and whether it is trading at all are part of what it IS, not
-         settings buried in a panel, so both sit beside the name and are always on
-         screen. They are the SAME pill in every state — same border, tint, font and
-         geometry — and the state is carried entirely by the words. -->
+    <!-- Just the identity, and on the right everything that configures or navigates away. Trading
+         used to be represented up here too — the mode, the master switch and the open count as
+         three pills — and every one of them was a second copy of an answer the Trading panel
+         gives, in a place where none of them could be acted on. The panel is where trading is
+         read and changed, and the header no longer pretends otherwise. -->
     <div class="header-left">
       <h1>📈 TRAIDER</h1>
-      <select id="exec-env" class="exec-pill exec-select" onchange="onEnvChange()"
-              title="Which Alpaca account this strategy's orders go to"></select>
-      <button id="trading-toggle" class="exec-pill exec-toggle" onclick="toggleTrading()"
-              title="Start or stop sending orders for the active strategy">▶ Turn trading on</button>
-      <!-- What is OPEN, which is not the same question as whether trading is armed.
-           A position held while OFF is the one moment this matters most, so the count
-           sits beside the switch and names the account it is counting. -->
-      <button id="open-count" class="exec-pill exec-positions" onclick="openLivePanel()"
-              title="Positions open in the account being traded">0 open</button>
     </div>
     <!-- Right: everything that configures or navigates away. -->
     <div class="header-actions">
@@ -77,34 +68,28 @@
             <div class="card-head">
               <h2>Trading</h2>
               <div class="settings-actions">
-                <!-- No "Turn trading off" button here: the header's master switch does that from
-                     outside every lock, and a second button for one action makes the panel look
-                     like it has two owners. The chip reports the loop; the flatten button is the
-                     one control that is NOT the header's — it closes what is open as well, and it
-                     is the only way to reach that once the switch is off. -->
-                <span id="live-chip" class="chip">…</span>
+                <!-- No "Turn trading off" button here: the Trading box below IS the switch, so a
+                     button beside it would be a second owner of one action. The flatten button is
+                     the one control that is NOT the switch — it closes what is open as well — and
+                     it is the only way to reach that while trading is off. -->
                 <button id="trading-flatten-btn" class="ghost small danger" onclick="stopAndFlatten()" hidden
                         title="Turn trading off and close whatever is open — the stop button does not close anything">✂ Stop trading &amp; flatten</button>
                 <button id="live-refresh" class="ghost small" onclick="loadLive(true)"
-                        title="Re-read the loop's records and the broker">↻</button>
+                        title="Re-read the loop's records and the broker">↻ Refresh</button>
                 <a class="btn-link" href="/log">Open trading log →</a>
               </div>
             </div>
             <div id="live-body">
-              <p id="trading-msg" class="muted"></p>
+              <p id="trading-msg" class="muted" hidden></p>
               <p id="live-state" class="muted">Checking…</p>
               <p id="live-protection" class="muted"></p>
               <!-- The numbers as boxes, in the same style as the backtest KPIs and the report
-                   page: a dashboard is read by glancing at boxes. Warnings stay as sentences
-                   because a reason is not a measurement. -->
+                   page: a dashboard is read by glancing at boxes. The Mode and Trading boxes are
+                   also BUTTONS — they do what the header's mode control and the master switch do
+                   — and each ends in the status dot that used to sit on the pill up there: blue
+                   for the calm setting, red and blinking for the one that spends money. -->
               <div id="live-metrics" class="live-metrics"></div>
               <div id="trading-facts" class="rp-kv-grid"></div>
-              <p id="live-warnings" class="muted" hidden></p>
-              <p id="trading-live-note" class="muted note">
-                Armed. While ON, every configuration panel is locked — turn trading off to change
-                anything. <b>Orders</b> come from the loop process, not this page: with nothing
-                running it, nothing trades.
-              </p>
             </div>
           </section>
         </section>

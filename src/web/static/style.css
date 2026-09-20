@@ -51,20 +51,16 @@ header h1 { font-size: 20px; margin: 0; }
   color: var(--muted);
 }
 
-/* TWO HEADER CONTROLS, ONE PILL, EVERY STATE.
+/* THE LOG PAGE'S SWITCH, AND NOTHING STYLED PER STATE.
 
-   The account type and the master switch are the same widget: identical border,
-   radius, padding, height, font, tint, background and text colour — in all four
-   situations (paper/live x idle/armed). Nothing here is styled per state, so the
-   state classes in the DOM are hooks, not appearances: a rule that targeted
-   `.exec-pill.live` would break the invariant a test enforces, and the pair would
-   start looking like two different kinds of control again.
+   This is the pill the trading log page's master switch wears — the dashboard's copy went with the
+   rest of the header's trading controls, and its mode dropdown and its status dots in the option
+   text with it. The pill keeps its geometry: border, radius, padding, height, font, tint and
+   background, in every state. Nothing here is styled per state, so the state classes in the DOM are
+   hooks, not appearances: a rule that targeted `.exec-pill.live` would break the invariant a test
+   enforces.
 
-   The state is carried by the WORDS: "Paper — simulated, no real money" next to
-   "▶ Turn trading on" says everything a colour was saying, without asking anyone
-   to remember a palette.
-
-   No `display` property on the select on purpose: the UA [hidden] rule must win. */
+   No `display` property on purpose: the UA [hidden] rule must win. */
 .exec-pill {
   border-radius: 999px;
   padding: 5px 14px;
@@ -82,21 +78,6 @@ header h1 { font-size: 20px; margin: 0; }
 .exec-pill:focus-visible { outline: 2px solid rgba(76, 141, 255, 0.6); outline-offset: 2px; }
 .exec-pill:hover { border-color: currentColor; }
 .exec-pill:disabled { opacity: 0.55; cursor: not-allowed; }
-
-/* The select is forced to the button's box: no caret, no extra padding, the same
-   34px height (the global button height) and the same centring of its text, so
-   the two are the same shape as well as the same colours. */
-.exec-select {
-  appearance: none;
-  -webkit-appearance: none;
-  -moz-appearance: none;
-  height: 34px;
-  padding: 5px 14px;
-  background-image: none;
-  text-align-last: center;
-}
-/* The popup list keeps the app's own colours — it is an OS surface, not the pill. */
-.exec-select option { background: var(--card); color: var(--text); }
 
 /* The same signal inside a report, next to "What was tested". */
 .rp-exec { font-weight: 600; }
@@ -1191,6 +1172,49 @@ button.primary.small:disabled, button.ghost.small:disabled {
 .bt-stat .value { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .bt-stat .value.pos { color: #7fe0c8; }
 .bt-stat .value.neg { color: #ff9a94; }
+/* The Mode and Trading boxes are BUTTONS: each calls the handler the header's own control for
+   that state calls, so either can be changed from where it is read. Everything the global
+   `button` rule imposes — the 34px height, the centring, and the UA's font and text colour — has
+   to be put back to the box's own shape, or the two pressable boxes stop looking like the
+   measurements beside them. `vertical-align` and the flex display are left as they are: the grid
+   item already stretches exactly like the div tiles. */
+button.bt-stat {
+  height: auto;
+  align-items: stretch;
+  justify-content: flex-start;
+  font: inherit;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+button.bt-stat:hover { border-color: var(--accent); }
+button.bt-stat:focus-visible { outline: 2px solid rgba(76, 141, 255, 0.6); outline-offset: 2px; }
+/* `.bt-stat[data-tip]` sets `cursor: help` and outranks `button.bt-stat` — a box that can be
+   pressed must not say "look it up". */
+button.bt-stat[data-tip] { cursor: pointer; }
+/* Locked, the way every other control Trading ON locks: dimmed, and saying so with the cursor.
+   Still hoverable on purpose — the hint is where the box explains why it cannot be pressed, and a
+   box that can neither be pressed nor asked about has no answer at all. */
+button.bt-stat:disabled,
+button.bt-stat[data-tip]:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* The dot that ends the Mode and Trading boxes: the same two dots the header pills carried, and
+   the same rules — blue for the calm setting, red for the one that spends money, and red BLINKS.
+   A circle rather than the pills' 🔵/🔴 glyphs, because in the box the dot is a real element and
+   the blink can be an animation: through the pill it had to be a text rewrite, and a rewrite here
+   would go through `setIfChanged` and replace the two buttons under the cursor every 700ms. */
+.bt-stat .dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+.bt-stat .dot.calm { background: #58a6ff; }
+.bt-stat .dot.alert { background: var(--red); animation: dot-blink 1.4s step-end infinite; }
+/* The header's dot is visible for one 700ms phase and dark for the next; this is the same rhythm. */
+@keyframes dot-blink { 0%, 49.99% { opacity: 1; } 50%, 100% { opacity: 0.12; } }
 /* A state box whose setting costs money: the account is LIVE, or trading is ARMED. The border
    pulses rather than a digit going red, because this dashboard is left open and a red figure in a
    quiet box is exactly what a glance skips — the same reason the header blinks for those two
@@ -1208,6 +1232,8 @@ button.primary.small:disabled, button.ghost.small:disabled {
 }
 @media (prefers-reduced-motion: reduce) {
   .bt-stat.flash-red { animation: none; box-shadow: 0 0 8px rgba(239, 83, 80, 0.35); }
+  /* The alert dot keeps its colour and stops moving — the same deal the header's dot makes. */
+  .bt-stat .dot.alert { animation: none; }
 }
 .bt-notes { margin: 0 0 14px; font-size: 12px; }
 #backtest h4 { margin: 10px 0 6px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
@@ -1532,10 +1558,10 @@ td.mkt-sym { font-weight: 600; }
 
 /* ---------- Trading panel: what the loop is doing ----------
 
-   The state is carried by WORDS in the chip and by the colour of the text beside it, not
-   by restyling the header pills: an `.exec-pill.<state>` rule anywhere is what a test
-   forbids, and the pair of header controls has to keep looking like one control in every
-   state. `.chip.good`/`.chip.bad` are deliberately scoped to chips. */
+   The state is carried by WORDS and by the colour of the text beside them, not by restyling the
+   pill: an `.exec-pill.<state>` rule anywhere is what a test forbids, and the log page's switch
+   has to keep looking like the control it is in every state. `.chip.good`/`.chip.bad` are
+   deliberately scoped to chips, and the log page's own status chip is what still wears them. */
 #live-state { line-height: 1.5; }
 #live-state .bad { color: var(--red); font-weight: 600; }
 #live-state .warn { color: #f0b429; }
@@ -1547,14 +1573,10 @@ td.mkt-sym { font-weight: 600; }
 /* The dashboard's KPI grid is `#bt-metrics` (an ID), so the grid has to be declared again
    here — the shared rule does not reach these tiles and they would stack in one column. */
 .live-metrics { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 8px; }
-#live-warnings { margin: 10px 0 0; line-height: 1.5; }
 /* (`.live-row` / `.live-key` retired with the rows they styled — the panel's numbers are
    `.bt-stat` boxes now, and `#live-state .warn` already carries the warning colour.) */
 .chip.good { color: var(--green); border-color: rgba(38, 166, 154, 0.5); }
 .chip.bad { color: var(--red); border-color: rgba(239, 83, 80, 0.55); }
-/* The loop chip hides while trading is on (the Trading box says it), and `.chip` would
-   otherwise keep the UA's `[hidden]` from applying — the same trap as the buttons above. */
-#live-chip[hidden] { display: none; }
 
 /* ---------- Trading log page ----------
 

@@ -224,13 +224,19 @@ def test_the_panel_keeps_the_accounts_across_the_fast_polls():
 
 
 def test_a_zero_balance_and_an_unreadable_account_render_differently():
-    """The distinction the whole read is built around: "$0.00" is a claim about a balance and
-    an unreadable account is the absence of one. So the numbers become boxes only for an
-    account that was read; anything else becomes a sentence instead."""
+    """The distinction the whole read is built around: "$0.00" is a claim about a balance and an
+    unreadable account is the absence of one. So the numbers become boxes only for an account that
+    WAS read; one that could not be read draws no figures at all — not a row of dashes, and not a
+    zero.
+
+    The sentence that named the reason went with the panel's bottom warnings block. It is not lost
+    from the screen: which account the run is pointed at, and the credential failure behind it, are
+    on the header pill, and the tick line prints the same broker message verbatim.
+    """
     body = _function(APP_JS, "renderLiveDetail")
 
     assert "active.known" in body
-    assert "active.reason" in body, "the reason goes in place of the numbers"
+    assert "active.reason" not in body, "the reason went with the bottom warnings block"
     assert body.index("active.known") < body.index("money(active.equity)"), \
         "the unknown case has to be decided before any number is formatted"
 
@@ -326,6 +332,136 @@ def test_the_grid_has_its_own_declaration():
     assert ".live-metrics { display: grid" in css
     assert 'id="live-metrics" class="live-metrics"' in \
         (ROOT / "src" / "web" / "templates" / "index.html").read_text(encoding="utf-8")
+
+
+def test_the_two_state_boxes_are_buttons_on_the_header_s_own_handlers():
+    """Asked for: the Mode and Trading boxes act as buttons, with the same handlers and behaviour
+    as the controls in the top nav.
+
+    Each calls what the header's own control for that state calls — the master switch's
+    ``toggleTrading()``, and the mode's single write path — so there is no second implementation of
+    either decision, and no second confirmation standing between a click and real money. A real
+    ``<button>`` rather than a div with a handler, because the keyboard has to reach it; the
+    measurement boxes beside them stay divs, which is what makes "this one is pressable" readable
+    from the shape alone.
+    """
+    body = _function(APP_JS, "liveTile")
+
+    assert '<button type="button" class="bt-stat' in body, "a button, not a div with a click"
+    assert 'onclick="' in body
+    assert '<div class="bt-stat' in body, "and the plain boxes are still plain"
+
+    detail = _function(APP_JS, "renderLiveDetail")
+    assert '"toggleTrading()"' in detail, "the Trading box is the master switch"
+    assert '"onModeBoxClick()"' in detail, "the Mode box is the header's mode control"
+
+    css = (ROOT / "src" / "web" / "static" / "style.css").read_text(encoding="utf-8")
+    assert "button.bt-stat {" in css, (
+        "the global `button` rule sets a height and a centred font; the box has to keep its own"
+    )
+
+
+def test_the_mode_cannot_be_switched_while_trading_is_on():
+    """Asked for: switching accounts in flight must be impossible from the panel.
+
+    The server refuses the write (409) and the loop would be left running against an account it was
+    not opened on — sending LIVE orders against positions it opened on paper is the worst case in
+    this app. So the Mode box goes down with every other locked control, and its hint says why
+    instead of inviting a click that would be refused.
+    """
+    body = _function(APP_JS, "renderLiveDetail")
+
+    assert "const locked = !!state.tradingLocked;" in body
+    assert '"onModeBoxClick()", locked' in body, "the box is handed the lock"
+    assert "trading is ON — turn it off to switch accounts" in body, "and says why"
+
+    tile = _function(APP_JS, "liveTile")
+    assert "locked" in tile and '? " disabled"' in tile, "a locked box renders disabled"
+
+    css = (ROOT / "src" / "web" / "static" / "style.css").read_text(encoding="utf-8")
+    assert "button.bt-stat:disabled," in css and "cursor: not-allowed" in css
+
+
+def test_the_switch_itself_is_never_locked():
+    """The one control that has to survive every lock: turning trading OFF.
+
+    A disabled switch would leave the bot running with no way to stop it from the page — and it is
+    the lock's own precondition, since the server unlocks when the switch goes off.
+    """
+    body = _function(APP_JS, "renderLiveDetail")
+
+    trading_tile = body[body.index('liveTile("Trading"'):body.index('liveTile("Open"')]
+    assert "locked" not in trading_tile, "the switch is never handed the lock"
+
+
+def test_the_state_boxes_carry_the_same_two_dots():
+    """Asked for: the dots the header carried, on the Mode and Trading boxes, with the same
+    behaviour — blue for the calm setting, red for the one that spends money, and red BLINKS.
+
+    They are styled circles driven by a CSS animation rather than the dropdown's 🔵/🔴 glyphs, and
+    that difference is the point: a glyph in the box would have to be rewritten by the same 700ms
+    timer the dropdown uses, and that rewrite goes through ``setIfChanged`` — it would replace the
+    two BUTTONS under the cursor mid-click, and restart their pulse on every tick. The rules are
+    the header's own: both ends are marked (an unmarked box beside a marked one reads as "unknown"
+    rather than "fine"), and with motion reduced the red dot keeps its colour and stops moving.
+    """
+    body = _function(APP_JS, "renderLiveDetail")
+
+    assert 'stateDot(mode === "live")' in body
+    assert "stateDot(armed)" in body
+
+    css = (ROOT / "src" / "web" / "static" / "style.css").read_text(encoding="utf-8")
+    assert ".bt-stat .dot.calm" in css and ".bt-stat .dot.alert" in css
+    assert "animation: dot-blink" in css and "@keyframes dot-blink" in css
+    reduced = css[css.index("prefers-reduced-motion"):]
+    assert ".bt-stat .dot.alert { animation: none; }" in reduced[:600]
+
+
+def test_the_open_count_moved_from_the_header_into_the_panel():
+    """Asked for: an Open box with the count of open positions, in the Trading panel.
+
+    It is the header's "0 open" pill, moved: the count of the account being traded, with the tip
+    still naming what the OTHER account holds — a position there is real whatever mode this run is
+    in, and it is what refuses an arming. An account that could not be READ is not a count of zero,
+    so that box shows "?" where the pill said "unreadable".
+    """
+    body = _function(APP_JS, "openTile")
+
+    assert "known === false" in body and "unknown_count" in body
+    assert '"?"' in body, "an unreadable account is not a zero"
+    assert 'liveTile("Open"' in _function(APP_JS, "renderLiveDetail"), "the box is in the grid"
+
+    html = (ROOT / "src" / "web" / "templates" / "index.html").read_text(encoding="utf-8")
+    assert 'id="open-count"' not in html, "and the header's copy is gone"
+
+
+def test_the_armed_note_is_gone_from_the_panel():
+    """Asked for removal: "Armed. While ON, every configuration panel is locked…".
+
+    Both facts it carried are already on screen — the Trading box reads "on", and the mode it is
+    armed in is its own box — and the lock is not silent about itself either: a locked panel
+    refuses with the server's own message. Gone from the markup, the script and the stylesheet.
+    """
+    html = (ROOT / "src" / "web" / "templates" / "index.html").read_text(encoding="utf-8")
+
+    assert 'id="trading-live-note"' not in html
+    assert "trading-live-note" not in APP_JS, "and nothing writes to the id that is gone"
+    assert "nothing running it, nothing trades" not in html
+
+
+def test_the_bottom_warnings_block_is_gone():
+    """Asked for removal: the block of sentences under the boxes.
+
+    Its lines repeated what the panel had already said — the broker and exchange failure is the
+    tick line's own message, verbatim — and a panel that says the same thing twice at two ends of
+    one card reads as two problems. Gone from the markup, the script and the stylesheet.
+    """
+    html = (ROOT / "src" / "web" / "templates" / "index.html").read_text(encoding="utf-8")
+    css = (ROOT / "src" / "web" / "static" / "style.css").read_text(encoding="utf-8")
+
+    assert 'id="live-warnings"' not in html
+    assert "live-warnings" not in APP_JS, "and nothing writes to the id that is gone"
+    assert "#live-warnings" not in css
 
 
 def test_the_log_page_reads_and_renders_the_accounts():
@@ -486,17 +622,13 @@ def test_a_failed_account_read_keeps_the_last_good_boxes():
     """An account that could not be re-read is not an account worth zero.
 
     The failure payload carries an empty ``accounts`` list, and storing it replaced a perfectly
-    good snapshot with a blank panel — no boxes, and no warning either, since the warning needs a
-    row to complain about. Reported as "the boxes disappeared", which is exactly how it read.
+    good snapshot with a blank panel — no boxes at all. Reported as "the boxes disappeared",
+    which is exactly how it read.
     """
     body = _function(APP_JS, "renderLive")
 
-    assert "if (accounts.ok === false) state.liveAccountsError" in body
-    assert 'else { state.liveAccounts = accounts; state.liveAccountsError = ""; }' in body, \
+    assert "if (accounts.ok !== false) state.liveAccounts = accounts;" in body, \
         "only a GOOD read is stored"
-
-    detail = _function(APP_JS, "renderLiveDetail")
-    assert "state.liveAccountsError" in detail, "and the panel says the figures are the last ones"
 
 
 def test_the_account_boxes_are_the_same_five_the_log_page_shows():
@@ -513,33 +645,35 @@ def test_the_other_account_s_figures_are_never_drawn_under_this_mode():
     """Asked for: after a mode switch the section must show the NEW account's data.
 
     The snapshot in hand belongs to the account the panel was about when it was read, so a switch
-    makes it the account we just left. The panel says ``reading the live account…`` and draws no
-    figures until the read for this mode lands — a second or so, and never the wrong numbers.
-    ``state.liveAccounts`` keeps the old snapshot, so a switch BACK draws that account's own last
-    known figures at once rather than blinking empty.
+    makes it the account we just left. The panel draws no figures until the read for this mode
+    lands — a second or so, and never the wrong numbers. ``state.liveAccounts`` keeps the old
+    snapshot, so a switch BACK draws that account's own last known figures at once rather than
+    blinking empty.
     """
     body = _function(APP_JS, "renderLiveDetail")
 
     assert 'const staleSnapshot = !!(accounts.env && mode && accounts.env !== mode);' in body
     assert "staleSnapshot" in body.split("const active")[1].split(";")[0], \
         "the figure rows are gated on the snapshot being about this account"
-    assert "reading the ${escapeHtml(mode)} account" in body, "and it says what it is doing"
 
 
 def test_a_written_switch_takes_the_full_read_at_once():
     """Asked for: the mode switch must not wait for the poll.
 
     Only the mode box comes from the switch's own read; the account figures come from the broker
-    half of the live poll, on a minute cadence. So the handler re-reads the switch, re-reads the
+    half of the live poll, on a minute cadence. So the write re-reads the switch, re-reads the
     broker, and only then restarts the cadence — in that order, because the mode has to be the
-    new one before the figures for it are asked for.
+    new one before the figures for it are asked for. ONE write path, and one caller: the Mode box
+    is the only control that changes the mode.
     """
-    body = _function(APP_JS, "onEnvChange")
+    body = _function(APP_JS, "writeExecutionEnv")
 
     assert "await loadTrading();" in body
     assert "await refreshLiveNow();" in body
     assert body.index("await loadTrading();") < body.index("await refreshLiveNow();"), \
         "the new mode is written to the page before the account behind it is read"
+
+    assert "writeExecutionEnv(" in _function(APP_JS, "onModeBoxClick"), "the Mode box goes through it"
 
 
 def test_the_panel_does_not_restate_the_strategy_or_the_endpoint():

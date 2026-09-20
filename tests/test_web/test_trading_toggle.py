@@ -30,7 +30,7 @@ LOG_JS = STATIC / "log.js"
 SWITCH_JS = STATIC / "trading_switch.js"
 
 START_MARKER = "async function toggleTrading() {"
-END_MARKER = "\nfunction renderTradingControls("
+END_MARKER = "\nfunction switchTip("
 
 pytestmark = pytest.mark.skipif(
     shutil.which("node") is None, reason="node is required to exercise the master switch"
@@ -174,9 +174,7 @@ def test_stopping_never_asks(toggle_results):
 # what the switch says BEFORE the click
 # ---------------------------------------------------------------------------
 TOOLTIP_HARNESS = r"""
-const btn = { className: "", title: "", disabled: true };
-function $(id) { return id === "trading-toggle" ? btn : null; }
-function renderStatusDots() {}
+function $(id) { return null; }   // switchTip is a pure string: it touches no element
 
 const failed = {
   env: "paper", ok: true, message: "ok", broker: "alpaca",
@@ -185,36 +183,37 @@ const codes = {};
 
 // A check that FAILED must be quoted: "not verified yet" would send the operator
 // to press Validate when the fix is to replace the keys.
-renderTradingControls({
+codes.failed = switchTip({
   execution: failed, trading: { on: false }, strategy: "s1",
   verification: { has_verdict: true, verified: false, message: "Alpaca rejected these credentials (401)" },
 });
-codes.failed = btn.title;
 
 // Never checked: no verdict, no reason to quote — say what to do.
-renderTradingControls({
+codes.unchecked = switchTip({
   execution: failed, trading: { on: false }, strategy: "s1",
   verification: { has_verdict: false, verified: false, message: "" },
 });
-codes.unchecked = btn.title;
 
 // Verified: an invitation, not a warning.
-renderTradingControls({
+codes.verified = switchTip({
   execution: failed, trading: { on: false }, strategy: "s1",
   verification: { has_verdict: true, verified: true, message: "Credentials accepted" },
 });
-codes.verified = btn.title;
 
 // A broken execution target outranks everything: the keys are not even in play.
-renderTradingControls({
+codes.no_target = switchTip({
   execution: { env: "live", ok: false, message: "LIVE API key/secret are missing" },
   trading: { on: false }, strategy: "s1",
   verification: { has_verdict: false, verified: false, message: "" },
 });
-codes.no_target = btn.title;
 
-// Anything wrong leaves the switch clickable: stopping or trying must stay possible.
-codes.disabled_when_wrong = btn.disabled;
+// Armed: the hint names the action that is left, which is stopping.
+codes.armed = switchTip({
+  execution: { env: "paper", ok: true, broker: "alpaca" },
+  trading: { on: true, env: "paper", since: "2026-09-15T09:12:31+00:00" }, strategy: "s1",
+  verification: { has_verdict: true, verified: true, message: "Credentials accepted" },
+});
+
 process.stdout.write(JSON.stringify(codes));
 """
 
@@ -222,7 +221,7 @@ process.stdout.write(JSON.stringify(codes));
 @pytest.fixture(scope="module")
 def tooltips(tmp_path_factory) -> dict:
     src = APP_JS.read_text(encoding="utf-8")
-    start = src.index("function renderTradingControls(")
+    start = src.index("function switchTip(")
     block = src[start:src.index("\nfunction renderTradingPanel(", start)]
     script = tmp_path_factory.mktemp("tooltip") / "tooltip.js"
     script.write_text(block + TOOLTIP_HARNESS, encoding="utf-8")
@@ -257,8 +256,11 @@ def test_a_broken_target_outranks_the_credential_verdict(tooltips):
     assert "LIVE API key/secret are missing" in tooltips["no_target"]
 
 
-def test_the_switch_is_never_disabled_by_a_bad_state(tooltips):
-    assert tooltips["disabled_when_wrong"] is False
+def test_the_hint_names_stopping_once_it_is_armed(tooltips):
+    """The box reads "on"; the hint has to say what pressing it does — and it must not still be
+    inviting an arming that already happened."""
+    assert "click to stop" in tooltips["armed"]
+    assert "Start sending orders" not in tooltips["armed"]
 
 
 # ---------------------------------------------------------------------------

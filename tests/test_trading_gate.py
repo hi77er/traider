@@ -579,19 +579,18 @@ def test_a_retired_key_is_dropped_not_rejected(tmp_path):
 # ---------------------------------------------------------------------------
 def test_the_trading_switch_and_its_lock_are_wired_into_the_dashboard():
     html = (ROOT / "src" / "web" / "templates" / "index.html").read_text(encoding="utf-8")
-    assert 'id="trading-toggle"' in html
+    assert 'id="trading-toggle"' not in html, "the master switch is a box in the panel now"
     # ONE panel for everything about trading. It used to be two — a switch card under the chart
     # and the account panel under the backtest — and the same facts were printed in both, which
     # is how a note claiming the Alpaca executor was unimplemented survived in one of them.
     assert 'id="trading-panel"' not in html, "the separate switch card is gone"
     live = html.index('id="live-card"')
     body = html.index('id="live-body"')
-    # The flatten control lives in the HEAD, because it is the one action that is not the header
-    # switch's and it has to stay reachable. The panel's own "turn trading off" button is gone:
-    # the master switch in the header does that, from outside every lock.
+    # The flatten control lives in the HEAD, because it is the one action that is not the switch's
+    # and it has to stay reachable.
     at = html.index('id="trading-flatten-btn"')
     assert live < at < body, "the flatten control goes in the head"
-    assert 'id="trading-off-btn"' not in html, "the header switch is the only way to stop trading"
+    assert 'id="trading-off-btn"' not in html, "the Trading box is the only way to stop trading"
     for readout in ("trading-msg", "trading-facts"):
         assert html.index(f'id="{readout}"') > body, f"{readout} is panel body content"
     # The Execution panel is gone: the header carries the state, and the armed
@@ -606,10 +605,11 @@ def test_the_trading_switch_and_its_lock_are_wired_into_the_dashboard():
     assert "function applyConfigLock()" in js
     # The lock is applied from ONE place, over one shared list of buttons.
     assert "!!state.tradingLocked" in js
-    for key in ("account-save", "save-pconfig", "save-rules", "save-risk", "exec-env"):
+    for key in ("account-save", "save-pconfig", "save-rules", "save-risk"):
         assert f'"{key}"' in js
-    # The off switch is never disabled, or the lock could not be released.
-    assert "btn.disabled = false; // the off switch must always be reachable" in js
+    # The box that IS the switch is what stops trading, and a box is never disabled — a disabled
+    # switch could not be turned off, which is the one control that has to survive every lock.
+    assert '"toggleTrading()"' in js, "the Trading box calls the master switch"
 
     css = (ROOT / "src" / "web" / "static" / "style.css").read_text(encoding="utf-8")
     assert ".exec-state" not in css, "the removed panel's styles should not linger"
@@ -620,17 +620,21 @@ def test_the_trading_switch_and_its_lock_are_wired_into_the_dashboard():
     assert "body.trading-on" not in css
 
 
-def test_the_header_keeps_identity_and_the_switch_left_and_config_right():
-    """Which account the bot trades and whether it is trading are identity, not
-    settings: both sit beside the logo, always on screen. Configuration and
-    navigation stay on the right."""
+def test_the_header_carries_no_trading_controls_at_all():
+    """One pill, one button, three answers — the header used to repeat trading three times over:
+    the mode, the master switch and the open count, each a copy of something the Trading panel
+    already says and can act on.
+
+    All three are gone. What is left in the left group is the identity, and everything that
+    configures or navigates away stays on the right."""
     html = (ROOT / "src" / "web" / "templates" / "index.html").read_text(encoding="utf-8")
     left = html.index('class="header-left"')
-    switch = html.index('id="exec-env"')
-    toggle = html.index('id="trading-toggle"')
     actions = html.index('class="header-actions"')
-    assert left < switch < actions, "the paper/live switch must sit in the left group"
-    assert left < toggle < actions, "the master switch must sit in the left group too"
+    head = html[left:actions]
+
+    for gone in ("exec-env", "trading-toggle", "open-count"):
+        assert f'id="{gone}"' not in head, f"{gone} belongs to the Trading panel now"
+    assert "📈 TRAIDER" in head, "the identity stays"
     for el in ("open-account-settings",):
         assert html.index(el) > actions, f"{el} must stay in the right group"
     # The global (.env) settings form is gone: infrastructure settings are edited in
@@ -643,22 +647,20 @@ def test_the_header_keeps_identity_and_the_switch_left_and_config_right():
     assert "📈 TRAIDER<" in html
 
 
-def test_the_two_header_controls_are_one_pill_in_every_state():
-    """Both controls are the same widget, and NO state gets its own styling: same
-    border, radius, padding, height, font, tint, background and text colour,
-    whatever is selected. One rule that restyles a single state is enough to make
-    the pair look like two different kinds of control, which is the thing this
-    guards."""
-    css = (ROOT / "src" / "web" / "static" / "style.css").read_text(encoding="utf-8")
-    html = (ROOT / "src" / "web" / "templates" / "index.html").read_text(encoding="utf-8")
+def test_the_pill_is_never_styled_per_state():
+    """NO state gets its own styling: same border, radius, padding, height, font, tint,
+    background and text colour, whatever the state. One rule that restyles a single state is
+    enough to make the pill read as a different kind of control from the buttons around it, which
+    is the thing this guards.
 
-    # Both wear the shared class and nothing that varies with state...
-    assert 'class="exec-pill exec-select"' in html
-    assert 'class="exec-pill exec-toggle"' in html
-    # ...and the JS keeps the class list CONSTANT, so no state can be styled.
-    js = (ROOT / "src" / "web" / "static" / "app.js").read_text(encoding="utf-8")
-    assert 'sel.className = "exec-pill exec-select";' in js
-    assert 'btn.className = "exec-pill exec-toggle";' in js
+    The pill's two dashboard tenants — the paper/live dropdown and the master switch beside it —
+    are gone, and the rule outlives them because the stylesheet is shared: the trading log page's
+    own switch is what wears it now."""
+    css = (ROOT / "src" / "web" / "static" / "style.css").read_text(encoding="utf-8")
+    log = (ROOT / "src" / "web" / "templates" / "log.html").read_text(encoding="utf-8")
+
+    # It is worn by the log page's switch, and nothing varies with state.
+    assert 'class="exec-pill exec-toggle"' in log
 
     # No selector may target a state: paper/live/off/on/blocked are hooks, not looks.
     state_rules = [ln for ln in css.splitlines() if ln.startswith(".exec-pill.")]
@@ -672,17 +674,10 @@ def test_the_two_header_controls_are_one_pill_in_every_state():
     for prop in ("border", "border-radius", "padding", "color", "background-color", "font-size", "font-weight"):
         assert prop in base, f"the shared pill must define {prop}"
 
-    # The select is forced into the button's box: no caret, the same height and
-    # padding, and its text centred like the button's.
-    sel = rule(".exec-select")
-    assert "height: 34px" in sel, "must match the global button height"
-    assert "background-image: none" in sel, "a caret would make it a different shape"
-    assert "padding: 5px 14px" in sel
-    assert "text-align-last: center" in sel, "the button centres its label"
-
-    # One palette, defined once, used by both.
+    # One palette, defined once, used by the pill.
     assert "--pill-text" in css and "--pill-bg" in css and "--pill-border" in css
 
-    # "Orders would be refused" is said in words now (the label is marked), so the
-    # warning does not need a colour — but it must still be said.
-    assert "⚠ no keys" in js
+    # The mode that cannot trade still says so in words — quoted on the box that reports it, which
+    # is where the dropdown's "⚠ no keys" label went.
+    js = (ROOT / "src" / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    assert "Trading cannot start — " in js

@@ -74,12 +74,11 @@ def test_the_live_panel_says_when_arming_has_nothing_to_run_it():
     """Two facts, one switch — so the panel has to join them.
 
     Arming writes ``trading.json``; nothing ticks until a process runs the loop, and this
-    dashboard never starts one (that is the two-process split). The chip says "stopped" whether
-    trading is on or off, so without a line joining the two, flipping the switch looks like it
-    did nothing — which is exactly how it was read.
+    dashboard never starts one (that is the two-process split). The switch and the loop are two
+    different facts, so without a line joining the two, flipping the switch looks like it did
+    nothing — which is exactly how it was read.
 
-    A visible LINE rather than a ``title``: the embedded browser renders no native tooltip, and
-    the chip's own explanation is one.
+    A visible LINE rather than a ``title``: the embedded browser renders no native tooltip.
     """
     assert "Trading is armed, but no loop is running" in APP_JS
     assert "python -m src.main" in APP_JS, "and it says what to start"
@@ -89,7 +88,7 @@ def test_the_live_panel_says_when_arming_has_nothing_to_run_it():
 
     # The guard immediately above it has to require BOTH facts. Either one alone makes the note
     # a lie in the other case: with the switch off there is nothing armed to warn about, and
-    # while the loop IS running the warning would contradict the chip beside it.
+    # while the loop IS running there is nothing to alarm about.
     guard = APP_JS[APP_JS.rindex("if (", 0, at):at].split("\n", 1)[0]
     assert "armed" in guard, f"gated on the switch being ON: {guard}"
     assert 'loop.state === "stopped"' in guard and 'loop.state === "never"' in guard, (
@@ -303,6 +302,10 @@ def test_the_panel_link_is_in_the_header_next_to_the_refresh():
 
     assert "/log" in actions, "the link belongs in the header's action group"
     assert actions.index('id="live-refresh"') < actions.index("/log"), "to the right of ↻"
+    # The reload used to be the glyph alone, which says nothing about what it does. Pressing it
+    # re-reads the loop's own records AND the broker, so the label names the action.
+    refresh = actions[actions.index('id="live-refresh"'):]
+    assert "↻ Refresh" in refresh[:refresh.index("</button>")]
 
     body = HTML[HTML.index('id="live-body"'):HTML.index("</section>", HTML.index('id="live-body"'))]
     assert "/log" not in body, "and only there, not in both places"
@@ -383,8 +386,8 @@ def test_folding_the_row_stops_the_broker_poll_and_unfolding_restarts_it():
 def test_the_trading_panel_keeps_its_state_and_log_reachable():
     """Reading whether trading is on, and getting to the log, must not need anything opened first.
 
-    The panel has no toggle now, so its head is simply permanent: the loop chip, the reload and
-    the link to the log sit in it, plus the one control that is NOT the header's.
+    The panel has no toggle now, so its head is simply permanent: the reload and the link to the
+    log sit in it, plus the one control that is NOT the header's.
 
     The panel's own "Turn trading off" button was asked for removal: the header's master switch
     does that from outside every lock, and two buttons for one action made the panel look like it
@@ -395,7 +398,7 @@ def test_the_trading_panel_keeps_its_state_and_log_reachable():
     actions = head[head.index('class="settings-actions"'):]
     actions = actions[:actions.index("</div>")]
 
-    for present in ('id="live-chip"', 'id="live-refresh"', 'href="/log"'):
+    for present in ('id="live-refresh"', 'href="/log"'):
         assert present in actions, f"{present} belongs in the panel head"
     assert 'id="trading-off-btn"' not in HTML, "the master switch is the only way to stop trading"
     assert 'id="trading-off-btn"' not in APP_JS, "and nothing writes to an id that is gone"
@@ -418,19 +421,18 @@ def test_the_armed_row_is_not_edged_in_green():
     assert ".strategy-slot > #live-card" in CSS, "the slot itself is still styled"
 
 
-def test_the_loop_chip_steps_aside_while_trading_is_on():
-    """Asked for: no "running" chip when trading is on.
+def test_the_loop_chip_is_gone_from_the_trading_panel():
+    """Asked for removal: the little chip beside "Trading" that said "stopped".
 
-    The Trading box reads "on" and the tick line says what the loop is doing, so the chip is the
-    same answer a third time. With trading OFF it is the only word on the page for "is anything
-    running this", which is exactly when it has to be there.
+    It reported the loop's state as one more badge between the panel's title and its buttons — a
+    third reading of two facts the panel already carries, and "stopped" is what it said in the
+    state the panel is in almost all of the time. Gone from the markup, the script and the
+    stylesheet: an id nobody renders and a rule for an element that does not exist are how a
+    removal ends up half done.
     """
-    body = _function_of(APP_JS, "renderLive")
-
-    assert "chip.hidden = armed" in body, "hidden while armed, back when it is off"
-    assert "#live-chip[hidden] { display: none; }" in CSS, (
-        "and the attribute really hides it — `.chip` would otherwise beat `[hidden]`"
-    )
+    assert 'id="live-chip"' not in HTML
+    assert "live-chip" not in APP_JS, "and nothing writes to the id that is gone"
+    assert "#live-chip" not in CSS
 
 
 def test_the_backtest_keeps_its_run_and_report_buttons_when_collapsed():

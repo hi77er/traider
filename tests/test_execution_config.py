@@ -224,26 +224,30 @@ def test_status_endpoint_returns_the_resolved_environment():
 
 
 def test_the_dashboard_shows_which_environment_orders_would_use():
-    """Both accounts look identical everywhere else, so the header dropdown — which
-    both selects and displays the environment, coloured by it — is the guard."""
+    """Both accounts look identical everywhere else, so the mode has to be on screen and named.
+
+    It is the Mode box in the Trading panel now — the header dropdown that both selected and
+    displayed it is gone, and the box reports it with the account word, the danger tint and the
+    blinking dot, which is more than a pill in the header ever said.
+    """
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[1]  # tests/ -> repo root
     html = (root / "src" / "web" / "templates" / "index.html").read_text(encoding="utf-8")
-    assert 'id="exec-env"' in html
-    assert 'onchange="onEnvChange()"' in html
-    # The badge was replaced by the dropdown, not kept alongside it.
+    assert 'id="exec-env"' not in html, "the header dropdown is gone"
+    # Neither half of the old pill was left behind with it.
     assert 'id="exec-badge"' not in html
 
     js = (root / "src" / "web" / "static" / "app.js").read_text(encoding="utf-8")
     assert "async function loadTrading()" in js
     assert "/api/v1/trading" in js
+    assert 'liveTile("Mode"' in js, "the mode is a box in the Trading panel"
     # Rendered at boot, and re-rendered after the account form is saved (the keys
     # may have just changed, which decides whether trading may start at all).
     assert js.count("loadTrading()") >= 2
     assert js.count("await loadTrading()") >= 1
 
     css = (root / "src" / "web" / "static" / "style.css").read_text(encoding="utf-8")
-    # One pill style for both header controls, with nothing styled per state.
+    # The pill is the log page's switch now, and still nothing is styled per state.
     assert ".exec-pill {" in css
     assert [ln for ln in css.splitlines() if ln.startswith(".exec-pill.")] == []
