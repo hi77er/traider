@@ -9,8 +9,10 @@ one. Two things matter and neither is visible in a string assertion:
 * declining really writes nothing, and turning trading OFF never asks at all —
   stopping must always take one click.
 
-The real `toggleTrading` is lifted out of `app.js` and run under node with fakes
-that record every effect, so the assertions are about the calls that were made.
+The decision itself lives in ``trading_switch.js``, because the trading log page carries
+the same control and one confirmation is enough for both. So the real module is lifted
+into the same script as the page's handler, and the assertions are about the calls that
+were made rather than about either file's text.
 """
 
 from __future__ import annotations
@@ -22,7 +24,10 @@ from pathlib import Path
 
 import pytest
 
-APP_JS = Path(__file__).resolve().parents[2] / "src" / "web" / "static" / "app.js"
+STATIC = Path(__file__).resolve().parents[2] / "src" / "web" / "static"
+APP_JS = STATIC / "app.js"
+LOG_JS = STATIC / "log.js"
+SWITCH_JS = STATIC / "trading_switch.js"
 
 START_MARKER = "async function toggleTrading() {"
 END_MARKER = "\nfunction renderTradingControls("
@@ -46,6 +51,11 @@ def extract_toggle_block() -> str:
     src = APP_JS.read_text(encoding="utf-8")
     start = src.index(START_MARKER)
     return src[start:src.index(END_MARKER, start)]
+
+
+def switch_module() -> str:
+    """The shared switch, verbatim: the module both pages run."""
+    return SWITCH_JS.read_text(encoding="utf-8") + "\n"
 
 
 HARNESS = r"""
@@ -110,7 +120,7 @@ def toggle_results(tmp_path_factory) -> dict:
     script = tmp_path_factory.mktemp("toggle") / "toggle.js"
     script.write_text(
         "const PAPER = " + json.dumps(PAPER) + ";\nconst LIVE = " + json.dumps(LIVE) + ";\n"
-        + extract_toggle_block() + HARNESS,
+        + switch_module() + extract_toggle_block() + HARNESS,
         encoding="utf-8",
     )
     proc = subprocess.run(
@@ -249,3 +259,230 @@ def test_a_broken_target_outranks_the_credential_verdict(tooltips):
 
 def test_the_switch_is_never_disabled_by_a_bad_state(tooltips):
     assert tooltips["disabled_when_wrong"] is False
+
+
+# ---------------------------------------------------------------------------
+# the second page: the trading log's half of the same switch
+# ---------------------------------------------------------------------------
+LOG_START_MARKER = "  async function toggleTrading() {"
+LOG_END_MARKER = "\n  }\n"
+
+
+def extract_log_toggle() -> str:
+    """The log page's handler, lifted verbatim out of `log.js`."""
+    src = LOG_JS.read_text(encoding="utf-8")
+    start = src.index(LOG_START_MARKER)
+    return src[start:src.index(LOG_END_MARKER, start) + len(LOG_END_MARKER)]
+
+
+# The module is stubbed HERE on purpose, and the real one is not: what this harness is about is
+# the PAGE's half — that it hands its own plumbing to the shared decision, and re-reads the state
+# the click changed. The module itself is exercised for real in the fixture above.
+LOG_HARNESS = r"""
+const log = { calls: [], status: 0, toasts: [], wrote: true };
+
+function flashToast(text, kind) { log.toasts.push({ text: text, kind: kind }); }
+function api() {}
+function confirmDialog() {}
+function loadStatus() { log.status += 1; return Promise.resolve(); }
+
+// After a write the page reads the status once more a few seconds later, to pick up the boundary
+// the first tick commits to. Captured, not fired: this harness is about what the CLICK does.
+const FIRST_TICK_MS = 5000;
+function setTimeout() { return 0; }
+
+const TraiderSwitch = {
+  flip(deps) {
+    log.calls.push({
+      trading: deps.trading,
+      execution: deps.execution,
+      sameApi: deps.api === api,
+      sameDialog: deps.confirmDialog === confirmDialog,
+      sameToast: deps.flashToast === flashToast,
+    });
+    return Promise.resolve({ wrote: log.wrote });
+  },
+};
+
+const state = { trading: null };
+
+(async function () {
+  const out = {};
+
+  // 1. A click with a state that WAS read.
+  state.trading = { trading: { on: false, env: "paper" }, execution: { env: "paper", live: false } };
+  log.wrote = true;
+  await toggleTrading();
+  out.clicked = { calls: log.calls, status: log.status };
+
+  // 2. Declining the dialog writes nothing, so there is nothing to re-read.
+  log.calls = []; log.status = 0; log.wrote = false;
+  await toggleTrading();
+  out.declined = { calls: log.calls.length, status: log.status };
+
+  // 3. Nothing was read at all: the switch must not be used on a guess.
+  log.calls = []; log.status = 0; log.toasts = []; log.wrote = true;
+  state.trading = null;
+  await toggleTrading();
+  out.unreadable = { calls: log.calls.length, status: log.status, toasts: log.toasts };
+
+  process.stdout.write(JSON.stringify(out));
+})();
+"""
+
+
+@pytest.fixture(scope="module")
+def log_toggle(tmp_path_factory) -> dict:
+    """Run the log page's handler under node and return what it did."""
+    script = tmp_path_factory.mktemp("logswitch") / "logswitch.js"
+    script.write_text(extract_log_toggle() + LOG_HARNESS, encoding="utf-8")
+    proc = subprocess.run(
+        ["node", str(script)], capture_output=True, text=True, timeout=60, check=False
+    )
+    if proc.returncode != 0 or not proc.stdout.strip():
+        raise AssertionError(
+            "log switch harness failed\n"
+            f"exit={proc.returncode}\nstdout={proc.stdout}\nstderr={proc.stderr}"
+        )
+    return json.loads(proc.stdout)
+
+
+def test_the_log_page_hands_its_own_plumbing_to_the_shared_switch(log_toggle):
+    """The page re-decides nothing: it passes the dialog and the toast it has, and the state it
+    last read, to the same module the dashboard uses."""
+    assert log_toggle["clicked"]["calls"] == [{
+        "trading": {"on": False, "env": "paper"},
+        "execution": {"env": "paper", "live": False},
+        "sameApi": True,
+        "sameDialog": True,
+        "sameToast": True,
+    }]
+
+
+def test_the_log_page_re_reads_the_status_the_click_changed(log_toggle):
+    """Arming starts the loop, so the chip has to be re-read as well as the switch."""
+    assert log_toggle["clicked"]["status"] == 1
+    assert log_toggle["declined"]["status"] == 0, "nothing was written, so nothing changed"
+
+
+def test_a_state_that_could_not_be_read_cannot_be_switched(log_toggle):
+    """The switch's position would be a guess, and this one starts real trading."""
+    got = log_toggle["unreadable"]
+    assert got["calls"] == 0
+    assert got["status"] == 0
+    assert got["toasts"] and "could not be read" in got["toasts"][0]["text"]
+
+
+def test_the_log_page_exposes_the_handler_its_button_calls():
+    """The button is in the markup, so the handler has to be reachable from there."""
+    assert "window.toggleTrading = toggleTrading;" in LOG_JS.read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# arming starts a process, and a process takes a moment
+# ---------------------------------------------------------------------------
+SETTLE_HARNESS = r"""
+// Timers fire at once: this is about how many reads were made, not how long it took.
+global.setTimeout = function (cb) { Promise.resolve().then(cb); return 0; };
+
+const log = { loopReads: 0, posts: 0 };
+let states = ["running"];
+let startReply = { running: true };
+
+function flashToast() {}
+function confirmDialog() { return Promise.resolve(true); }
+
+function api(path) {
+  if (path === "/api/v1/loop") {
+    log.loopReads += 1;
+    return Promise.resolve({ state: states.length > 1 ? states.shift() : states[0] });
+  }
+  log.posts += 1;
+  return Promise.resolve({ ok: true, message: "done", loop: startReply });
+}
+
+function flip(trading) {
+  return TraiderSwitch.flip({
+    api: api, confirmDialog: confirmDialog, flashToast: flashToast,
+    trading: trading, execution: PAPER,
+  });
+}
+
+(async function () {
+  const out = {};
+
+  // 1. The child takes two reads to claim the lease — arming must not alarm in the meantime.
+  states = ["stopped", "stopped", "running"];
+  log.loopReads = 0;
+  const started = await flip({ on: false });
+  out.starting = { loopReads: log.loopReads, wrote: started.wrote, ok: started.ok };
+
+  // 2. A loop that never comes up: bounded, and the caller is still told the write landed.
+  states = ["stopped"];
+  log.loopReads = 0;
+  const never = await flip({ on: false });
+  out.neverUp = { loopReads: log.loopReads, wrote: never.wrote };
+
+  // 3. A start that FAILED is reported as failed, so there is nothing to wait for.
+  states = ["stopped"];
+  startReply = { running: false };
+  log.loopReads = 0;
+  await flip({ on: false });
+  out.failedStart = { loopReads: log.loopReads };
+
+  // 4. Stopping reads no loop at all.
+  states = ["running"];
+  startReply = { running: true };
+  log.loopReads = 0;
+  await flip({ on: true });
+  out.stopping = { loopReads: log.loopReads };
+
+  process.stdout.write(JSON.stringify(out));
+})();
+"""
+
+
+@pytest.fixture(scope="module")
+def settling(tmp_path_factory) -> dict:
+    """Drive the real shared switch with a loop that takes a moment to appear."""
+    script = tmp_path_factory.mktemp("settle") / "settle.js"
+    script.write_text(
+        "const PAPER = " + json.dumps(PAPER) + ";\n" + switch_module() + SETTLE_HARNESS,
+        encoding="utf-8",
+    )
+    proc = subprocess.run(
+        ["node", str(script)], capture_output=True, text=True, timeout=60, check=False
+    )
+    if proc.returncode != 0 or not proc.stdout.strip():
+        raise AssertionError(
+            "settle harness failed\n"
+            f"exit={proc.returncode}\nstdout={proc.stdout}\nstderr={proc.stderr}"
+        )
+    return json.loads(proc.stdout)
+
+
+def test_arming_waits_for_the_loop_it_started(settling):
+    """Arming starts a PROCESS, and the POST answers as soon as the child exists — not when it
+    holds the lease. Taking it costs a second of interpreter start-up, and a loop read taken in
+    that window says "stopped", which is how arming told the operator that no loop was running
+    about a loop it had just started."""
+    got = settling["starting"]
+    assert got["loopReads"] == 3, "read until it stops saying nothing is running"
+    assert got["wrote"] is True and got["ok"] is True
+
+
+def test_a_loop_that_never_comes_up_is_waited_out_then_reported(settling):
+    """Bounded: after the attempts run out "not running" is the truth, and the warning that
+    follows is then about something real."""
+    assert settling["neverUp"]["loopReads"] == 12
+    assert settling["neverUp"]["wrote"] is True
+
+
+def test_a_start_that_failed_is_not_waited_for(settling):
+    """The server already said the process could not be started: there is nothing to wait for,
+    and the caller has to see it at once."""
+    assert settling["failedStart"]["loopReads"] == 0
+
+
+def test_stopping_reads_no_loop_at_all(settling):
+    assert settling["stopping"]["loopReads"] == 0

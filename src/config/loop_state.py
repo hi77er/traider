@@ -145,10 +145,24 @@ def read(settings) -> Optional[Dict[str, Any]]:
 
 
 def _process_is_alive(pid: Any) -> Optional[bool]:
-    """Is ``pid`` running on THIS machine? ``None`` when the question cannot be asked.
+    """Is ``pid`` RUNNING on this machine? ``None`` when the question cannot be asked.
 
     ``os.kill(pid, 0)`` sends signal 0, which is the POSIX way of asking "does this process
     exist and may I signal it" without disturbing it.
+
+    Existing is not the same as running, and the difference is a whole class of confusion:
+    a process that has exited but whose parent never called ``wait()`` keeps its pid as a
+    ZOMBIE, and signal 0 answers for a corpse exactly as it does for a live process. The
+    dashboard is the parent of every loop it starts (``src.web.services.loop_control``) and
+    never waits on one, so a loop that dies without releasing its lease — ``kill -9``, the
+    OOM killer — leaves a claim that reads as honoured. The panel then says "running" with a
+    countdown to a boundary nothing will wake for, and arming refuses to start a replacement
+    because it believes one is up. Both were seen, one of them for the rest of the day.
+
+    ``waitpid`` with ``WNOHANG`` is the cheap way to tell them apart, and it REAPS the corpse
+    while it is there — which is why the check is worth doing even though it has a side
+    effect. It only answers for our own children, which is exactly the case that can leave one:
+    a zombie belonging to somebody else is reaped by that somebody, or by init.
     """
     try:
         number = int(pid)
@@ -165,7 +179,17 @@ def _process_is_alive(pid: Any) -> Optional[bool]:
         return True
     except OSError:
         return None
-    return True
+    try:
+        reaped, _status = os.waitpid(number, os.WNOHANG)
+    except ChildProcessError:
+        # Not our child, so it is not ours to reap either — and a process somebody else owns
+        # that has exited will be reaped by its owner. Alive.
+        return True
+    except OSError:  # pragma: no cover - defensive: an unusual platform, not a state
+        return True
+    # ``0`` means "still running". Anything else is the pid of a child that has exited, which
+    # ``WNOHANG`` has just reaped.
+    return reaped == 0
 
 
 def this_host() -> str:

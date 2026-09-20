@@ -868,6 +868,8 @@ def test_a_refused_entry_is_named_when_the_next_tick_stops_on_the_mismatch(tmp_p
 
     assert first["action"] == "decided", "a refusal is reported, not raised"
     assert first["intents"][0]["status"] == REJECTED
+    # The broker's words travel with the report, which is where the order row is built from.
+    assert "insufficient buying power" in first["intents"][0]["detail"]
     # The position IS recorded: that is the fact the next tick trips over.
     assert driver.state.position is not None
     assert "insufficient buying power" in driver.state.refused_entry["detail"]

@@ -9,7 +9,10 @@ as the ones next door, and the difference is deliberate.
 **Both environments, always.** The same reason ``positions`` reads both: paper and live are
 different accounts, and the one this screen is not pointed at is exactly the one an operator
 forgets to check. A strategy can only trade one at a time, but a person can be wrong about
-which.
+which. What a caller DOES with the two is the caller's decision, and the two callers differ on
+purpose: the dashboard's open-count pill counts positions in both, while the worth panels (the
+dashboard's and the log page's) show the account being traded alone — the other one's balance
+presented beside it is a figure waiting to be read as the wrong account's.
 
 **What this must never do is proxy the broker's payload.** ``GET /v2/account`` carries
 ``account_number`` and ``id``, and a dashboard has no business forwarding those to a browser.

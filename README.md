@@ -180,10 +180,12 @@ The portal is the whole interface:
   untouched, because the status dots live in the option TEXT and rewriting a
   `<select>` under its open popup cancels the menu (macOS renders it natively). The
   dots pause for that moment; the click lands.
-- **Trading panel** (appears under the chart while trading is ON) - a standing
-  reminder that the strategy is armed, with a one-click stop. While it is
-  visible every configuration surface is locked and the backtest buttons are
-  disabled: nothing that would change what the bot is running may be edited
+- **Trading panel** — in the **strategy bar**, in the slot beside the signals and the rules it
+  acts on, collapsed to a state chip, a reload and a link to the log. It moved up from the left
+  column: the bar is what the dashboard is about, and the panel reports the switch, the loop, the
+  account and the exchange — none of which need a stored dataset, so it must not live in the column
+  that hides with the chart. While trading is ON every configuration surface is locked and the
+  backtest buttons are disabled: nothing that would change what the bot is running may be edited
   mid-flight.
 - **Price chart** - candles, indicators, BUY/SELL markers, the held-period
   bands (green when the round trip made money, red when it lost) and the
@@ -263,11 +265,55 @@ The portal is the whole interface:
   glancing at boxes. Anything that is not a measurement stays a sentence: an account that
   could not be read shows its REASON under the boxes rather than `$0.00` in them, since a
   balance and an absence of one are different answers.
-- **The log page's Account card** shows the same numbers for **both**
-  environments, one row each, directly comparable — because a strategy trades one
-  account at a time while a person can be wrong about which. The account number is
-  masked to its last three characters (enough to tell two accounts apart, and no
-  more), and the broker's payload is never proxied to the browser.
+- **The log page is scoped to ONE account — the one in play** — and that is a rule about the whole
+  page, not about a panel. WHICH account is the scope: the **account being traded**, the one the
+  switch routes orders to, shown as the same `.bt-stat` **boxes** the dashboard's trading panel and
+  the report page use, tagged **in play**. Every panel below it obeys the same helper — the figures,
+  the positions, the day's ticks, the submitted orders, the closed trades, the gates and the last
+  tick's age. The idle environment's data is **not shown at all**: a balance sitting beside the
+  traded one's is a number waiting to be read as the wrong account's, which is exactly what happened
+  on switching paper → live with no live keys configured — the only figures on the page were the
+  paper account's, under a header that said `live`. This is not a cosmetic filter either: the loop
+  writes **one set of files per strategy** (`ticks/<day>.jsonl`, `orders.jsonl`, `trades.jsonl`,
+  `latest.json`), so both accounts' rows sit in the same files separated only by the `env` on each
+  record. An account that cannot be read shows its **reason and the fix** instead of boxes, because
+  an unreadable account is not a balance of zero. The account number is masked to its last three
+  characters (enough to tell two accounts apart, and no more), and the broker's payload is never
+  proxied to the browser. Where a filter removed rows, the empty line says so **and names the other
+  account** — "nothing has been closed" would be false, and an unexplained empty table reads as
+  exactly that. The one place the account cannot be separated at the source is the heartbeat
+  (`latest.json` is per strategy, written on every tick whatever account it ran for), so the gates
+  panel refuses to draw the other account's tick and says which one it was — nothing is silently
+  presented as the account in play.
+- **The log page's Trading status block**, last in that card, carries the loop's state,
+  the strategy and last tick, the **same master switch the dashboard's top bar has** and
+  the ↻ that re-reads the page. The switch is the same file on both pages
+  (`static/trading_switch.js`) and not a copy: the confirmation that stands between a
+  click and real orders on a LIVE account is one thing to get right, not two. Anything
+  wrong leaves it clickable — stopping has to stay possible. The way back to the
+  dashboard sits at the top of the day menu, as it does on the report page, and an
+  armed switch with no loop running is **said out loud** rather than left to read as
+  "stopped" beside a button that says "Turn trading off".
+- **The log page's "The Loop" panel** answers what the account and the broker cannot:
+  *when is it going to do anything, and if not, what is it stuck behind?* A **digital clock** sits
+  in the panel's top-right corner — `TICK IN 38:47:09` in a fixed-width font on a lit green face,
+  with a muted 12px caption under it saying what it is counting to (`The bar closes Mon 04:35 PM ·
+  The loop wakes a few seconds later.`). It is a LOCAL timer, no polling: the boundary comes from
+  the lease the loop committed to, the arithmetic is the browser's. The face is always
+  hours:minutes:seconds rather than days and hours, because a countdown that moves only when the
+  minutes do is one you cannot tell from a stopped clock — and it is the SECONDS that show it is
+  alive, so the separators do not blink as well: one moving part is a clock, two is a power light.
+  Below it the panel lists **the gates a tick walks, in order**, from the record of the last one:
+  the gates it passed, the one that ended it with the loop's own words, and the ones it never
+  reached. The tick stamps the gate on its record (`tick_record(... stage=...)`),
+  so the pipeline is rendered from the loop's own account of itself — `refused` alone covers six
+  gates, and "which one" is the question every quiet bar raises. The page's gate list, the
+  constant ordering it, and the `stage=` literals in `orchestrator.tick` are checked against
+  each other by a test, because a pipeline that drifts is worse than none. The day's own ticks
+  are a section of that panel (under the gates) rather than a card of their own: when it next
+  wakes, the gates it walks and what it did on the last one are one question about one process.
+  The panel folds away, and the head keeps the COUNTDOWN while it is folded — collapsing hides
+  the tables, not the one number the panel exists for.
 
 **The dashboard does not reload itself, and what it does refresh is deliberate.**
 The Trading panel polls only while it is expanded *and* the tab is in the foreground:
@@ -277,8 +323,12 @@ once. A poll that changes nothing rewrites nothing, so the panel does not churn
 while you read it. Collapse it, or leave the tab, and the polling stops — a
 background tab asking Alpaca every minute is a recurring cost with no reader. The
 trading log page refreshes itself only while **today** is showing, since a past day
-cannot gain rows, and its ↻ button re-reads the day you are looking at. Everything
-else is on demand.
+cannot gain rows — but even on a past day it keeps re-reading the **loop's own state**
+(the chip, the switch, the countdown's target) every 20 s while a loop is running or the
+switch is armed, because that half moves whatever day is on screen. Its ↻ button re-reads
+the day you are looking at, and its countdown ticks every second in the browser without
+asking anything. Both timers follow the tab: hide it and they stop, come back and the page
+re-reads at once.
 
 The two header controls are **one pill in every state** - same border, radius,
 padding, height, font, tint, background and text colour, whichever account is

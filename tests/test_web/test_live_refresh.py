@@ -45,9 +45,11 @@ def _function(source: str, name: str) -> str:
 # the Trading panel
 # ---------------------------------------------------------------------------
 def test_the_live_poll_is_gated_on_the_panel_being_open_and_the_tab_being_visible():
+    """The panel has no toggle of its own any more, so what can hide it is the strategy bar's
+    toggle, which folds the row it lives in."""
     body = _function(APP_JS, "livePanelVisible")
 
-    assert "body.hidden" in body, "a collapsed panel must not poll"
+    assert "row.hidden" in body, "a folded row must not poll"
     assert "document.hidden" in body, "a backgrounded tab must not poll"
 
 
@@ -239,7 +241,8 @@ def test_the_panel_reports_only_the_account_being_traded():
     It used to add a warning when the OTHER environment could not be read. Trading on paper
     then showed a 401 for the live account — a fault of an account the run never touches,
     which reads like a fault in this run. That verdict is not hidden: it is on the credential
-    badge, in the Account popup, and on the log page, which shows both accounts side by side.
+    badge and in the Account popup. Its BALANCE is shown nowhere, on purpose: the two worth
+    panels render the traded account alone (see the log page's accounts panel).
     """
     body = _function(APP_JS, "renderLiveDetail")
 
@@ -270,7 +273,7 @@ def test_the_metrics_are_the_same_boxes_the_backtest_uses():
     class, so they cannot drift into a second look."""
     body = _function(APP_JS, "liveTile")
 
-    assert 'class="bt-stat"' in body
+    assert '<div class="bt-stat' in body
     assert 'class="label"' in body and 'class="value' in body
 
 
@@ -281,6 +284,38 @@ def test_a_box_can_carry_its_explanation():
 
     assert "data-tip" in body
     assert "title=" not in body
+
+
+def test_the_mode_and_the_switch_are_boxes_that_flash_when_they_are_the_risky_setting():
+    """The two settings the rest of the panel is read through, as boxes, first.
+
+    Asked for explicitly: one box for the mode and one for whether trading is on, RED and pulsing
+    when the box is set the dangerous way (a LIVE account, trading ARMED) and BLUE and still when
+    it is set the safe way (paper, off). Both ends are marked on purpose — an unmarked box beside
+    a marked one reads as "unknown" rather than "the safe one".
+
+    The tint goes on the BOX (``liveTile``'s fifth argument) rather than on the number inside it,
+    because these two are states and every other tile in the grid is a measurement.
+    """
+    body = _function(APP_JS, "renderLiveDetail")
+
+    assert 'liveTile("Mode"' in body and 'liveTile("Trading"' in body
+    assert 'mode === "live" ? "flash-red" : (mode === "paper" ? "tint-blue" : "")' in body
+    assert 'tradingState ? (armed ? "flash-red" : "tint-blue") : ""' in body
+
+    css = (ROOT / "src" / "web" / "static" / "style.css").read_text(encoding="utf-8")
+    assert ".bt-stat.tint-blue" in css
+
+
+def test_the_flash_is_a_css_animation_that_stays_visible_with_motion_off():
+    """The pulse, and the fallback: with ``prefers-reduced-motion`` the box keeps the red border
+    and drops only the animation, so the warning survives for a reader who turned motion off."""
+    css = (ROOT / "src" / "web" / "static" / "style.css").read_text(encoding="utf-8")
+
+    assert ".bt-stat.flash-red" in css
+    assert "@keyframes bt-flash" in css
+    reduced = css[css.index("prefers-reduced-motion"):]
+    assert ".bt-stat.flash-red" in reduced[:400] and "animation: none" in reduced[:400]
 
 
 def test_the_grid_has_its_own_declaration():
@@ -297,6 +332,113 @@ def test_the_log_page_reads_and_renders_the_accounts():
     assert "/api/v1/accounts" in LOG_JS
     assert 'setIfChanged($("lg-accounts")' in LOG_JS
     assert "lg-accounts" in LOG_HTML
+
+
+def test_the_log_page_accounts_are_boxes_like_every_other_screen():
+    """A number is read by glancing at a box, a table by scanning labels one at a time — the
+    dashboard's trading panel, the backtest KPIs and the report page all say so in their own
+    words, and this page's account figures belong with them.
+
+    The grid rule comes with it: the shared one is scoped to ``#bt-metrics``, so a grid under any
+    other id stacks its boxes in one column unless the page declares its own. The report page hit
+    exactly that, and this test is the one that would catch the log page repeating it."""
+    body = _function(LOG_JS, "renderAccounts")
+    assert "tile(" in body and "lg-metrics" in body
+    assert 'class="lg-acct' in body, "each row of boxes has to say which account it is"
+    assert "lg-acct-tag" in body, "and whether it is the one in play"
+
+    tile = _function(LOG_JS, "tile")
+    assert "bt-stat" in tile, "the same box the dashboard and the report page use"
+
+    css = (ROOT / "src" / "web" / "static" / "style.css").read_text(encoding="utf-8")
+    assert ".lg-metrics {\n  display: grid" in css
+
+
+def test_the_log_page_shows_only_the_account_being_traded():
+    """Switching paper -> live left the log page reading as the paper account, and the fix is
+    subtraction: the panel renders the account in play and NOTHING ELSE.
+
+    ``/accounts`` reports both environments and an ``env`` saying which one is being traded. The
+    panel used to render both, in the payload's own order, so with paper listed first and no live
+    credentials to show, the only figures on the page belonged to the account that was NOT in play
+    — under a header that said "live". Marking them was the first attempt and it is not enough: a
+    balance sitting on the panel is a number waiting to be read as the wrong account's, and the
+    only way to stop that is for it not to be there.
+
+    Nothing is lost by it. The reason an unreadable account cannot be read is still stated, and
+    what an account HOLDS stays on the next panel — the part of the idle account an operator
+    actually needs, and it is what refuses an arming on top of it.
+    """
+    body = _function(LOG_JS, "renderAccounts")
+
+    assert "inPlayEnv()" in body, "the account in play, from the page's one helper"
+    assert ".filter(mine)" in body, "and the rows are filtered to it"
+    assert "not in play" not in body, "the idle account is not rendered at all"
+    assert ".sort(" not in body, "so there is nothing left to order"
+    assert "in play</span>" in body, "the one row there is says which account it is"
+
+    css = (ROOT / "src" / "web" / "static" / "style.css").read_text(encoding="utf-8")
+    assert ".lg-acct.in-play" in css, "the mark has to be visible, not just present in the DOM"
+
+
+def test_every_panel_on_the_log_page_is_scoped_to_the_account_in_play():
+    """One rule for the whole page, not a filter per table: WHICH account is the scope of the page,
+    and every panel that has an account dimension obeys the same helper.
+
+    This is the invariant that the paper/live mix broke. The loop writes ONE set of files per
+    strategy — ``ticks/<day>.jsonl``, ``orders.jsonl``, ``trades.jsonl``, ``latest.json`` — so both
+    accounts' rows sit in the same files, separated only by the ``env`` field on each record. A
+    page that renders them together has to be read with a mental filter, and the one time it
+    mattered, the paper account's equity was read as the live account's.
+
+    Asserted per panel rather than as "the file contains `mine`", because a function that lost its
+    filter would still leave the other six passing.
+    """
+    expected = {
+        # panel -> the element it fills, and what scoping it there looks like
+        "renderAccounts": ("lg-accounts", "mine"),
+        "renderAccount": ("lg-positions", "mine"),
+        "renderTicks": ("lg-ticks", "mine"),
+        "renderOrders": ("lg-orders", "mine"),
+        "renderTrades": ("lg-trades", "mine"),
+        "renderGates": ("lg-gates", "mine"),
+        "renderStatus": ("lg-strategy", "mine"),
+    }
+    for name, (host, needle) in expected.items():
+        body = _function(LOG_JS, name)
+        assert host in body, f"{name} must be the panel that fills #{host}"
+        assert needle in body, f"{name} must scope to the account in play"
+
+    # The two status surfaces read the STRATEGY-WIDE heartbeat (one ``latest.json`` per strategy,
+    # whatever account the tick ran for), so they are where another account's data is most likely
+    # to leak in — and it is exactly what the gates panel did, drawing a paper tick's pipeline
+    # under a ``live`` heading. Both must recognise the tick as not this account's.
+    gates = _function(LOG_JS, "renderGates")
+    assert "if (!mine(tick))" in gates, "a tick from the other account's gates are not drawn"
+    assert "nothing has ticked for the ${inPlayEnv()} account yet" in gates, (
+        "and the panel says why it is empty rather than leaving it looking broken"
+    )
+
+    status = _function(LOG_JS, "renderStatus")
+    assert "mine(loop.last_tick)" in status, "the age is attributed when the tick is not this one's"
+    assert "for the ${String(loop.last_tick.env).toLowerCase()} account" in status
+
+
+def test_an_unreadable_account_in_play_is_a_warning_not_a_footnote():
+    """The traded account being unreadable is the reason nothing can trade, and the reason there
+    are no figures under its name — so it is amber and it names the fix, never a row of dashes and
+    never a muted line. Muted grey in a list is what this page was read past.
+
+    This is the state the paper -> live switch produced with no live keys configured.
+    """
+    body = _function(LOG_JS, "renderAccounts")
+
+    assert 'class="warn"' in body, "the traded account's failure is a warning"
+    assert "empty(why)" not in body, "not a muted line, and not for some other account"
+    assert "Account Settings" in body, "the warning has to say where to fix it"
+
+    css = (ROOT / "src" / "web" / "static" / "style.css").read_text(encoding="utf-8")
+    assert "#lg-accounts p.warn" in css, "and the warning has to be visible"
 
 
 def test_the_day_percentage_is_not_divided_by_a_hundred_twice():
@@ -323,3 +465,112 @@ def test_the_fast_poll_does_not_blank_what_the_broker_told_us():
     assert "state.liveOrders = orders" in body, "the last read has to be remembered"
     assert "renderLiveDetail(loop, state.liveOrders)" in body, "and rendered from"
     assert "renderProtection(state.liveOrders" in body
+
+
+def test_the_panel_arms_its_own_poll_when_the_page_loads():
+    """Reported from the page: the account boxes were simply missing.
+
+    The boot read is the cheap half (the loop's own files), and the broker half — the accounts,
+    the orders, the clock — only runs on the slow poll. Nothing started that poll after a page
+    load: it was armed by the ↻ button, by folding and unfolding the row, and by a tab switch,
+    so a freshly opened dashboard sat on the files-only read and the boxes that come from Alpaca
+    never appeared. Arming it here makes the first poll happen seconds after the page does.
+    """
+    body = _function(APP_JS, "loadTrading")
+
+    assert "loadLive(false);" in body, "boot reads the files only"
+    assert "scheduleLivePoll();" in body, "and then has to arm the poll that fetches the rest"
+
+
+def test_a_failed_account_read_keeps_the_last_good_boxes():
+    """An account that could not be re-read is not an account worth zero.
+
+    The failure payload carries an empty ``accounts`` list, and storing it replaced a perfectly
+    good snapshot with a blank panel — no boxes, and no warning either, since the warning needs a
+    row to complain about. Reported as "the boxes disappeared", which is exactly how it read.
+    """
+    body = _function(APP_JS, "renderLive")
+
+    assert "if (accounts.ok === false) state.liveAccountsError" in body
+    assert 'else { state.liveAccounts = accounts; state.liveAccountsError = ""; }' in body, \
+        "only a GOOD read is stored"
+
+    detail = _function(APP_JS, "renderLiveDetail")
+    assert "state.liveAccountsError" in detail, "and the panel says the figures are the last ones"
+
+
+def test_the_account_boxes_are_the_same_five_the_log_page_shows():
+    """Equity, Day, Cash, buying power and the account's standing: the same set the log page's
+    accounts panel reports, in the same order, because the two screens answer the same question
+    about the same account."""
+    body = _function(APP_JS, "renderLiveDetail")
+
+    for label in ('"Account"', '"Equity"', '"Day"', '"Cash"', '"Buying power"', '"Status"'):
+        assert f"liveTile({label}" in body, f"the {label} box belongs in this grid"
+
+
+def test_the_other_account_s_figures_are_never_drawn_under_this_mode():
+    """Asked for: after a mode switch the section must show the NEW account's data.
+
+    The snapshot in hand belongs to the account the panel was about when it was read, so a switch
+    makes it the account we just left. The panel says ``reading the live account…`` and draws no
+    figures until the read for this mode lands — a second or so, and never the wrong numbers.
+    ``state.liveAccounts`` keeps the old snapshot, so a switch BACK draws that account's own last
+    known figures at once rather than blinking empty.
+    """
+    body = _function(APP_JS, "renderLiveDetail")
+
+    assert 'const staleSnapshot = !!(accounts.env && mode && accounts.env !== mode);' in body
+    assert "staleSnapshot" in body.split("const active")[1].split(";")[0], \
+        "the figure rows are gated on the snapshot being about this account"
+    assert "reading the ${escapeHtml(mode)} account" in body, "and it says what it is doing"
+
+
+def test_a_written_switch_takes_the_full_read_at_once():
+    """Asked for: the mode switch must not wait for the poll.
+
+    Only the mode box comes from the switch's own read; the account figures come from the broker
+    half of the live poll, on a minute cadence. So the handler re-reads the switch, re-reads the
+    broker, and only then restarts the cadence — in that order, because the mode has to be the
+    new one before the figures for it are asked for.
+    """
+    body = _function(APP_JS, "onEnvChange")
+
+    assert "await loadTrading();" in body
+    assert "await refreshLiveNow();" in body
+    assert body.index("await loadTrading();") < body.index("await refreshLiveNow();"), \
+        "the new mode is written to the page before the account behind it is read"
+
+
+def test_the_panel_does_not_restate_the_strategy_or_the_endpoint():
+    """Asked for removal: the Strategy / Instrument / Bar size / Endpoint rows.
+
+    Every one of the four is on screen already — the strategy bar names the strategy, the header
+    summary carries the instrument and the bar size, the Mode box carries the account and its
+    endpoint.
+    """
+    body = _function(APP_JS, "renderTradingPanel")
+
+    for row in ('execRow("Strategy"', 'execRow("Instrument"', 'execRow("Bar size"',
+                'execRow("Endpoint"'):
+        assert row not in body, f"{row} is context the page already shows"
+
+
+def test_the_loop_line_names_no_process():
+    """Asked for removal: "Held by pid 23710 on Kalins-MacBook-Pro.local (strategy 'GPRO'),
+    started 2026-09-20T21:46:11.587122+00:00 ·".
+
+    It is a debugging string on a status line, and it pushed the one fact worth reading — when
+    the loop wakes next — off the end of it. Which process holds the claim is in the log and in
+    the lease file; the panel says whether anything is running and when it runs again.
+
+    What the line DOES carry, when it applies, is the account: the tick comes from the loop's own
+    record, which is written for one environment, so after a mode switch it can be the account we
+    just left — and it has to say so rather than be read as this account's.
+    """
+    body = _function(APP_JS, "renderLive")
+
+    assert "holder_text" not in body and "Held by" not in body and "Last claimed by" not in body
+    assert "Next wake" in body, "the useful half of that sentence stays"
+    assert 'const belongsTo = !tickEnv || !inPlay || tickEnv === inPlay;' in body, \
+        "a tick from the other account is marked, not passed off as this one's"

@@ -9,13 +9,6 @@
 <body class="report-page">
   <header>
     <h1>📋 TRAIDER — Trading log</h1>
-    <div class="header-actions">
-      <span id="lg-state" class="chip">…</span>
-      <span id="lg-strategy" class="chip"></span>
-      <button id="lg-refresh" class="ghost small" onclick="refreshLog()"
-              title="Re-read the loop's records and the account">↻</button>
-      <a class="btn-link" href="/">← Back to dashboard</a>
-    </div>
   </header>
 
   <main class="report-main">
@@ -23,6 +16,9 @@
          Built from the index rather than from the tick files, so listing the days never
          depends on how much was logged. -->
     <aside class="card report-menu">
+      <!-- The way back sits at the top of the day menu, like the report page's, so leaving is
+           the same gesture on both screens and never depends on the header. -->
+      <a class="rp-backlink" href="/">← Back to dashboard</a>
       <h2>Days</h2>
       <p class="muted note">One entry per day the loop ran this strategy. The counters come
         from its own index, so this list stays fast however large the logs get.</p>
@@ -32,33 +28,97 @@
     <section class="report-body">
       <div id="lg-error" class="bt-warn" hidden></div>
 
-      <!-- ── Account state FIRST: the broker is the truth ── -->
+      <!-- ── The ACCOUNT: what it is worth, and whether the bot is trading it. Both are
+           read from the broker, and the switch belongs here rather than in a panel of its own
+           because "which account" and "is it on" are one question. What the account HOLDS is
+           the next panel's, not this one's.
+
+           WHICH account is not a detail of this card: it is the scope of the whole PAGE. Every
+           panel below is filtered to the one in play — a strategy trades one account at a time,
+           the loop writes one set of files for it, and both accounts' rows sit in those files side
+           by side, separated only by the `env` on each record. Mixing them is how the paper
+           account's equity came to be read as the live account's. ── -->
       <div class="card">
         <div class="card-head-static">
           <h2>Account</h2>
           <span class="muted" id="lg-env"></span>
         </div>
-        <!-- What the accounts are worth, before what they hold: equity is the number the
-             eye goes to, and it is the same figure for both environments so the two can be
-             compared at a glance. -->
+        <!-- What the account in play is worth, as the same BOXES the dashboard and the report page
+             use. The other environment is not shown at all: a balance beside the traded one's is a
+             number waiting to be read as the wrong account's. An account that could not be read
+             gets its reason where its numbers would be, because unknown is not zero. -->
         <div id="lg-accounts"></div>
+
+        <!-- ── Trading status LAST in this card, and about the account rather than about the
+             day: whether a loop is running, what the switch says, and the two controls that
+             change it. It is here rather than in the page header because "what the bot is
+             doing right now" is a fact about the account this page is describing — the
+             header only says which page you are on. -->
+        <h3 class="lg-sub">Trading status</h3>
+        <div class="lg-status">
+          <span id="lg-state" class="chip">…</span>
+          <button id="lg-trading-toggle" class="exec-pill exec-toggle" onclick="toggleTrading()"
+                  title="Start or stop sending orders for the active strategy">▶ Turn trading on</button>
+          <button id="lg-refresh" class="ghost small" onclick="refreshLog()"
+                  title="Re-read the loop's records and the account">↻</button>
+        </div>
+        <p id="lg-strategy" class="muted"></p>
+        <p id="lg-loop-warning" hidden></p>
+      </div>
+
+      <!-- ── THE LOOP: one panel for the process itself — when it next wakes, the gates it walks,
+           and what it did on the last one. All three come from the loop's own files (the lease
+           it committed to, its last tick, the day's records) rather than from the broker.
+           Collapsible because the day's ticks live in here too: the head keeps the countdown, so
+           folding it away hides the tables and not the answer. -->
+      <div class="card collapsible">
+        <div class="card-head" onclick="toggleLoopPanel(event)"
+             title="Collapse / expand the loop view">
+          <button id="toggle-loop" class="ghost small" onclick="toggleLoopPanel(event)"
+                  title="Collapse the loop view">−</button>
+          <h2>The Loop</h2>
+          <!-- The clock, in the panel's top-right corner: what the number counts to, the countdown
+               itself, and the sentence explaining it underneath. It stays visible when the panel
+               is folded — the number is the reason to look at the panel at all. -->
+          <div class="settings-actions lg-clock-block" onclick="event.stopPropagation()">
+            <span class="lg-clock keep-visible">
+              <span class="lg-clock-label">Tick in</span><span id="lg-countdown">—</span>
+            </span>
+            <span id="lg-next-when" class="keep-visible"></span>
+          </div>
+        </div>
+        <div class="collapse-body" id="loop-body">
+          <h3 class="lg-sub">The gates the last tick walked</h3>
+          <div id="lg-gates"></div>
+          <p class="muted note">A tick walks these in order and stops at the first that says no,
+            so a row below it never ran — that is the whole reason for the list: "nothing is
+            happening" has eight possible causes. The names come from the loop's own record, for
+            the account in play: the heartbeat is per strategy, so it can hold the other account's
+            tick, and then this says so instead of drawing it.</p>
+
+          <h3 class="lg-sub">What the loop did <span id="lg-day"></span></h3>
+          <p class="muted note">One line per tick, newest first, for the account in play — the
+            other account's ticks are not shown. A tick that decided nothing is not written:
+            <code>latest.json</code> is the heartbeat, this file is what it <em>did</em>. The
+            account column says which one each row is.</p>
+          <div id="lg-ticks"></div>
+        </div>
+      </div>
+
+      <!-- ── What the account HOLDS, in a panel of its own: the broker's own answer, which is
+           the one thing on this page the loop cannot know better. A working order is not a
+           position, so the two are separate sections rather than one table with a column that
+           means "not filled yet". -->
+      <div class="card">
+        <h2>Positions and working orders</h2>
+        <p class="muted note">Read from the broker, never from the loop's records: something held
+          or resting that the loop has forgotten about still shows here, and that is the point of
+          asking the account rather than the bot.</p>
         <h3 class="lg-sub">Positions</h3>
         <p id="lg-protection" class="muted"></p>
         <div id="lg-positions"></div>
         <h3 class="lg-sub">Working orders</h3>
         <div id="lg-working"></div>
-      </div>
-
-      <!-- ── Then the loop's own record of the same day ── -->
-      <div class="card">
-        <div class="card-head-static">
-          <h2>What the loop did</h2>
-          <span class="muted" id="lg-day"></span>
-        </div>
-        <p class="muted note">One line per tick, newest first. A tick that decided nothing is
-          not written here — the heartbeat in <code>latest.json</code> is what proves the loop
-          is alive, and this file is what it <em>did</em>.</p>
-        <div id="lg-ticks"></div>
       </div>
 
       <div class="card">
@@ -78,6 +138,22 @@
     </section>
   </main>
 
+  <!-- Confirmation dialog for the master switch. Same contract as the dashboard's: it is what
+       stands between a click and real orders on a LIVE account, so it is not optional. -->
+  <div id="lg-confirm-backdrop" class="modal-backdrop" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="lg-confirm-title">
+      <h3 id="lg-confirm-title">Are you sure?</h3>
+      <div id="lg-confirm-message" class="modal-message"></div>
+      <div class="modal-actions">
+        <button id="lg-confirm-cancel" class="ghost">Cancel</button>
+        <button id="lg-confirm-ok" class="primary">Yes</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" hidden></div>
+
+  <script src="/static/trading_switch.js"></script>
   <script src="/static/log.js"></script>
 </body>
 </html>

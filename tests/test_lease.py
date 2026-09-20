@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
+import sys
+import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -17,6 +20,7 @@ import pytest
 from src.config import loop_state
 from src.config.settings import Settings
 from src.scheduler import lease as lease_mod
+from src.web.services import loop_control, loop_service
 
 #: No process can have this pid: Linux caps ``pid_max`` at 4194304 and macOS below that, so
 #: ``os.kill`` raises ProcessLookupError for it on any platform this runs on. Used instead of
@@ -135,6 +139,47 @@ def test_a_dead_pid_is_taken_over_at_once(tmp_path):
 
     claimed = lease_mod.acquire(settings)
     assert loop_state.read(settings)["pid"] == claimed.pid
+
+
+def test_a_corpse_is_not_a_running_loop(tmp_path):
+    """An exited process whose parent never waited on it keeps its pid, and signal 0 answers
+    for it exactly as it does for a live one.
+
+    The dashboard is the parent of every loop it starts and never waits on one, so this is not
+    a hypothetical: kill a loop without letting it release the lease (``kill -9``, the OOM
+    killer) and the claim reads as honoured — the panel says "running" with a countdown to a
+    boundary nothing will wake for, and arming refuses to start a replacement because it
+    believes one is up. Caught in the browser, then here.
+    """
+    settings = _settings(tmp_path)
+    child = subprocess.Popen([sys.executable, "-c", "pass"])
+    try:
+        # Deliberately NOT ``poll()``, ``wait()`` or ``communicate()``: reaping it is the thing
+        # under test, and every one of those reaps.
+        time.sleep(0.5)
+        assert os.kill(child.pid, 0) is None, "the pid still exists — it is a zombie"
+        assert loop_state._process_is_alive(child.pid) is False
+
+        _write(settings, _record(pid=child.pid, expires_at=_at(3600)))
+        assert loop_state.holder(settings) is None
+    finally:
+        child.wait(timeout=5)
+
+
+def test_a_corpse_lets_arming_start_a_replacement(tmp_path):
+    """The consequence that makes this worth a fix of its own: "already running" is what the
+    starter answers from this judgement, so a corpse left the switch armed with nothing running
+    it — the one state the operator cannot get out of from the dashboard."""
+    settings = _settings(tmp_path)
+    child = subprocess.Popen([sys.executable, "-c", "pass"])
+    try:
+        time.sleep(0.5)
+        _write(settings, _record(pid=child.pid, expires_at=_at(3600)))
+
+        assert loop_service.status(settings)["state"] == loop_service.OVERDUE
+        assert loop_control.running(settings) is False
+    finally:
+        child.wait(timeout=5)
 
 
 def test_an_unreadable_lock_does_not_stop_a_start(tmp_path):

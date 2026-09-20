@@ -273,10 +273,11 @@ One clock drives both dots, so when both are red they blink together. With
 Trading always starts OFF, and turning it on checks the credentials for the account
 in play — so "trading on" can never be a lie. Turning it on **always asks first**,
 on paper as well as live: the live prompt is about real money, the paper one is
-about the strategy acting on the next signal. Turning it off never asks. While
-trading is on, a **Trading** panel under the chart shows the resolved target and
-spells out the lock. Orders route to **paper by default**: configuring live
-credentials never moves the switch, and neither does reusing a strategy.
+about the strategy acting on the next signal. Turning it off never asks. The
+**Trading** panel in the strategy bar (beside the signals and the rules, collapsed
+to a state chip) shows the resolved target and spells out the lock. Orders route to
+**paper by default**: configuring live credentials never moves the switch, and
+neither does reusing a strategy.
 
 ### Verifying the Alpaca credentials
 
@@ -323,7 +324,7 @@ The verdicts live in `data/credential_checks.json`, beside `trading.json` — ru
 state, not configuration, and it stores a hash of the key id rather than the key.
 Credentials themselves are never written to it and never appear in a message.
 
-While trading is ON, a **Trading** panel appears under the chart and the server
+While trading is ON, the **Trading** panel in the strategy bar says so and the server
 refuses every configuration write with HTTP 409 — settings, account, rules,
 strategy create/rename/delete/select, the backtest runner, the dataset
 rebuild/backfill and the delta sync — with the matching buttons disabled in the UI.

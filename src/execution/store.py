@@ -177,6 +177,7 @@ def tick_record(
     settings=None,
     at: Any = None,
     reason: str = "",
+    stage: Optional[str] = None,
     bar: Any = None,
     signal: Any = None,
     intents: Optional[List[Any]] = None,
@@ -194,6 +195,9 @@ def tick_record(
     key the panel reads and the loop forgets to write is otherwise a blank field forever.
     ``action`` is the loop's verdict — ``decided``, ``noop``, ``refused``, ``off`` — and it
     is always present, because "what did the tick do" is the first question asked of it.
+    ``stage`` names the GATE that produced that verdict: ``refused`` covers six different gates,
+    and the labeller wants to know which one, without matching prose. Empty when a caller does
+    not say (a replayed or hand-built record), and absent from rows written before it existed.
     """
     moment = at or datetime.now(timezone.utc)
     record: Dict[str, Any] = {
@@ -203,6 +207,7 @@ def tick_record(
         "env": str(env or "").lower(),
         "action": action,
         "reason": reason,
+        "stage": str(stage or ""),
         "bar": None if bar is None else str(bar),
         "signal": signal,
         "intents": list(intents or []),
@@ -260,6 +265,9 @@ def order_record(
         "intent": intent.get("intent"),
         "reason": intent.get("reason") or "",
         "status": intent.get("status") or "",
+        # The broker's own words — the only place a REFUSED order says why it was refused.
+        # ``reason`` above is the strategy's ("signal"), which is a different question.
+        "detail": intent.get("detail") or "",
         "price": intent.get("price"),
         "expected": intent.get("expected"),
         "order_id": intent.get("order_id"),

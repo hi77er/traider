@@ -103,16 +103,15 @@ header h1 { font-size: 20px; margin: 0; }
 .rp-exec.paper { color: #7fd1c1; }
 .rp-exec.live { color: #ff8a80; }
 
-/* Trading panel under the chart, shown only while trading is ON. */
-.trading-card { border-color: rgba(38, 166, 154, 0.5); box-shadow: inset 3px 0 0 var(--green); }
-/* The armed state marks the Trading panel itself: it is the card that describes what the bot
-   is doing, and the green edge is visible with the body collapsed. */
-body.trading-on #live-card { border-color: rgba(38, 166, 154, 0.5); box-shadow: inset 3px 0 0 var(--green); }
+/* The green edge that used to mark the armed Trading panel is GONE, both spellings of it: the
+   `.trading-card` rule (a class nothing has carried since the panel moved into the strategy bar)
+   and the armed-state selector that outlined the whole slot. The armed state is reported by the
+   Trading box in the metrics, which pulses — half the dashboard in green to say one word twice
+   was screen spent on nothing. The class the lock sets on the body stays; nothing styles it. */
 /* Same trap as `#rp-delete` and `#bt-report`: the global `button { display: inline-flex }`
-   beats the UA `[hidden] { display: none }`, so the attribute alone would not hide these two —
-   they appeared whether or not they applied. That was invisible while the card holding them was
-   hidden with them, and became visible the moment the card became permanent. */
-#trading-off-btn[hidden], #trading-flatten-btn[hidden] { display: none; }
+   beats the UA `[hidden] { display: none }`, so the attribute alone would not hide this one —
+   it appeared whether or not a position was open. */
+#trading-flatten-btn[hidden] { display: none; }
 button.primary.small.danger, button.danger { color: #ff8a80; border-color: rgba(239, 83, 80, 0.6); }
 
 main { max-width: 1500px; margin: 24px auto; padding: 0 16px; }
@@ -361,6 +360,14 @@ button.ghost:hover { border-color: var(--accent); color: var(--accent); }
 
 /* ---------- Chart indicator toggles + oscillator panes ---------- */
 .indicator-toggles { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px; }
+
+/* The chart's head: the title, and the two signal toggles pushed to the right of it. They moved
+   here from the signals panel because between them they decide what is DRAWN on this chart — the
+   markers, and whether the unexecuted ones are drawn at all. On one row rather than the stacked
+   column they were in there, which was a narrow panel's shape, not this one's. */
+.chart-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.chart-head h2 { margin: 0; }
+.chart-head .signal-toggles { flex-direction: row; align-items: center; gap: 14px; margin-left: auto; }
 
 button.chip-ind {
   display: inline-flex;
@@ -932,8 +939,6 @@ button.primary.small:disabled, button.ghost.small:disabled {
 
 .strategy-bar select { min-width: 170px; }
 
-.strategy-chip { font-variant-numeric: tabular-nums; }
-
 .strategy-bar-actions {
   display: flex;
   align-items: center;
@@ -982,6 +987,10 @@ button.primary.small:disabled, button.ghost.small:disabled {
 }
 .strategy-rules[hidden] { display: none; }
 .strategy-rule-line { display: block; }
+/* The BUY rules are listed first, then the SELL ones — two lists in one section, and this is the
+   joint between them. Only the joint is spaced: a gap between every pair of rules would just be a
+   looser list, which is what the line height is for. */
+.strategy-rule-line[data-side="BUY"] + .strategy-rule-line[data-side="SELL"] { margin-top: 10px; }
 /* A rule whose referenced feature is disabled in the active config never
    fires — tint it to make that visible in the header and the Rules panel. */
 .strategy-rule-line.feature-off { color: #ffd28a; opacity: 1; }
@@ -1011,19 +1020,27 @@ button.primary.small:disabled, button.ghost.small:disabled {
 #pconfig-body p { margin: 0; }
 #pconfig-groups { display: flex; flex-direction: column; gap: 14px; }
 
-/* ---------- Strategy Signals panel ---------- */
-/* Strategy header — second row: two EQUAL subpanels — signals fills the left
-   half, the rule summary fills the right half. */
+/* ---------- Strategy Signals + Rules, and the Trading panel ---------- */
+/* Strategy header — second row: two equal slots (equal in WIDTH — the split is the point). The
+   Trading panel fills the left one (the slot the signals list used to have) and the signals +
+   rules share the right one as a single section: signals on top, rules under them.
+   Tops aligned, heights their own: the Trading panel is collapsed by default and grows to several
+   hundred pixels when it is opened, and stretched boxes would then leave that much empty space
+   under the rules beside it — a void reads as a panel that failed to load. */
+/* The bar's toggle folds this whole row. `display` has to be re-declared for the attribute or the
+   flex rule below wins over the browser's `[hidden] { display: none }` and the row stays on
+   screen — the same trap as `.strategy-rules[hidden]`, `.strategy-new-row[hidden]` and
+   `#trading-off-btn[hidden]`. */
+.strategy-rules-row[hidden] { display: none; }
 .strategy-rules-row {
   flex-basis: 100%;
   min-width: 0;
   display: flex;
-  align-items: stretch;
+  align-items: flex-start;
   gap: 16px;
   flex-wrap: wrap;
 }
-.strategy-signals,
-.strategy-rules-section {
+.strategy-slot {
   /* flex-basis 0 + equal grow = exactly half each (a 50% basis + the gap would
      overflow the row and wrap the panels instead of splitting it). */
   flex: 1 1 0;
@@ -1033,6 +1050,25 @@ button.primary.small:disabled, button.ghost.small:disabled {
   border-radius: 8px;
   padding: 10px 12px;
 }
+/* the two halves of the merged section: what the strategy says now, and what it will do */
+.strategy-rules-section {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+/* The Trading panel is the CARD, moved whole — head, body, ids and handlers — rather than its
+   contents copied into a new shell. Inside this slot its own border would be a box in a box, so
+   the slot provides the frame; its padding was the card's, and the head's own padding goes with
+   it or the head sits further in than the section titles beside it. The head keeps the layout
+   without the gesture: nothing here is clickable any more, so the pointer cursor goes. */
+.strategy-slot > #live-card {
+  background: none;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  margin: 0;
+}
+.strategy-slot #live-card .card-head { padding: 0 0 8px; flex-wrap: wrap; cursor: default; }
 /* Both section labels echo the small uppercase strategy-bar title. */
 .strategy-section-title,
 .strategy-signals .signal-head h2 {
@@ -1092,7 +1128,19 @@ button.primary.small:disabled, button.ghost.small:disabled {
   font-size: 13px;
 }
 .signal-reason { margin: 8px 0 0; }
+/* Which rule fired is a VALUE of the reading, printed on the reading's own line after the
+   confidence — so in there it carries no margin of its own and simply wraps when it is long. */
+.signal-meta .signal-reason { margin: 0; }
 .signal-counts { margin: 4px 0 0; }
+/* The counts and the risk state, as the same `.bt-stat` boxes every other screen uses. Its own
+   declaration because the shared grid is scoped to `#bt-metrics` — and a narrower minimum than
+   the trading panel's, so Buy/Sell/Hold/Risk fit the half-width slot in one row. */
+.signal-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(70px, 1fr));
+  gap: 8px;
+  margin: 8px 0 0;
+}
 
 
 
@@ -1143,6 +1191,24 @@ button.primary.small:disabled, button.ghost.small:disabled {
 .bt-stat .value { font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .bt-stat .value.pos { color: #7fe0c8; }
 .bt-stat .value.neg { color: #ff9a94; }
+/* A state box whose setting costs money: the account is LIVE, or trading is ARMED. The border
+   pulses rather than a digit going red, because this dashboard is left open and a red figure in a
+   quiet box is exactly what a glance skips — the same reason the header blinks for those two
+   states and no others. The box is re-rendered only when its TEXT changes, so the pulse is not
+   restarted by a poll. With motion off it stays red and still, rather than losing the signal. */
+.bt-stat.flash-red { border-color: rgba(239, 83, 80, 0.85); animation: bt-flash 1.8s ease-in-out infinite; }
+/* The same box in its SAFE setting: a live account is red and pulsing, a paper one is blue and
+   still; trading armed is red, off is blue. Both ends are marked on purpose — an unmarked box
+   beside a marked one reads as "unknown" rather than "the safe one", and these two are the
+   settings the rest of the panel is read through. */
+.bt-stat.tint-blue { border-color: rgba(88, 166, 255, 0.8); }
+@keyframes bt-flash {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239, 83, 80, 0); }
+  50% { box-shadow: 0 0 10px 1px rgba(239, 83, 80, 0.55); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bt-stat.flash-red { animation: none; box-shadow: 0 0 8px rgba(239, 83, 80, 0.35); }
+}
 .bt-notes { margin: 0 0 14px; font-size: 12px; }
 #backtest h4 { margin: 10px 0 6px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
 #bt-curve { width: 100%; height: 140px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
@@ -1486,6 +1552,9 @@ td.mkt-sym { font-weight: 600; }
    `.bt-stat` boxes now, and `#live-state .warn` already carries the warning colour.) */
 .chip.good { color: var(--green); border-color: rgba(38, 166, 154, 0.5); }
 .chip.bad { color: var(--red); border-color: rgba(239, 83, 80, 0.55); }
+/* The loop chip hides while trading is on (the Trading box says it), and `.chip` would
+   otherwise keep the UA's `[hidden]` from applying — the same trap as the buttons above. */
+#live-chip[hidden] { display: none; }
 
 /* ---------- Trading log page ----------
 
@@ -1508,4 +1577,84 @@ td.mkt-sym { font-weight: 600; }
 .lg-table td.warn { color: #f0b429; }
 .lg-table td.good { color: var(--green); }
 #lg-protection.bad { color: var(--red); }
+/* The account's numbers as boxes. The shared grid rule is scoped to `#bt-metrics`, and the
+   dashboard's own is `.live-metrics`, so this id needs its own declaration or every box below it
+   stacks in one column — the report page hit exactly that and says so where it declares its own. */
+.lg-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(124px, 1fr));
+  gap: 8px;
+  margin-bottom: 4px;
+}
+/* Which account the boxes under it are, and whether it is the one being traded: the one thing a
+   row of figures cannot say for itself, and the reason both environments are on this page at
+   all. The account in play is spelled out in the normal text colour with a green tag; the other
+   is left muted, because it is context rather than the answer — and an unmarked paper account
+   under a "live" header is a page that reads as the account it is not. */
+.lg-acct {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin: 14px 0 6px;
+}
+.lg-acct.in-play { color: var(--text); }
+.lg-acct-tag { font-size: 10px; font-weight: 600; letter-spacing: 0.08em; }
+.lg-acct.in-play .lg-acct-tag { color: var(--green); }
+/* The account in play being unreadable is not a footnote — it is why nothing can trade and why
+   the only figures on this page belong to the other account — so it is amber, like every other
+   "this is what stands in the way" line on the page (#lg-loop-warning, a tick's notes). */
+#lg-accounts p.warn { color: #f0b429; line-height: 1.45; margin: 0 0 6px; }
+#lg-accounts .lg-acct:first-child { margin-top: 0; }
+
+/* ---------- the loop's clock ----------
+   The panel's top-right corner, and the one number on this page that moves without a request:
+   what it counts to, the countdown as a clock, and the sentence explaining it under it. A real
+   digital clock is a lit face on a dark one, so the digits get a fixed-width font and a cool
+   green glow rather than the page's text colour — which read as one more label. */
+.lg-clock-block { flex-direction: column; align-items: flex-end; gap: 2px; }
+.lg-clock {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  font-family: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 23px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+  color: #7fe0c8;
+  text-shadow: 0 0 10px rgba(38, 166, 154, 0.45);
+}
+/* The label names what the digits are counting to; the glow belongs to the digits alone. */
+.lg-clock-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+  text-shadow: none;
+}
+/* What the clock is counting to: a caption under it rather than a headline — smaller than the
+   page's own text and in the muted colour every other secondary line here uses, so it cannot
+   compete with the number it explains. One row by design: it is sixty-odd characters, and a
+   caption that breaks under a clock reads as a paragraph. */
+#lg-next-when {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--muted);
+  text-align: right;
+  white-space: nowrap;
+}
+#lg-day { text-transform: none; letter-spacing: 0; font-weight: 400; }
+/* The trading status block, at the foot of the Account card: the switch and what the loop is
+   doing, then the detail under it. The pill wraps rather than shrinking — its label is the state
+   and a clipped one is worse than a second line. */
+.lg-status { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+#lg-strategy { margin: 8px 0 0; }
+#lg-loop-warning { color: #f0b429; line-height: 1.5; margin: 6px 0 0; }
+#lg-loop-warning[hidden] { display: none; }
 .rp-run.active { border-color: var(--accent); color: var(--accent); }

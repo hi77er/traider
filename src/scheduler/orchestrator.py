@@ -83,6 +83,25 @@ __all__ = ["build_driver", "run", "tick"]
 #: the log is what someone reads to find out what HAPPENED.
 LOGGED_ACTIONS = frozenset({"decided", "refused"})
 
+#: The GATES a tick walks, in the order it walks them, and the names it stamps on a record that
+#: stopped at one (see ``tick``). They exist for the reader of a quiet bot: ``refused`` alone
+#: covers six different reasons nothing happened, and "which gate is it stuck behind" is the
+#: question that follows every one of them. A name here is a FACT about the tick, not a label —
+#: the trading log renders the pipeline from the last tick's own record.
+#:
+#: Order matters and is the order below: a tick that stopped at ``clock`` never reached
+#: ``sync``, and a reader is owed that distinction rather than a list of things that ran.
+TICK_STAGES = (
+    "switch",     # is trading on, re-read every tick
+    "armed",      # is this the strategy the switch was armed for
+    "execution",  # could an order be placed at all
+    "clock",      # is the exchange open — asked of the exchange, never inferred
+    "sync",       # the dataset is brought up to now
+    "window",     # the trailing window is readable and not behind
+    "quality",    # the bar about to be decided on is a bar at all
+    "decide",     # the strategy decided, and acted on its decision
+)
+
 #: Seconds added to a boundary before asking. The provider's newest bar is not always in
 #: place the instant it closes, and one tick is cheap while a missed bar is not.
 PROVIDER_LAG_SECONDS = 5.0
@@ -284,13 +303,14 @@ def tick(
     def finish(
         action: str,
         reason: str = "",
+        stage: str = "",
         logged: bool = False,
         index_fields: Optional[Dict[str, Any]] = None,
         orders: Optional[List[Dict[str, Any]]] = None,
         **extra,
     ) -> Dict[str, Any]:
         record_ = store.tick_record(
-            strategy=strategy, env=env, action=action, reason=reason,
+            strategy=strategy, env=env, action=action, reason=reason, stage=stage,
             settings=settings, at=at, notes=notes, **extra,
         )
         if record:
@@ -331,7 +351,7 @@ def tick(
     # Re-read every tick and never cached: this is what makes OFF take effect at the next
     # boundary with no signal to this process and no network involved.
     if not is_trading_on(settings):
-        return finish("off", "trading is OFF")
+        return finish("off", "trading is OFF", stage="switch")
 
     # -- 1b. is this the strategy it was armed for? -------------------------
     # The loop runs the STAMPED strategy, not whatever happens to be active now. If they
@@ -344,12 +364,13 @@ def tick(
             "refused",
             f"trading was armed for {stamped!r} but the active strategy is {strategy!r} — "
             "refusing to trade a strategy that was not armed. Turn trading off and on again.",
+            stage="armed",
         )
 
     # -- 2. could an order be placed at all? --------------------------------
     status = execution_status(settings)
     if not status.get("ok"):
-        return finish("refused", f"orders would be refused — {status.get('message')}")
+        return finish("refused", f"orders would be refused — {status.get('message')}", stage="execution")
 
     try:
         clock = (clock_call or _default_clock(settings))()
@@ -359,9 +380,9 @@ def tick(
         # and on purpose: the SDK raises whatever its transport raised, and an exception
         # that escapes here would take the whole loop down over one unanswered request.
         logger.exception("The exchange clock could not be read")
-        return finish("refused", f"the exchange clock could not be read ({exc})")
+        return finish("refused", f"the exchange clock could not be read ({exc})", stage="clock")
     if not clock.get("is_open"):
-        return finish("closed", "the exchange is closed")
+        return finish("closed", "the exchange is closed", stage="clock")
 
     # -- 3. sync the dataset to now ----------------------------------------
     # The only provider call in the loop, and already throttled. It happens even when the
@@ -370,7 +391,7 @@ def tick(
     try:
         (sync_call or (lambda: delta_mod.sync_missing_days(settings)))()
     except Exception as exc:  # noqa: BLE001 - a provider outage is a refused tick
-        return finish("refused", f"the dataset could not be synced ({exc})")
+        return finish("refused", f"the dataset could not be synced ({exc})", stage="sync")
 
     # -- 4. read the trailing window from the dataset ----------------------
     until = dataset.bar_stamp(settings, dataset.last_closed_bar(settings, at))
@@ -379,10 +400,10 @@ def tick(
         # than by building a driver just to read a number off it.
         window, newest = _window(settings, until, live_data.required_bars(settings))
     except Exception as exc:  # noqa: BLE001
-        return finish("refused", f"the dataset could not be read ({exc})")
+        return finish("refused", f"the dataset could not be read ({exc})", stage="window")
 
     if window.empty:
-        return finish("refused", "the dataset has no bars up to the last closed bar — backfill first")
+        return finish("refused", "the dataset has no bars up to the last closed bar — backfill first", stage="window")
     if newest < until:
         # The newest bar in the file is BEHIND the bar that should have closed. Trading it
         # would be acting on a price the market has already moved past, so this refuses
@@ -391,6 +412,7 @@ def tick(
             "refused",
             f"the newest stored bar is {newest} but {until} should have closed — "
             "the dataset is behind; refusing to decide on a stale bar",
+            stage="window",
         )
 
     # -- 5b. is the bar a bar? ---------------------------------------------
@@ -407,7 +429,7 @@ def tick(
     signal_row = window.iloc[-1]
     broken = quality.broken_reason(signal_row)
     if broken:
-        return finish("refused", broken)
+        return finish("refused", broken, stage="quality")
     notes.extend(quality.notes(signal_row))
 
     # -- 5c. may anything NEW be opened? -----------------------------------
@@ -423,7 +445,7 @@ def tick(
     if driver.name != wanted:
         # A caller handed us a driver for a different strategy. Better to say so than to
         # trade through it: the state file and the account would both be the wrong one.
-        return finish("refused", f"the driver is for {driver.name!r}, not {wanted!r}")
+        return finish("refused", f"the driver is for {driver.name!r}, not {wanted!r}", stage="decide")
     # The verdict is the LOOP's, so it is applied to whichever driver the tick ended up
     # with — including one injected by a test or a replay. A driver cannot disagree with
     # the loop about whether today is halted, and the loop cannot be bypassed by passing it
@@ -433,13 +455,14 @@ def tick(
     try:
         result = driver.on_bar_closed(window)
     except NotEnoughHistory as exc:
-        return finish("refused", str(exc))
+        return finish("refused", str(exc), stage="decide")
     except Exception as exc:  # noqa: BLE001 - one bad bar must not stop the loop
         logger.exception("Tick failed while deciding")
-        return finish("refused", f"the decision failed ({exc})")
+        return finish("refused", f"the decision failed ({exc})", stage="decide")
 
     if result.get("action") == "noop":
-        return finish("noop", result.get("reason") or "this bar was already decided", bar=result.get("bar"))
+        return finish("noop", result.get("reason") or "this bar was already decided",
+                      stage="decide", bar=result.get("bar"))
     if result.get("action") == "refused":
         # A refusal can still have BOOKED something: an exit the broker made is adopted
         # before the reconcile that refuses, so the trade happened whatever the tick's
@@ -448,6 +471,7 @@ def tick(
         return finish(
             "refused",
             result.get("reason") or "the driver refused",
+            stage="decide",
             bar=result.get("bar"),
             index_fields={"trades": len(legs)} if legs else None,
             trades=legs,
@@ -478,6 +502,7 @@ def tick(
         # tick decided, refused the entry, and this is where it says so. An empty reason is
         # the ordinary case.
         reason=result.get("reason") or "",
+        stage="decide",
         logged=True,
         index_fields={"decided": 1, "orders": len(orders), "trades": len(legs)},
         orders=orders,

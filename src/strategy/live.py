@@ -407,6 +407,9 @@ class LiveDriver:
                 "price": real if real is not None else intent.expected_price,
                 "expected": intent.expected_price,
                 "status": fill.status,
+                # The broker's words, on every outcome: for a refusal this is the only
+                # explanation of it, and the orders log is where someone looks for one.
+                "detail": fill.detail or "",
                 **identity,
             }
             if real is not None:
@@ -424,6 +427,7 @@ class LiveDriver:
                 "price": real if real is not None else intent.expected_price,
                 "expected": intent.expected_price,
                 "status": fill.status,
+                "detail": fill.detail or "",
                 **identity,
             }
         return {"intent": intent.action, "reason": intent.reason, **identity}

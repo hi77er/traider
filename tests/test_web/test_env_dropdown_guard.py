@@ -51,7 +51,7 @@ def extract_guard_block() -> str:
 
 HARNESS = r"""
 // ---- fakes: record every effect the handler can have ----------------------
-const log = { api: [], toasts: [], renders: [], dialogs: [], loads: 0 };
+const log = { api: [], toasts: [], renders: [], dialogs: [], loads: 0, refreshes: [] };
 let confirmAnswer = true;
 
 // The guard arms a safety timeout. These tests are about the flags, not the clock,
@@ -110,6 +110,10 @@ function api(path, opts) {
 function flashToast(text) { log.toasts.push(text); }
 function confirmDialog() { log.dialogs.push(1); return Promise.resolve(confirmAnswer); }
 function loadTrading() { log.loads += 1; return Promise.resolve(); }
+// The immediate broker re-read. Deliberately NOT counted as a `load`: that counter is what the
+// cases below assert against, and folding two effects into it would make them indistinguishable.
+// It is a cumulative list, so its length at the end counts every switch in the harness.
+function refreshLiveNow() { log.refreshes.push(1); return Promise.resolve(); }
 
 (async function () {
   const out = {};
@@ -191,6 +195,9 @@ function loadTrading() { log.loads += 1; return Promise.resolve(); }
   // 8. Nothing is registered on the document: only the select can arm the guard.
   out.documentListeners = docAdds.slice();
   out.selectRegistrations = sel.registered.slice();
+  // One immediate re-read per WRITTEN switch — cases 2, 4, 6b and 7, and none for the restore,
+  // the decline, the no-op or the second restore.
+  out.refreshes = log.refreshes.length;
 
   process.stdout.write(JSON.stringify(out));
 })();
@@ -257,6 +264,26 @@ def test_only_the_dropdown_itself_can_arm_the_guard(guard_results):
     assert guard_results["documentListeners"] == []
     # pointerdown/keydown arm it; blur releases it when the menu closes with no choice.
     assert set(guard_results["selectRegistrations"]) == {"pointerdown", "keydown", "blur"}
+
+
+def test_a_switch_rereads_the_account_at_once(guard_results):
+    """Asked for: switching mode must not wait for the poll.
+
+    Only the MODE box comes from the switch's own read; the account boxes beside it (equity, the
+    day, cash, buying power, status) come from the broker half of the live poll, which runs on a
+    minute cadence. So a switch relabelled the panel and left every figure in it belonging to the
+    account the operator had just left, until the poll came round.
+
+    One immediate re-read per written switch (cases 2, 4, 6b and 7 above) — and none for a
+    restored value, a declined confirmation or a no-op selection, because none of those changed
+    which account the panel is about.
+    """
+    assert guard_results["refreshes"] == 4
+    # The switch's own state is still re-read on every one of them...
+    assert guard_results["pointerGesture"]["loads"] == 1
+    # ...and a decline never reaches the broker at all.
+    assert guard_results["declined"]["loads"] == 0
+    assert guard_results["unchanged"]["loads"] == 0
 
 
 def test_the_guard_is_released_after_each_change(guard_results):

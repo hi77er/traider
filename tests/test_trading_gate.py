@@ -586,11 +586,12 @@ def test_the_trading_switch_and_its_lock_are_wired_into_the_dashboard():
     assert 'id="trading-panel"' not in html, "the separate switch card is gone"
     live = html.index('id="live-card"')
     body = html.index('id="live-body"')
-    for control in ("trading-off-btn", "trading-flatten-btn"):
-        assert html.index(f'id="{control}"') > live, f"{control} belongs to the Trading panel"
-        assert html.index(f'id="{control}"') < body, (
-            f"{control} goes in the HEAD: a collapsed panel must still be stoppable"
-        )
+    # The flatten control lives in the HEAD, because it is the one action that is not the header
+    # switch's and it has to stay reachable. The panel's own "turn trading off" button is gone:
+    # the master switch in the header does that, from outside every lock.
+    at = html.index('id="trading-flatten-btn"')
+    assert live < at < body, "the flatten control goes in the head"
+    assert 'id="trading-off-btn"' not in html, "the header switch is the only way to stop trading"
     for readout in ("trading-msg", "trading-facts"):
         assert html.index(f'id="{readout}"') > body, f"{readout} is panel body content"
     # The Execution panel is gone: the header carries the state, and the armed
@@ -612,7 +613,11 @@ def test_the_trading_switch_and_its_lock_are_wired_into_the_dashboard():
 
     css = (ROOT / "src" / "web" / "static" / "style.css").read_text(encoding="utf-8")
     assert ".exec-state" not in css, "the removed panel's styles should not linger"
-    assert "body.trading-on" in css
+    # ``body.trading-on`` survives as the lock's hook (the switch still sets it) but nothing is
+    # styled by it any more: the green edge it drew around the trading section is gone, because
+    # the panel's own Trading box reports that state — and pulses.
+    assert "classList.toggle(\"trading-on\"" in js
+    assert "body.trading-on" not in css
 
 
 def test_the_header_keeps_identity_and_the_switch_left_and_config_right():

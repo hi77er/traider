@@ -281,6 +281,28 @@ def test_a_tick_record_carries_the_core_keys_and_the_day(tmp_path):
     assert record["trades"] == [], "nothing closed unless the tick says so"
 
 
+def test_a_tick_record_names_the_gate_that_ended_it(tmp_path):
+    """``refused`` covers six gates, and "which one" is the question a quiet bot raises.
+
+    The pipeline the trading log renders is read from here, so the stage has to travel with the
+    record rather than be guessed from prose that will be reworded."""
+    settings = _s(tmp_path)
+
+    record = _record(settings, action="closed", reason="the exchange is closed", stage="clock")
+
+    assert record["stage"] == "clock"
+    store.save_latest(settings, "Alpha", record)
+    assert store.load_latest(settings, "Alpha")["stage"] == "clock"
+
+
+def test_a_record_built_without_a_stage_still_carries_the_key(tmp_path):
+    """Replays, hand-built rows and anything written before stages existed. Always present so a
+    reader never has to check for it — empty is "not said", not "unknown gate"."""
+    settings = _s(tmp_path)
+
+    assert _record(settings)["stage"] == ""
+
+
 def test_a_tick_record_carries_the_trades_that_tick_closed(tmp_path):
     """The panel answers "what did the last tick do" from latest.json, so a close it
     cannot see is a close the operator has to go digging in a .jsonl for."""
@@ -310,6 +332,42 @@ def test_an_order_row_names_the_order_on_both_sides(tmp_path):
     assert row["order_id"] == "ord-9" and row["client_order_id"] == "traider-A-b3"
     assert row["day"] == "2026-09-16" and row["env"] == "paper" and row["strategy"] == "Alpha"
     assert row["bar"] == "2026-09-16T17:30:00+00:00"
+
+
+def test_a_refused_order_row_says_why_in_the_brokers_own_words(tmp_path):
+    """``reason`` is the strategy's ("signal"); ``detail`` is why it did not fill.
+
+    Without it a refused row records that something was refused and nothing else, so the
+    one question this table is opened with — why did this not fill — is unanswerable
+    without going to the loop's log file; ``client_order_id`` is the join key to the
+    broker's copy, and the broker's copy is not on this machine.
+    """
+    settings = _s(tmp_path)
+    row = store.order_record(
+        settings=settings, strategy="Alpha", env="paper",
+        at=datetime(2026, 9, 16, 14, 0, tzinfo=timezone.utc),
+        bar="2026-09-16T17:30:00+00:00",
+        intent={"intent": "open", "reason": "signal", "status": "rejected",
+                "detail": "Alpaca refused the request with 403 [40310000] insufficient buying power",
+                "order_id": None, "client_order_id": "traider-A-b4"},
+    )
+
+    assert row["status"] == "rejected" and row["reason"] == "signal"
+    assert "403" in row["detail"] and "insufficient buying power" in row["detail"]
+
+
+def test_an_order_with_nothing_to_say_has_an_empty_detail(tmp_path):
+    """A fill has no explanation to give, and the row says so with "" rather than
+    ``None`` — the orders file is JSONL, and one type per field is what keeps a reader
+    from having to know which rows are special."""
+    settings = _s(tmp_path)
+    row = store.order_record(
+        settings=settings, strategy="Alpha", env="paper",
+        at=datetime(2026, 9, 16, 14, 0, tzinfo=timezone.utc),
+        intent={"intent": "open", "reason": "signal", "status": "filled"},
+    )
+
+    assert row["detail"] == ""
 
 
 def test_a_trade_row_is_the_engines_own_leg_plus_when_it_happened(tmp_path):

@@ -85,8 +85,11 @@ def get_accounts(settings=Depends(get_effective_settings_dep)) -> dict:
     """What each account is worth: equity, the day's change, cash and buying power.
 
     Both environments, like ``/positions`` and for the same reason — a strategy trades one at
-    a time, but a person can be wrong about which. The numbers are projected and the account
-    number is masked (see ``src/execution/accounts``); the broker's payload is never proxied.
+    a time, but a person can be wrong about which. ``env`` says which one is being traded, and
+    the panels that show worth (this one on the dashboard, and the log page's accounts panel)
+    render THAT ONE only: an idle account's balance beside the traded one's is a number waiting
+    to be read as the wrong account's. The numbers are projected and the account number is masked
+    (see ``src/execution/accounts``); the broker's payload is never proxied.
     """
     rows = accounts.snapshots(settings)
     return {
