@@ -5,9 +5,10 @@
 
 * the loop, before it starts, to find out whether it may (see
   ``src/scheduler/lease.py``, which also claims and renews it), and
-* the dashboard, which shows the holder, the next wake and how long ago the last tick was
-  — because a quiet market and a dead loop look identical otherwise, and those two want
-  opposite responses from whoever is looking.
+* the dashboard, which says whether anything is running at all — because a quiet market and
+  a dead loop look identical otherwise, and those two want opposite responses from whoever
+  is looking. (It used to recite the holder, the next wake and the age of the last tick as
+  well; the log page's own loop panel carries those from the loop's records, in one place.)
 
 That second reader is why this module exists rather than the rules living in the loop. The
 dashboard must not import ``src.scheduler`` at all: the whole point of the two-process split

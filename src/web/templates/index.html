@@ -29,10 +29,10 @@
       <div id="header-summary" class="header-summary" hidden></div>
       <div class="strategy-bar-main">
         <!-- The bar's own toggle, and the ONLY one in the bar: it folds everything below the
-             strategy line — the trading panel and the signals/rules section together, because
-             they are one subject (this strategy: what it says, what it will do, and what it is
-             doing). Inside the folded row nothing folds on its own any more: one toggle for one
-             thing beats three that hide pieces of it. -->
+             strategy line — the trading panel with the signals under it, and the rules the
+             signals are made of — because they are one subject (this strategy: what it is doing,
+             what it says, and why). Inside the folded row nothing folds on its own any more: one
+             toggle for one thing beats three that hide pieces of it. -->
         <button id="strategy-collapse" class="ghost small" onclick="toggleStrategyBody()"
                 title="Collapse / expand the panels below">−</button>
         <span class="strategy-bar-title">Strategy</span>
@@ -80,7 +80,6 @@
               </div>
             </div>
             <div id="live-body">
-              <p id="trading-msg" class="muted" hidden></p>
               <p id="live-state" class="muted">Checking…</p>
               <p id="live-protection" class="muted"></p>
               <!-- The numbers as boxes, in the same style as the backtest KPIs and the report
@@ -92,22 +91,28 @@
               <div id="trading-facts" class="rp-kv-grid"></div>
             </div>
           </section>
+          <!-- What the strategy is saying, directly under the panel that acts on it: the reading
+               and the switch that trades it are one subject, and the signal is the reason anyone
+               looks at the switch. It used to head the other slot, above the rules — which are
+               what the strategy WILL do, not what it is saying. Rendered whole by `renderSignals`
+               into this element, so the id and the class are the only contract. -->
+          <section id="signals" class="strategy-signals"></section>
         </section>
 
-        <!-- RIGHT: what the strategy says and what it will do, as ONE section — the latest
-             signals on top, the rule summary under them. They answer one question between them
-             ("what is it saying now, and why?"), and as two panels side by side they read as two
-             unrelated ones. -->
+        <!-- RIGHT: what the strategy WILL do about it — the rules, and the risk settings they are
+             traded under. They answer one question between them ("why that signal, and what would
+             it risk?"), and as two panels side by side they read as two unrelated ones. The
+             signals themselves are not here: they sit under the Trading panel, where the reading
+             is something the panel below can act on. -->
         <section class="strategy-slot">
-          <section id="signals" class="strategy-signals"></section>
           <div class="strategy-rules-section">
             <h3 class="strategy-section-title">Rules</h3>
             <div id="strategy-rules" class="strategy-rules" hidden></div>
           </div>
           <!-- What the rules are traded UNDER: every risk setting for this strategy, as boxes,
-               under the signals they change. The Risk Management panel in the right column is
-               where they are EDITED; this is where they are read, beside the reading they
-               explain. -->
+               under the rules they change. The Risk Management panel in the right column is
+               where they are EDITED; this is where they are read, beside the rules that use
+               them. -->
           <div class="strategy-rules-section">
             <h3 class="strategy-section-title">Risk</h3>
             <div id="strategy-risk" class="risk-metrics"></div>

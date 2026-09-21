@@ -4,11 +4,11 @@ These are text-level assertions on the static files, which this project has no r
 better for. They are here anyway because the invariants they hold cost MONEY when they break,
 and a browser check cannot be run in CI: everything else about the polls is verified by hand.
 
-The one that matters is the gate. ``/api/v1/orders`` and ``/api/v1/clock`` are broker calls,
-so a poll that keeps running behind a collapsed panel or in a backgrounded tab is a recurring
-cost with no reader — and a backgrounded tab is the normal state of a dashboard someone opened
-this morning. The other is the log page's: a past day cannot gain rows, so refreshing one is
-pure cost and a page that churns under a reader's cursor.
+The one that matters is the gate. ``/api/v1/orders`` is a broker call, so a poll that keeps
+running behind a collapsed panel or in a backgrounded tab is a recurring cost with no reader —
+and a backgrounded tab is the normal state of a dashboard someone opened this morning. The other
+is the log page's: a past day cannot gain rows, so refreshing one is pure cost and a page that
+churns under a reader's cursor.
 """
 
 from __future__ import annotations
@@ -114,12 +114,25 @@ def test_only_the_newest_response_is_rendered():
     assert body.count("_livePoll.token") >= 2, "taken at the start, checked before rendering"
 
 
-def test_the_market_line_is_kept_across_the_fast_polls():
-    """The session moves at 09:30 and 16:00 and nowhere else, so the fast poll does not fetch
-    it — which only works if the last answer is remembered."""
-    assert "state.liveMarket" in APP_JS
-    assert "marketLine" in APP_JS
+def test_the_status_lines_and_the_clock_read_are_gone_from_the_panel():
+    """Asked for removal, as four lines: the armed sentence, "Next wake 13:35 UTC on
+    2026-09-21", "Last tick **closed** — the exchange is closed (16s ago) · Exchange **closed** —
+    opens 09:30 ET (04:30 PM here) in 4h 37m", and "Flat — nothing to protect.".
 
+    Every fact in them is somewhere better: the Mode box names the account, the Trading box says
+    whether the loop is armed, the Open box carries the count the flat sentence was spelling out,
+    and the loop's own record — the gate table, the tick table, the countdown — is the log page,
+    which is where the exchange's state and what the last tick did belong. On the dashboard the
+    same four lines sat ABOVE the boxes that answer them, and re-rendered every five seconds as
+    the reader was working down them.
+
+    The clock went with them: it was a broker call whose only reader was that line, so the panel
+    no longer makes it — one fewer round trip behind a panel nobody is looking at.
+    """
+    for gone in ("marketLine", "exchangeClock", "untilWhen", "shortAge", "shortWhen"):
+        assert f"function {gone}(" not in APP_JS, f"{gone}() had no reader left"
+    assert "liveMarket" not in APP_JS
+    assert "/api/v1/clock" not in _function(APP_JS, "loadLive"), "and neither has the fetch"
 
 # ---------------------------------------------------------------------------
 # the log page
@@ -175,45 +188,11 @@ def test_choosing_a_day_is_what_decides_whether_the_log_polls():
 
 
 # ---------------------------------------------------------------------------
-# the market line itself
-# ---------------------------------------------------------------------------
-def test_an_unreadable_clock_does_not_render_as_a_closed_market():
-    """The exact lie the clock service is built to avoid, one layer up: a 401 is not a
-    session, and telling an operator the market is shut when nobody could look is worse than
-    saying nothing."""
-    body = _function(APP_JS, "marketLine")
-
-    assert "market.ok" in body, "the payload's own verdict has to be consulted"
-    assert "unknown" in body
-    assert body.index("market.ok") < body.index("market.is_open"), \
-        "the unknown branch has to come first, or a failed read falls through to 'closed'"
-
-
-def test_the_market_line_names_the_boundary_that_is_coming():
-    """Closed means "opens at", open means "closes at" — the opposite one is history."""
-    body = _function(APP_JS, "marketLine")
-
-    assert "market.next_open" in body and "market.next_close" in body
-    assert "is_open ? market.next_close : market.next_open" in body
-
-
-def test_the_exchange_time_is_read_from_the_clock_not_converted_from_it():
-    """Alpaca's clock carries the exchange's own offset, so the digits in it are New York's
-    wall time. Reformatting through Date would silently show the reader's zone as the
-    market's — on a machine seven hours ahead, 09:30 would read as 16:30."""
-    body = _function(APP_JS, "exchangeClock")
-
-    assert "ET" in body
-    assert "toLocaleTimeString" in body, "the reader's own time is offered alongside"
-    assert "Date" in body, "and it is what the comparison is made against"
-
-
-# ---------------------------------------------------------------------------
 # the account numbers
 # ---------------------------------------------------------------------------
 def test_the_panel_fetches_the_accounts_only_on_the_slow_poll():
-    """/api/v1/accounts is a broker call, so it belongs with the orders and the clock rather
-    than with the five-second file read."""
+    """/api/v1/accounts is a broker call, so it belongs with the orders on the slow cadence
+    rather than with the five-second file read."""
     body = _function(APP_JS, "loadLive")
     accounts_at = body.index("/api/v1/accounts")
     assert body.index("if (includeOrders)") < accounts_at, "inside the slow branch"
@@ -232,9 +211,10 @@ def test_a_zero_balance_and_an_unreadable_account_render_differently():
     WAS read; one that could not be read draws no figures at all — not a row of dashes, and not a
     zero.
 
-    The sentence that named the reason went with the panel's bottom warnings block. It is not lost
-    from the screen: which account the run is pointed at, and the credential failure behind it, are
-    on the header pill, and the tick line prints the same broker message verbatim.
+    The sentence that named the reason went with the panel's bottom warnings block, and the tick
+    line it used to fall back on has gone too. It is not lost from the screen: which account the
+    run is pointed at, and the credential failure behind it, are on the header pill, in the
+    Account popup, and on the log page's own account panel.
     """
     body = _function(APP_JS, "renderLiveDetail")
 
@@ -465,9 +445,10 @@ def test_the_armed_note_is_gone_from_the_panel():
 def test_the_bottom_warnings_block_is_gone():
     """Asked for removal: the block of sentences under the boxes.
 
-    Its lines repeated what the panel had already said — the broker and exchange failure is the
-    tick line's own message, verbatim — and a panel that says the same thing twice at two ends of
-    one card reads as two problems. Gone from the markup, the script and the stylesheet.
+    Its lines repeated what the panel had already said, and a panel that says the same thing
+    twice at two ends of one card reads as two problems. Gone from the markup, the script and
+    the stylesheet. (The tick line they fell back on has gone the same way since; the panel's
+    one remaining line carries warnings and nothing else.)
     """
     html = (ROOT / "src" / "web" / "templates" / "index.html").read_text(encoding="utf-8")
     css = (ROOT / "src" / "web" / "static" / "style.css").read_text(encoding="utf-8")
@@ -475,6 +456,30 @@ def test_the_bottom_warnings_block_is_gone():
     assert 'id="live-warnings"' not in html
     assert "live-warnings" not in APP_JS, "and nothing writes to the id that is gone"
     assert "#live-warnings" not in css
+
+
+def test_a_flat_account_says_nothing_because_the_open_box_already_says_it():
+    """Asked for removal: "Flat — nothing to protect.".
+
+    It was the `none` verdict — nothing held, so no exit to watch — printed as a sentence beside
+    an Open box reading 0. The verdict that MATTERS is still here and still loud: an unprotected
+    position is a red warning, and a level set with no order resting at it names the fix. What
+    went is the one state that had no news in it.
+
+    Silent, not blank: the element keeps its place in the markup for the verdicts that speak, and
+    an empty one is taken out of the flow so it does not leave a gap under the grid.
+    """
+    body = _function(APP_JS, "renderProtection")
+    css = (ROOT / "src" / "web" / "static" / "style.css").read_text(encoding="utf-8")
+
+    assert "nothing to protect" not in body
+    assert 'verdict.state === "none"' in body and 'host.textContent = "";' in body
+    assert "unprotected" in body and "A level was set and no order is resting at it" in body, \
+        "the verdicts with news in them stay"
+    assert "#live-state:empty,\n#live-protection:empty { display: none; }" in css
+    assert 'id="live-protection"' in (ROOT / "src" / "web" / "templates" / "index.html").read_text(
+        encoding="utf-8"
+    ), "the element is not deleted with the sentence"
 
 
 def test_the_log_page_reads_and_renders_the_accounts():
@@ -614,8 +619,8 @@ def test_the_fast_poll_does_not_blank_what_the_broker_told_us():
 def test_the_panel_arms_its_own_poll_when_the_page_loads():
     """Reported from the page: the account boxes were simply missing.
 
-    The boot read is the cheap half (the loop's own files), and the broker half — the accounts,
-    the orders, the clock — only runs on the slow poll. Nothing started that poll after a page
+    The boot read is the cheap half (the loop's own files), and the broker half — the accounts
+    and the orders — only runs on the slow poll. Nothing started that poll after a page
     load: it was armed by the ↻ button, by folding and unfolding the row, and by a tab switch,
     so a freshly opened dashboard sat on the files-only read and the boxes that come from Alpaca
     never appeared. Arming it here makes the first poll happen seconds after the page does.
@@ -707,19 +712,19 @@ def test_the_panel_does_not_restate_the_strategy_or_the_endpoint():
 
 def test_the_loop_line_names_no_process():
     """Asked for removal: "Held by pid 23710 on Kalins-MacBook-Pro.local (strategy 'GPRO'),
-    started 2026-09-20T21:46:11.587122+00:00 ·".
+    started 2026-09-20T21:46:11.587122+00:00 ·", and then the rest of the status line with it.
 
-    It is a debugging string on a status line, and it pushed the one fact worth reading — when
-    the loop wakes next — off the end of it. Which process holds the claim is in the log and in
-    the lease file; the panel says whether anything is running and when it runs again.
-
-    What the line DOES carry, when it applies, is the account: the tick comes from the loop's own
-    record, which is written for one environment, so after a mode switch it can be the account we
-    just left — and it has to say so rather than be read as this account's.
+    What is left of that block is WARNINGS: a loop that is armed with nothing running it, a
+    lease whose holder is gone, and the loop's own last refusal. A loop that is simply working
+    says nothing here — the countdown it is working to is the log page's, in the panel built for
+    it — and silence is the honest reading of "nothing to report".
     """
     body = _function(APP_JS, "renderLive")
 
     assert "holder_text" not in body and "Held by" not in body and "Last claimed by" not in body
-    assert "Next wake" in body, "the useful half of that sentence stays"
-    assert 'const belongsTo = !tickEnv || !inPlay || tickEnv === inPlay;' in body, \
-        "a tick from the other account is marked, not passed off as this one's"
+    assert "Next wake" not in body, "the wake belongs to the log page's countdown"
+    assert "Last tick" not in body, "and so does what the tick did"
+    assert "No tick recorded yet" not in body
+    assert "The process holding the loop is gone" in body, "the warnings stay"
+    assert "Trading is armed, but no loop is running" in body
+    assert "loop.last_refusal" in body

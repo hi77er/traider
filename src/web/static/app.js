@@ -56,7 +56,6 @@ const state = {
   // The broker half of the Trading panel, kept between the fast polls (which fetch none of it)
   // and across a FAILED read: the boxes show the last figures that were actually read.
   liveOrders: null,
-  liveMarket: null,
   liveAccounts: null,
 };
 
@@ -1285,17 +1284,6 @@ function renderTradingPanel(d) {
   const flatBtn = $("trading-flatten-btn");
   if (flatBtn) flatBtn.hidden = !open;
 
-  const msg = $("trading-msg");
-  if (msg) {
-    // Only the armed sentence: which account and broker, and since when. The COUNT went to the
-    // Open box, and off there is nothing left here to say — the Mode box names the account — so
-    // the line collapses rather than repeat either of them.
-    msg.textContent = tr.on
-      ? `${String(tr.env || "").toUpperCase()} account · ${exec.broker || "—"} · since ${shortWhen(tr.since)}`
-      : "";
-    msg.hidden = !tr.on;
-  }
-
   const facts = $("trading-facts");
   if (!facts) return;
   const rows = [];
@@ -1331,15 +1319,6 @@ function renderTradingPanel(d) {
 
 function execRow(label, html) {
   return `<div class="rp-kv"><span class="label">${escapeHtml(label)}</span><span>${html}</span></div>`;
-}
-
-// "2026-09-15T09:12:31+00:00" -> "09:12 UTC on 2026-09-15"
-function shortWhen(iso) {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return String(iso);
-  const hhmm = d.toISOString().slice(11, 16);
-  return `${hhmm} UTC on ${d.toISOString().slice(0, 10)}`;
 }
 
 // Mirror of the server's lock: disable everything that would be refused with 409.
@@ -2245,15 +2224,6 @@ function escapeHtml(str) {
 const LOOP_COMMAND = "python -m src.main";
 const LOOP_LOG = "data/loop.log";
 
-function shortAge(seconds) {
-  if (seconds === null || seconds === undefined) return "never";
-  const s = Math.max(0, Math.round(Number(seconds)));
-  if (s < 60) return `${s}s ago`;
-  if (s < 3600) return `${Math.round(s / 60)}m ago`;
-  if (s < 86400) return `${Math.round(s / 3600)}h ago`;
-  return `${Math.round(s / 86400)}d ago`;
-}
-
 /* How much is OPEN, and the other two trading boxes, now live in ``trading_switch.js``: the log
  * page shows the same three, and one box with two implementations is how the two screens start
  * disagreeing about what "open" means. This page hands over the payload and its own handler names. */
@@ -2264,56 +2234,15 @@ function showLiveError(message) {
 }
 
 // The panel polls; the page does not. Two cadences, because the two halves cost very
-// different amounts: the loop's records are local files, while the orders and the clock are
-// broker calls. And it stops the moment nobody is looking — a collapsed panel or a
-// backgrounded tab asking Alpaca every minute is a recurring cost with no reader.
+// different amounts: the loop's records are local files, while the orders are broker calls. And
+// it stops the moment nobody is looking — a collapsed panel or a backgrounded tab asking Alpaca
+// every minute is a recurring cost with no reader.
 const LIVE_POLL_MS = 5000;      // /loop — files only
-const LIVE_SLOW_MS = 60000;     // /orders and /clock — broker calls
+const LIVE_SLOW_MS = 60000;     // /orders — broker calls
 const LIVE_BACKOFF_MS = 30000;  // after a failure: slow down rather than hammer
 const LIVE_MAX_FAILURES = 5;
 
 const _livePoll = { timer: null, lastSlow: 0, failures: 0, token: 0 };
-
-// Alpaca's clock returns the EXCHANGE's own wall time with its offset (…-04:00), so the 09:30
-// in it is 09:30 in New York whatever this machine is set to. Reading the digits directly
-// avoids converting it into the operator's zone and then calling the result the market's.
-function exchangeClock(iso) {
-  const parts = /(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(String(iso || ""));
-  if (!parts) return "";
-  const et = `${parts[4]}:${parts[5]}`;
-  const when = new Date(iso);
-  if (Number.isNaN(when.getTime())) return `${et} ET`;
-  const local = when.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  // Only worth saying when the two differ: on a machine already set to New York, "09:30 ET
-  // (09:30 here)" is noise.
-  return local === et ? `${et} ET` : `${et} ET (${local} here)`;
-}
-
-function untilWhen(iso) {
-  if (!iso) return "";
-  const when = new Date(iso);
-  if (Number.isNaN(when.getTime())) return "";
-  const minutes = Math.round((when.getTime() - Date.now()) / 60000);
-  if (minutes <= 0) return "";
-  if (minutes < 60) return `in ${minutes}m`;
-  const hours = Math.floor(minutes / 60), rest = minutes % 60;
-  return rest ? `in ${hours}h ${rest}m` : `in ${hours}h`;
-}
-
-// The answer to "do I need to come back, and when?". Shown whether or not a loop has ever
-// run, which is the state a first test starts in — and deliberately silent rather than
-// guessing when the clock could not be read.
-function marketLine(market) {
-  if (!market) return "";
-  if (!market.ok || market.is_open === null || market.is_open === undefined) {
-    return `<span class="warn">Exchange unknown — ${escapeHtml(market.message || "the clock could not be read")}</span>`;
-  }
-  const when = market.is_open ? market.next_close : market.next_open;
-  const verb = market.is_open ? "closes" : "opens";
-  const state = market.is_open ? "open" : "closed";
-  return [`Exchange <b>${state}</b> — ${verb}`,
-    escapeHtml(exchangeClock(when)), escapeHtml(untilWhen(when))].filter(Boolean).join(" ");
-}
 
 // Money, as the account block needs it. ``signed`` is for the day's change, where the
 // difference between "+$0.00" and "-$0.00" is the whole point of the line.
@@ -2398,7 +2327,6 @@ async function loadLive(includeOrders, options) {
     return false;
   }
   let orders = null;
-  let market = null;
   let accounts = null;
   if (includeOrders) {
     try {
@@ -2407,18 +2335,13 @@ async function loadLive(includeOrders, options) {
       orders = { ok: false, message: err.message };
     }
     try {
-      market = await api("/api/v1/clock");
-    } catch (err) {
-      market = { ok: false, message: err.message };
-    }
-    try {
       accounts = await api("/api/v1/accounts");
     } catch (err) {
       accounts = { ok: false, message: err.message, accounts: [] };
     }
   }
   if (generation !== _livePoll.token) return false;
-  renderLive(loop, orders, market, accounts);
+  renderLive(loop, orders, accounts);
   return true;
 }
 
@@ -2434,7 +2357,7 @@ function inPlayEnv() {
   ).toLowerCase();
 }
 
-function renderLive(loop, orders, market, accounts) {
+function renderLive(loop, orders, accounts) {
   const armed = !!(state.tradingState && state.tradingState.on);
 
   // The broker half is kept across the fast polls, which fetch none of it: without this the
@@ -2442,7 +2365,6 @@ function renderLive(loop, orders, market, accounts) {
   // from Alpaca and replacing the protection verdict with "open the panel" until the next
   // slow poll put them back. It flapped, once a poll.
   if (orders) state.liveOrders = orders;
-  if (market) state.liveMarket = market;
   if (accounts) {
     // A failed re-read is NOT an account worth zero. Overwriting a good snapshot with the empty
     // list a failure carries blanked every account box until the next slow poll happened to
@@ -2451,25 +2373,15 @@ function renderLive(loop, orders, market, accounts) {
     if (accounts.ok !== false) state.liveAccounts = accounts;
   }
 
-  // The account the panel is about, so a line taken from the loop's own records can say when it
-  // belongs to the other one.
-  const inPlay = inPlayEnv();
-
   const lines = [];
-  // The strategy and the account are NOT repeated here: this panel sits inside the strategy bar,
-  // which already names the strategy, and the Mode box in the metrics below names the account.
-  // Printing both again was the panel's longest line saying nothing it did not say elsewhere.
-  //
-  // Neither is the HOLDER — "pid 23710 on Kalins-MacBook-Pro.local (strategy 'GPRO'), started
-  // 2026-09-20T21:46:11.587122+00:00" is a debugging string, and on screen it pushed the one
-  // fact worth reading ("when does it wake next") off the end of the line. Which process holds
-  // the claim is in the log and in the lease file; what the operator needs here is whether
-  // anything is running, and when it will run again.
+  // What is left here is WARNINGS and the loop's own refusals — never a status line. The loop's
+  // next wake, the age of its last tick and the exchange's session used to be printed here as
+  // well, and every one of them is the log page's to say: the countdown is in the loop panel,
+  // the gate table names the exchange, the tick table names what the tick did. On this panel the
+  // same facts sat ABOVE the boxes that answer them, moving under the reader's eye every five
+  // seconds — while the boxes said the same thing in fewer words.
   if (loop.state === "overdue") {
     lines.push('<span class="bad">The process holding the loop is gone — nothing will tick</span>');
-  } else if (loop.state === "running") {
-    const wake = loop.next_wake ? shortWhen(loop.next_wake) : "";
-    lines.push(wake ? `Next wake ${escapeHtml(wake)}` : "Running");
   }
   // Arming writes trading.json; nothing ticks until a process runs the loop. Saying nothing
   // here is how "trading is ON" became a promise this screen could not keep: the operator
@@ -2487,35 +2399,6 @@ function renderLive(loop, orders, market, accounts) {
       + `See <code>${escapeHtml(LOOP_LOG)}</code>; start one with `
       + `<code>${escapeHtml(LOOP_COMMAND)}</code></span>`
     );
-  }
-  if (loop.has_run) {
-    const action = loop.last_action || "?";
-    // A tick whose verdict came from the SWITCH itself ("off — trading is OFF") does not repeat
-    // the switch: the Trading box in the metrics below says ON or OFF, and the reason for the
-    // verdict is the same two words. Every other reason is a fact about the bar and stays.
-    const fromSwitch = loop.last_tick ? loop.last_tick.stage === "switch" : action === "off";
-    const reason = loop.last_reason && !fromSwitch ? ` — ${escapeHtml(loop.last_reason)}` : "";
-    // The tick and the exchange share ONE row: they answer the same question ("is anything
-    // happening, and can it?"), and as two stacked lines they read as two unrelated facts with
-    // the bar's timestamp wedged between them.
-    const bar = loop.last_tick && loop.last_tick.bar ? ` · bar ${escapeHtml(loop.last_tick.bar)}` : "";
-    // This one line is the loop's own record, and the loop writes it for ONE environment: after
-    // a mode switch it is the account we just left that ticked last. Naming that account is what
-    // keeps the line from being read as this account's — the same job the log page's tick table
-    // does with its `account` column.
-    const tickEnv = String((loop.last_tick && loop.last_tick.env) || "").toLowerCase();
-    const belongsTo = !tickEnv || !inPlay || tickEnv === inPlay;
-    const whose = belongsTo ? "" : ` <span class="muted">(${escapeHtml(tickEnv)} account)</span>`;
-    lines.push(`Last tick <b>${escapeHtml(action)}</b>${reason} (${shortAge(loop.last_tick_age_seconds)})${bar}${whose}`);
-  } else {
-    lines.push("No tick recorded yet");
-  }
-  const marketText = marketLine(state.liveMarket);
-  if (marketText) {
-    // Onto the LAST line, which is the tick line whenever there is one — the guard is for the
-    // case where every line above was skipped, so the exchange still gets said.
-    if (lines.length) lines[lines.length - 1] += ` · ${marketText}`;
-    else lines.push(marketText);
   }
   if (loop.last_refusal && loop.last_refusal.reason) {
     lines.push(`<span class="warn">last refusal: ${escapeHtml(loop.last_refusal.reason)}</span>`);
@@ -2542,7 +2425,11 @@ function renderProtection(verdict) {
   }
   host.className = verdict.state === "unprotected" ? "bad" : "muted";
   if (verdict.state === "none") {
-    host.textContent = "Flat — nothing to protect.";
+    // Nothing held, so nothing to watch: the sentence that used to say so had no news in it —
+    // the Open box reads 0 — and a line per account is what the panel was pruned of. The
+    // verdicts that DO carry news (unprotected, a level with nothing resting at it) are below.
+    // Silent rather than blank: an empty line takes no room (see the `:empty` rule).
+    host.textContent = "";
     return;
   }
   if (verdict.state === "protected") {

@@ -976,8 +976,8 @@ button.primary.small:disabled, button.ghost.small:disabled {
 
 /* ---------- Strategy Signals + Rules, and the Trading panel ---------- */
 /* Strategy header — second row: two equal slots (equal in WIDTH — the split is the point). The
-   Trading panel fills the left one (the slot the signals list used to have) and the signals +
-   rules share the right one as a single section: signals on top, rules under them.
+   Trading panel fills the left one with the signals under it: what is being done, and the reading
+   it is acting on. The rules and the risk settings they are traded under share the right one.
    Tops aligned, heights their own: the Trading panel is collapsed by default and grows to several
    hundred pixels when it is opened, and stretched boxes would then leave that much empty space
    under the rules beside it — a void reads as a panel that failed to load. */
@@ -1004,11 +1004,21 @@ button.primary.small:disabled, button.ghost.small:disabled {
   border-radius: 8px;
   padding: 10px 12px;
 }
-/* the two halves of the merged section: what the strategy says now, and what it will do */
+/* What one slot holds more than once, separated from whatever is above it: signals under the
+   Trading panel, risk under the rules. The hairline is what does the separating — never the
+   slot's own top edge, which is why the first child of either slot drops both the rule and the
+   space that goes with it. The BOX is the slot's, in both slots. */
+.strategy-signals,
 .strategy-rules-section {
   margin-top: 12px;
   padding-top: 12px;
   border-top: 1px solid var(--border);
+}
+.strategy-slot > .strategy-signals:first-child,
+.strategy-slot > .strategy-rules-section:first-child {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
 }
 /* The Trading panel is the CARD, moved whole — head, body, ids and handlers — rather than its
    contents copied into a new shell. Inside this slot its own border would be a box in a box, so
@@ -1550,6 +1560,11 @@ td.mkt-sym { font-weight: 600; }
 #live-state .warn { color: #f0b429; }
 #live-protection { margin: 10px 0 6px; line-height: 1.5; }
 #live-protection.bad { color: var(--red); }
+/* Both lines are silent most of the time — the status one carries warnings only, the protection
+   one speaks only when something is held — and an empty `<p>` still leaves its margins behind as
+   a gap with nothing in it. `:empty` is the same rule `#live-metrics` already uses. */
+#live-state:empty,
+#live-protection:empty { display: none; }
 #live-metrics { border-top: 1px solid var(--border); margin-top: 10px; padding-top: 10px; }
 #live-metrics:empty { border-top: none; margin-top: 0; padding-top: 0; }
 

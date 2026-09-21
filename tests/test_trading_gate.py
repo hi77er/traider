@@ -591,8 +591,7 @@ def test_the_trading_switch_and_its_lock_are_wired_into_the_dashboard():
     at = html.index('id="trading-flatten-btn"')
     assert live < at < body, "the flatten control goes in the head"
     assert 'id="trading-off-btn"' not in html, "the Trading box is the only way to stop trading"
-    for readout in ("trading-msg", "trading-facts"):
-        assert html.index(f'id="{readout}"') > body, f"{readout} is panel body content"
+    assert html.index('id="trading-facts"') > body, "trading-facts is panel body content"
     # The Execution panel is gone: the header carries the state, and the armed
     # panel under the chart carries the resolved target.
     for gone in ("execution-card", "exec-state-line", "exec-msg", "exec-facts", "exec-lock-note"):
@@ -601,6 +600,11 @@ def test_the_trading_switch_and_its_lock_are_wired_into_the_dashboard():
     js = (ROOT / "src" / "web" / "static" / "app.js").read_text(encoding="utf-8")
     assert "renderExecutionPanel" not in js
     assert "exec-lock-note" not in js and "exec-facts" not in js
+    # The armed sentence above the boxes — "PAPER account · alpaca · since 08:52 UTC on
+    # 2026-09-21" — is gone too: the Mode box names the account and the Trading box says whether
+    # it is armed, so the line was both facts a second time, in the long form.
+    assert 'id="trading-msg"' not in html
+    assert "trading-msg" not in js, "and nothing writes to the id that is gone"
 
     assert "function applyConfigLock()" in js
     # The lock is applied from ONE place, over one shared list of buttons.

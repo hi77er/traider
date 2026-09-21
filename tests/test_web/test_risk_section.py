@@ -38,14 +38,15 @@ def _function(source: str, name: str) -> str:
 # where it sits
 
 
-def test_the_section_sits_under_the_signals_in_the_same_slot():
-    """Asked for as "under strategy signals": inside the right-hand slot, after the Rules
-    summary — the settings that change what the signals MEAN, read with them."""
-    slot = INDEX[INDEX.index('class="strategy-slot"') : INDEX.index('id="no-data"')]
-    assert 'id="strategy-risk"' in slot
-    assert slot.index('id="signals"') < slot.index('id="strategy-rules"') < slot.index(
-        'id="strategy-risk"'
-    ), "signals, then the rules, then what the rules are traded under"
+def test_the_section_sits_under_the_rules_in_the_other_slot_to_the_signals():
+    """The settings that change what the signals MEAN, read with the rules that use them.
+
+    The signals themselves live under the Trading panel, where the switch that acts on them is —
+    so this slot is the "why, and at what risk" one, and the risk boxes follow the rules.
+    """
+    slot = INDEX[INDEX.index('class="strategy-slot"', INDEX.index('id="signals"')) :]
+    assert slot.index('id="strategy-rules"') < slot.index('id="strategy-risk"')
+    assert 'id="signals"' not in slot, "the signals are in the other slot now"
 
 
 def test_the_section_has_a_title_and_an_empty_host_of_its_own():

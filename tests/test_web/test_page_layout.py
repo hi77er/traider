@@ -148,7 +148,7 @@ def test_the_trading_panel_sits_in_the_strategy_bar():
     The bar is what the dashboard is about — the strategy, what it says now, what it will do and
     whether it is trading — so the panel that reports the trading belongs beside the rules it
     acts on rather than in a column under the chart. Two equal slots, so the move did not quietly
-    demote one of them: the trading panel leads, the signals and rules share the other.
+    demote one of them: the trading panel leads, and the signals follow it in that same slot.
     """
     bar = HTML.index('id="strategy-bar"')
     row = HTML.index('class="strategy-rules-row"')
@@ -162,27 +162,49 @@ def test_the_trading_panel_sits_in_the_strategy_bar():
     assert HTML.count('class="strategy-slot"') == 2, "two slots, both taking half the row"
 
 
-def test_the_signals_and_the_rules_are_one_section_with_the_signals_first():
-    """Asked for as the signals above the rules, merged into a single section.
+def test_the_signals_sit_under_the_trading_panel_they_belong_to():
+    """Asked for as the signals under the Trading section.
 
-    They answer one question between them — what is it saying now, and what will it do about it —
-    and as two panels side by side they read as two unrelated ones. So one slot holds both, the
-    signals first and a hairline between them, and the BOX belongs to the slot: leaving a border
-    on each half would have been the merge in name only.
+    The reading and the switch that acts on it are one subject: a signal nobody trades is a
+    curiosity, and a switch with its reason on the other side of the row makes the operator read
+    two places to answer one question. So the signals are the second child of the SAME slot as
+    the Trading panel, and the other slot keeps what the strategy will do about it — the rules
+    and the risk settings they are traded under, which are what the signal is worth knowing.
     """
-    trading = HTML.index('id="strategy-trading"')
-    slot = HTML.index('class="strategy-slot"', trading)
+    trading = HTML.index('class="strategy-slot"')
     signals = HTML.index('id="signals"')
-    rules = HTML.index('class="strategy-rules-section"')
+    other = HTML.index('class="strategy-slot"', signals)
 
-    assert trading < slot < signals < rules, "one slot, signals above the rules inside it"
+    assert trading < signals < other, "in the trading half of the row, not the rules' half"
+    assert HTML[trading:signals].index('id="live-card"') < signals, "under the panel, not above it"
+    # One element, one slot: a signals section left OUTSIDE the slot (after the row, say) would
+    # still satisfy the index order above and read as a third column.
+    assert '<section id="signals" class="strategy-signals"></section>' in HTML, (
+        "an empty host, filled whole by renderSignals — nothing else in it to move by hand"
+    )
+    assert HTML.count('id="signals"') == 1
+    assert HTML[signals:other].count("</section>") == 2, "its own close, then the slot's"
+
+
+def test_the_slot_separates_its_two_halves_with_a_hairline_and_owns_the_box():
+    """One box per slot, a hairline between the things inside it.
+
+    The Trading panel is a card moved whole into a slot whose frame replaces its own border, so a
+    border per section would be a box inside a box. What separates the halves is a rule along the
+    top of the one BELOW — and the first child of either slot has to drop it, or the rule hangs a
+    few pixels under the slot's own edge with nothing above it to separate from.
+    """
     assert ".strategy-slot {" in CSS, "the section box is the slot's"
-    assert ".strategy-signals,\n.strategy-rules-section {" not in CSS, (
-        "and the per-panel boxes are gone — one section, not two boxes in one"
+    rule = CSS[CSS.index(".strategy-signals,\n.strategy-rules-section {") :]
+    rule = rule[: rule.index("}")]
+    assert "border-top: 1px solid" in rule and "margin-top: 12px" in rule
+    assert "background" not in rule and "border: 1px" not in rule, (
+        "the box belongs to the slot; this rule is the joint"
     )
-    assert ".strategy-rules-section {\n  margin-top: 12px;\n  padding-top: 12px;\n" in CSS, (
-        "a hairline is what separates the two halves"
-    )
+    first = CSS[CSS.index(".strategy-slot > .strategy-signals:first-child") :]
+    first = first[: first.index("}")]
+    assert "border-top: 0;" in first and "margin-top: 0;" in first
+    assert "padding-top: 0;" in first
 
 
 def test_the_buy_and_the_sell_rules_are_separated_in_the_summary():
@@ -271,8 +293,8 @@ def test_the_trading_panel_does_not_repeat_the_strategy_or_the_switch():
     both say it), and no text in the panel says "trading is ON/OFF" any more.
 
     The switch is a BOX now, so the words went: a state printed in a sentence as well as a box
-    reads as two facts. The tick line's reason is the same case — a tick whose verdict came from
-    the switch is reported as "off", and "off — trading is OFF" was that twice.
+    reads as two facts. The tick line that used to explain a switch-sourced verdict has gone
+    entirely since — with it went the needs of that distinction.
     """
     state = _function_of(APP_JS, "renderLive")
     panel = _function_of(APP_JS, "renderTradingPanel")
@@ -280,8 +302,9 @@ def test_the_trading_panel_does_not_repeat_the_strategy_or_the_switch():
     assert "loop.strategy" not in state and "loop.env" not in state, (
         "the strategy bar names the strategy; the Mode box names the account"
     )
-    assert 'fromSwitch = loop.last_tick ? loop.last_tick.stage === "switch"' in state
-    assert 'loop.last_reason && !fromSwitch' in state
+    assert "loop.last_action" not in state and "loop.last_reason" not in state, (
+        "what the last tick did is the log page's tick table"
+    )
     assert "trading is OFF" not in panel and "trading is ON" not in panel
     assert 'TraiderSwitch.tradeTile(state.tradingPayload, "toggleTrading()")' in APP_JS, (
         "the box is what says it — built by the shared module, so the log page's reads the same"
