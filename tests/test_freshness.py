@@ -85,8 +85,8 @@ def test_the_payload_carries_the_answer():
 def test_the_switch_says_so_and_the_page_warns_once():
     from pathlib import Path
 
-    js = (Path(__file__).resolve().parents[1] / "src" / "web" / "static" / "app.js").read_text(
-        encoding="utf-8"
-    )
-    assert "fresh.stale && fresh.message" in js, "the tooltip carries it"
+    static = Path(__file__).resolve().parents[1] / "src" / "web" / "static"
+    js = (static / "app.js").read_text(encoding="utf-8")
+    shared = (static / "trading_switch.js").read_text(encoding="utf-8")
+    assert "fresh.stale && fresh.message" in shared, "the switch's hint carries it, on both pages"
     assert "state.staleGateWarned" in js, "and the page says it once, not on every poll"

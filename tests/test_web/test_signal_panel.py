@@ -65,8 +65,10 @@ def test_every_sentence_in_the_signals_panel_starts_with_a_capital():
 
 
 def test_the_counts_are_boxes_and_the_fills_sentence_is_gone():
-    """Asked for as info boxes: BUY, SELL and HOLD counts as the same `.bt-stat` tiles every
-    other screen uses, plus one for the risk layer's state.
+    """Asked for as info boxes: BUY, SELL and HOLD as the same `.bt-stat` tiles every other
+    screen uses. The risk STATE that used to be the fourth box is its own section under this one
+    now, because a box saying "on"/"off" reported that the settings exist while the settings
+    themselves are what decides whether these are the numbers the bot would act on.
 
     The sentence they replace is removed ENTIRELY, not shortened — including the fills line, the
     exit breakdown and the shading legend that lived in it. The legend explained the coloured
@@ -75,9 +77,9 @@ def test_the_counts_are_boxes_and_the_fills_sentence_is_gone():
     """
     body = _function(APP_JS, "signalTiles")
 
-    for value in ('liveTile("Buy"', 'liveTile("Sell"', 'liveTile("Hold"', 'liveTile("Risk"'):
+    for value in ('liveTile("Buy"', 'liveTile("Sell"', 'liveTile("Hold"'):
         assert value in body, value
-    assert '"on" : "off"' in body, "the risk box is a state, not a count"
+    assert 'liveTile("Risk"' not in body, "the risk state is the Risk section's now"
     assert "signal-metrics" in body, "in a grid of its own"
 
     css = (ROOT / "src" / "web" / "static" / "style.css").read_text(encoding="utf-8")

@@ -5,10 +5,10 @@
  * EXPLANATION of it. A page that led with its own records would let a stale or deleted log
  * pass for the state of the account.
  *
- * Nothing here places, changes or cancels an order: the broker is only ever READ. The one
- * thing this page writes is the master switch, and it does that through ``trading_switch.js``,
- * the same file the dashboard's top bar uses — starting and stopping the bot is one action with
- * one wording, not two.
+ * Nothing here places, changes or cancels an order: the broker is only ever READ. What this page
+ * writes is the master switch and the mode, and it does both through ``trading_switch.js``, the same
+ * file the dashboard's Trading panel uses — starting, stopping and re-pointing the bot are three
+ * actions with one wording each, not two pages' worth.
  */
 "use strict";
 
@@ -387,106 +387,48 @@
       <th>the last tick</th></tr></thead><tbody>${rows}</tbody></table>`);
   }
 
-  // The loop's own state, the strategy in play, and the master switch — everything that answers
-  // "is the bot trading, and on what". Two facts are on show and they are NOT the same one: the
-  // chip says whether a process is honouring the claim, the switch says whether trading is armed.
-  // A switch that is ON with no loop running is the state that reads as a lie otherwise.
-  function renderStatus() {
-    const loop = state.loop || {};
-    const chip = $("lg-state");
-    // Same four states the dashboard's Trading panel shows, from the same endpoint — a quiet
-    // market and a dead loop look identical otherwise.
-    const labels = {
-      running: ["running", "good"],
-      overdue: ["OVERDUE — nothing is honouring the claim", "bad"],
-      stopped: ["stopped", "muted"],
-      never: ["never ran", "muted"],
-    };
-    const [text, cls] = labels[loop.state] || labels.never;
-    chip.textContent = text;
-    chip.className = `chip ${cls}`;
-    // The strategy, the account this page is scoped to, and how long ago it last ticked. The age
-    // comes from the strategy-wide heartbeat, so it is attributed when that tick belonged to the
-    // OTHER account: an age that silently refers to a paper tick would read as this account's
-    // activity. Same rule as the gates below it.
-    const age = shortAge(loop.last_tick_age_seconds);
-    $("lg-strategy").textContent = `${loop.strategy || "?"} · ${inPlayEnv() || "?"} · `
-      + (loop.last_tick && !mine(loop.last_tick)
-        ? `last tick ${age}, for the ${String(loop.last_tick.env).toLowerCase()} account`
-        : `last tick ${age}`);
-    renderSwitch(state.trading);
-    renderLoopWarning(state.loop || {}, state.trading);
+  /* The loop's own state: the countdown in the Loop panel below, and the page's title. The chip and
+   * the master switch that used to be rendered here are gone — the switch is the Trading box in the
+   * Account card, the same box the dashboard shows, and "is a process running" is what the
+   * countdown says a few lines further down. */
+  function renderLoopState() {
     renderNextTick();
-    document.title = `TRAIDER — log · ${loop.strategy || ""}`.trim();
+    document.title = `TRAIDER — log · ${(state.loop || {}).strategy || ""}`.trim();
   }
 
-  /* Armed with nothing running it is the state this page must not dress up: the switch says
-   * "Turn trading off", which reads as "the bot is trading", and the chip beside it says
-   * "stopped". Naming the log file is the difference between a dead end and a next step —
-   * arming starts the loop, so why it is not up is written there. */
-  function renderLoopWarning(loop, payload) {
-    const warning = $("lg-loop-warning");
-    if (!warning) return;
-    const armed = !!((payload || {}).trading || {}).on;
-    const dead = loop.state === "stopped" || loop.state === "never";
-    warning.hidden = !(armed && dead);
-    if (!warning.hidden) {
-      warning.innerHTML = "<b>⚠ trading is armed, but no loop is running</b> — nothing will "
-        + "tick. See <code>data/loop.log</code>.";
-    }
-  }
-
-  /* The master switch. Same control, same file and same confirmation as the dashboard's; what
-   * differs is only the dot, which is static here — the blink belongs to the dashboard's two
-   * header pills and the single timer that drives them, and a second timer to keep this one in
-   * step would be motion nobody asked for. The words carry the state either way. */
-  function renderSwitch(payload) {
-    const btn = $("lg-trading-toggle");
-    if (!btn) return;
-    btn.className = "exec-pill exec-toggle"; // constant, like the dashboard's
-    if (!payload) {
-      // Nothing was read, so nothing may be CLAIMED. Repeating the last known label would show
-      // a switch whose position is a guess, and this one starts real trading.
-      btn.textContent = "▶ Turn trading on";
-      btn.title = "The trading state could not be read — reload the page before using the switch";
-      btn.disabled = true;
-      return;
-    }
-    const tr = payload.trading || {};
-    const exec = payload.execution || {};
-    const env = String(exec.env || tr.env || "").toUpperCase();
-    const strategy = payload.strategy || (state.loop && state.loop.strategy) || "this strategy";
-    btn.textContent = `${tr.on ? "⏹ Turn trading off" : "▶ Turn trading on"} `
-      + (tr.on || exec.live ? "🔴" : "🔵");
-    btn.title = tr.on
-      ? `Trading is ON (${env}) for ${strategy} — click to stop`
-      // A target that cannot place an order outranks the credentials: they are not even in play.
-      : !exec.ok
-        ? `Trading cannot start — ${exec.message}`
-        : `Start sending orders for ${strategy} — the ${env} credentials are re-checked first`;
-    btn.disabled = false; // the off switch must always be reachable
-  }
-
-  /* Fold the panel away without folding away the answer: the head keeps the countdown, so
-   * collapsing hides the tables rather than the one number the panel exists for. Not remembered
-   * across loads — no panel in this project is, and a collapse that survives a reload is a page
-   * that opens looking broken. */
-  function toggleLoopPanel(ev) {
+  /* Fold a panel away — the gesture every collapsible card on this page shares.
+   *
+   * The head and its own toggle button both call this, and it stops the click from reaching the
+   * head when the BUTTON made it, so one press is one toggle. Which body folds is found from the
+   * head rather than passed in: a handler holding a map of ids is a list to remember to extend, and
+   * a panel added without an entry would silently fold the wrong one.
+   *
+   * The toggle shows the direction it will go — "+" opens, "−" closes — and its tooltip says the
+   * same. Not remembered across loads: no panel in this project is, and a collapse that survives a
+   * reload is a page that opens looking broken.
+   */
+  function toggleCard(ev) {
     if (ev && ev.stopPropagation) ev.stopPropagation();
-    const body = $("loop-body");
-    const btn = $("toggle-loop");
+    const head = ev && ev.currentTarget && ev.currentTarget.closest
+      ? ev.currentTarget.closest(".card-head")
+      : null;
+    const card = head && head.closest ? head.closest(".card") : null;
+    const body = card ? card.querySelector(".collapse-body") : null;
     if (!body) return;
     body.hidden = !body.hidden;
+    const btn = head.querySelector("button");
+    const named = card.querySelector("h2");
     if (btn) {
       btn.textContent = body.hidden ? "+" : "−";
-      btn.title = body.hidden ? "Expand the loop view" : "Collapse the loop view";
+      btn.title = `${body.hidden ? "Expand" : "Collapse"} `
+        + (named ? named.textContent.trim().toLowerCase() : "this panel");
     }
   }
 
   /* Start or stop trading, then re-read the state that changed: arming spawns the loop
-   * (``src.web.services.loop_control``), so the chip has to be re-read too, not just the
-   * switch. The dialog, the endpoints and the acknowledgement are the dashboard's, because they
-   * are not two decisions. */
+   * (``src.web.services.loop_control``), so the read after it is the new state of both. The box,
+   * the dialog, the endpoints and the acknowledgement are the dashboard's, because they are not
+   * two decisions. */
   async function toggleTrading() {
     if (!state.trading) {
       flashToast("The trading state could not be read — reload the page", "warn");
@@ -501,10 +443,28 @@
     });
     if (!result.wrote) return;
     await loadStatus();
+    // The box that IS the switch is redrawn from what its own click changed, rather than left
+    // saying "off" until the poll comes round.
+    renderBoxes();
     // A started loop holds the lease before it has ticked, and the boundary the countdown needs
     // is written by that first tick — so one more read a moment later is the difference between
     // "starting…" for twenty seconds and a countdown. A single read, not a poll.
     setTimeout(loadStatus, FIRST_TICK_MS);
+  }
+
+  /* Move the orders to the other account — the same write, the same confirmation and the same box
+   * as the dashboard's Mode box (``flipEnv`` is the shared decision; only ``reload`` is this
+   * page's, because the mode scopes EVERY panel here and the box cannot be re-read on its own). */
+  async function flipMode() {
+    const from = inPlayEnv() || "paper";
+    return TraiderSwitch.flipEnv({
+      api,
+      confirmDialog,
+      flashToast,
+      env: from === "live" ? "paper" : "live",
+      from: from,
+      reload: () => loadAll(state.log && state.log.day),
+    });
   }
 
   function renderDays() {
@@ -535,7 +495,7 @@
     // panel filters with — a second source here could only disagree with them.
     $("lg-env").textContent = [inPlayEnv(), positions.instrument].filter(Boolean).join(" · ");
 
-    renderAccounts();
+    renderBoxes();
 
     const verdict = orders.protection;
     const protection = $("lg-protection");
@@ -613,14 +573,6 @@
       ) || empty("no orders are working")));
   }
 
-  /* One number in a box — the same `.bt-stat` the dashboard's trading panel, the backtest KPIs
-   * and the report page use, so the three screens read alike. A number is read by glancing at a
-   * box; a table is read by scanning labels one at a time. */
-  function tile(label, value, cls) {
-    return `<div class="bt-stat"><span class="label">${esc(label)}</span>`
-      + `<span class="value${cls ? ` ${cls}` : ""}">${value}</span></div>`;
-  }
-
   // The account IN PLAY, and only it — the same rule as every other panel on the page, through the
   // same helper. Listing both was a mistake this page paid for: with the switch moved to live and
   // no live credentials behind it, the idle PAPER account's equity and cash were the only numbers
@@ -632,42 +584,57 @@
   // account HOLDS is on the next panel — the part of it that matters, and the part this one never
   // carried. Both accounts are still read from the broker (``/accounts`` returns both) because the
   // dashboard counts positions in both; this page shows one.
-  function renderAccounts() {
+  //
+  // The three TRADING boxes stand above that name line, in a row of their own: they are about the
+  // run rather than about the account's balance, and they are the same three boxes the dashboard's
+  // Trading panel shows — same builders, same hints, same click handlers' shape — because the mode
+  // and the switch are one decision with one wording.
+  function renderBoxes() {
     const payload = state.accounts || { accounts: [] };
+    const trading = state.trading || {};
     const inPlay = inPlayEnv();
     const rows = (payload.accounts || []).filter(mine);
-    setIfChanged($("lg-accounts"), rows.length
-      ? rows.map((row) => {
-        const who = [row.env, row.account].filter(Boolean).join(" ");
-        const name = `<div class="lg-acct in-play">${esc(who || row.env)}`
-          + '<span class="lg-acct-tag">in play</span></div>';
-        if (!row.known) {
-          // Not a footnote, and never a row of dashes: an unreadable account is not a balance of
-          // zero, and it is the reason there are no figures under this name at all. Amber, like
-          // every other "this is what stands in the way" line on the page, and it says where the
-          // fix is.
-          const why = row.reason || "this account could not be read";
-          return name
-            + `<p class="warn">${esc(why)} — add the ${esc(String(row.env).toUpperCase())} key`
-            + " pair in <b>Account Settings</b> on the dashboard and validate it; until then"
-            + " nothing can be traded here.</p>";
-        }
-        const change = Number(row.day_pl);
-        const day = row.day_pl === null || row.day_pl === undefined ? "" : signedMoney(row.day_pl);
-        const pct = percentText(row.day_pl_pct);
-        const cls = change < 0 ? "neg" : (change > 0 ? "pos" : "");
-        const status = [row.status, row.blocked ? "BLOCKED" : ""].filter(Boolean).join(" ");
-        return name + '<div class="lg-metrics">'
-          + tile("Equity", esc(money(row.equity)))
-          + tile("Day", esc([day, pct === "—" ? "" : `(${pct})`].filter(Boolean).join(" ")), cls)
-          + tile("Cash", esc(money(row.cash)))
-          + tile("Buying power", esc(money(row.buying_power)))
-          + tile("Status", esc(status), row.blocked ? "neg" : "")
-          + "</div>";
-      }).join("")
-      : empty(payload.ok === false
-        ? `the accounts could not be read (${payload.message || "no reason given"})`
-        : `no figures were returned for the ${inPlay || "active"} account`));
+
+    const tradingRow = '<div class="lg-metrics">'
+      // Locked while trading is ON, exactly as on the dashboard: the server refuses the write, and
+      // a strategy running on one account must not be pointed at the other in flight.
+      + TraiderSwitch.envTile(inPlay, !!trading.locked, "flipMode()")
+      + TraiderSwitch.tradeTile(state.trading, "toggleTrading()")
+      + TraiderSwitch.openTile(trading, inPlay)
+      + "</div>";
+
+    const figures = rows.map((row) => {
+      const who = [row.env, row.account].filter(Boolean).join(" ");
+      const name = `<div class="lg-acct in-play">${esc(who || row.env)}`
+        + '<span class="lg-acct-tag">in play</span></div>';
+      if (!row.known) {
+        // Not a footnote, and never a row of dashes: an unreadable account is not a balance of
+        // zero, and it is the reason there are no figures under this name at all. Amber, like
+        // every other "this is what stands in the way" line on the page, and it says where the
+        // fix is.
+        const why = row.reason || "this account could not be read";
+        return name
+          + `<p class="warn">${esc(why)} — add the ${esc(String(row.env).toUpperCase())} key`
+          + " pair in <b>Account Settings</b> on the dashboard and validate it; until then"
+          + " nothing can be traded here.</p>";
+      }
+      const change = Number(row.day_pl);
+      const day = row.day_pl === null || row.day_pl === undefined ? "" : signedMoney(row.day_pl);
+      const pct = percentText(row.day_pl_pct);
+      const cls = change < 0 ? "neg" : (change > 0 ? "pos" : "");
+      const status = [row.status, row.blocked ? "BLOCKED" : ""].filter(Boolean).join(" ");
+      return name + '<div class="lg-metrics">'
+        + TraiderSwitch.tile("Equity", esc(money(row.equity)))
+        + TraiderSwitch.tile("Day", esc([day, pct === "—" ? "" : `(${pct})`].filter(Boolean).join(" ")), cls)
+        + TraiderSwitch.tile("Cash", esc(money(row.cash)))
+        + TraiderSwitch.tile("Buying power", esc(money(row.buying_power)))
+        + TraiderSwitch.tile("Status", esc(status), row.blocked ? "neg" : "")
+        + "</div>";
+    }).join("");
+
+    setIfChanged($("lg-accounts"), tradingRow + (figures || empty(payload.ok === false
+      ? `the accounts could not be read (${payload.message || "no reason given"})`
+      : `no figures were returned for the ${inPlay || "active"} account`)));
   }
 
   function renderTicks() {
@@ -764,9 +731,9 @@
     schedulePoll();
   }
 
-  /* Both halves of the status block, in one read: the loop's claim and the switch that arms it.
-   * Kept apart from ``loadAll`` so the switch can re-read exactly what its own click changed
-   * without re-reading the day's tables as well. */
+  /* Both halves of what the page says about the RUN, in one read: the loop's claim and the switch
+   * that arms it. Kept apart from ``loadAll`` so a click on the switch can re-read exactly what it
+   * changed without re-reading the day's tables as well. */
   async function loadStatus() {
     try {
       state.loop = await api("/api/v1/loop");
@@ -781,7 +748,7 @@
       // the switch says so itself rather than claiming trading is off.
       state.trading = null;
     }
-    renderStatus();
+    renderLoopState();
   }
 
   async function loadAll(day) {
@@ -812,9 +779,11 @@
 
   window.loadLog = loadLog;
   window.loadAll = loadAll;
-  // The switch's own button is in the markup, so its handler has to be reachable from there.
+  // The Mode and Trading boxes are built by the shared module and handled here, so both handlers
+  // have to be reachable from the markup it renders.
   window.toggleTrading = toggleTrading;
-  window.toggleLoopPanel = toggleLoopPanel;
+  window.flipMode = flipMode;
+  window.toggleCard = toggleCard;
   // The ↻ button means "re-read what I am looking at". Going through ``loadAll()`` with no
   // day would fall back to the server's newest, so a click from a past day would silently
   // jump the page forward — the one thing a refresh must not do.

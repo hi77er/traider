@@ -30,7 +30,7 @@ LOG_JS = STATIC / "log.js"
 SWITCH_JS = STATIC / "trading_switch.js"
 
 START_MARKER = "async function toggleTrading() {"
-END_MARKER = "\nfunction switchTip("
+END_MARKER = "\nfunction renderTradingPanel("
 
 pytestmark = pytest.mark.skipif(
     shutil.which("node") is None, reason="node is required to exercise the master switch"
@@ -220,9 +220,11 @@ process.stdout.write(JSON.stringify(codes));
 
 @pytest.fixture(scope="module")
 def tooltips(tmp_path_factory) -> dict:
-    src = APP_JS.read_text(encoding="utf-8")
+    # ``switchTip`` is the SHARED module's now: the log page's box carries the same hint, so the
+    # wording lives with the switch rather than with one of the two pages that show it.
+    src = SWITCH_JS.read_text(encoding="utf-8")
     start = src.index("function switchTip(")
-    block = src[start:src.index("\nfunction renderTradingPanel(", start)]
+    block = src[start:src.index("\nasync function flipEnv(", start)]
     script = tmp_path_factory.mktemp("tooltip") / "tooltip.js"
     script.write_text(block + TOOLTIP_HARNESS, encoding="utf-8")
     proc = subprocess.run(
@@ -281,12 +283,15 @@ def extract_log_toggle() -> str:
 # the PAGE's half — that it hands its own plumbing to the shared decision, and re-reads the state
 # the click changed. The module itself is exercised for real in the fixture above.
 LOG_HARNESS = r"""
-const log = { calls: [], status: 0, toasts: [], wrote: true };
+const log = { calls: [], status: 0, toasts: [], wrote: true, boxes: 0 };
 
 function flashToast(text, kind) { log.toasts.push({ text: text, kind: kind }); }
 function api() {}
 function confirmDialog() {}
 function loadStatus() { log.status += 1; return Promise.resolve(); }
+// The box that IS the switch is redrawn from what the click changed, rather than left saying
+// "off" until the next poll.
+function renderBoxes() { log.boxes += 1; }
 
 // After a write the page reads the status once more a few seconds later, to pick up the boundary
 // the first tick commits to. Captured, not fired: this harness is about what the CLICK does.
@@ -315,18 +320,20 @@ const state = { trading: null };
   state.trading = { trading: { on: false, env: "paper" }, execution: { env: "paper", live: false } };
   log.wrote = true;
   await toggleTrading();
-  out.clicked = { calls: log.calls, status: log.status };
+  out.clicked = { calls: log.calls, status: log.status, boxes: log.boxes };
 
   // 2. Declining the dialog writes nothing, so there is nothing to re-read.
-  log.calls = []; log.status = 0; log.wrote = false;
+  log.calls = []; log.status = 0; log.boxes = 0; log.wrote = false;
   await toggleTrading();
-  out.declined = { calls: log.calls.length, status: log.status };
+  out.declined = { calls: log.calls.length, status: log.status, boxes: log.boxes };
 
   // 3. Nothing was read at all: the switch must not be used on a guess.
-  log.calls = []; log.status = 0; log.toasts = []; log.wrote = true;
+  log.calls = []; log.status = 0; log.boxes = 0; log.toasts = []; log.wrote = true;
   state.trading = null;
   await toggleTrading();
-  out.unreadable = { calls: log.calls.length, status: log.status, toasts: log.toasts };
+  out.unreadable = {
+    calls: log.calls.length, status: log.status, boxes: log.boxes, toasts: log.toasts,
+  };
 
   process.stdout.write(JSON.stringify(out));
 })();
@@ -362,9 +369,12 @@ def test_the_log_page_hands_its_own_plumbing_to_the_shared_switch(log_toggle):
 
 
 def test_the_log_page_re_reads_the_status_the_click_changed(log_toggle):
-    """Arming starts the loop, so the chip has to be re-read as well as the switch."""
+    """Arming starts the loop, so the state is read back after the click — and the box that IS the
+    switch is redrawn from it, rather than going on saying "off" until the poll comes round."""
     assert log_toggle["clicked"]["status"] == 1
+    assert log_toggle["clicked"]["boxes"] == 1
     assert log_toggle["declined"]["status"] == 0, "nothing was written, so nothing changed"
+    assert log_toggle["declined"]["boxes"] == 0
 
 
 def test_a_state_that_could_not_be_read_cannot_be_switched(log_toggle):

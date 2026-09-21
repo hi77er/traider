@@ -283,7 +283,9 @@ def test_the_trading_panel_does_not_repeat_the_strategy_or_the_switch():
     assert 'fromSwitch = loop.last_tick ? loop.last_tick.stage === "switch"' in state
     assert 'loop.last_reason && !fromSwitch' in state
     assert "trading is OFF" not in panel and "trading is ON" not in panel
-    assert 'liveTile("Trading"' in APP_JS, "the box is what says it"
+    assert 'TraiderSwitch.tradeTile(state.tradingPayload, "toggleTrading()")' in APP_JS, (
+        "the box is what says it — built by the shared module, so the log page's reads the same"
+    )
 
 
 def test_every_id_in_the_page_appears_once():

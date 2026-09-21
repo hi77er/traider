@@ -183,7 +183,8 @@ def test_the_page_is_served_with_its_own_placeholders(api_settings):
 
     assert response.status_code == 200
     html = response.text
-    for element in ("lg-state", "lg-days", "lg-positions", "lg-ticks", "lg-orders", "lg-trades"):
+    for element in ("lg-accounts", "lg-refresh", "lg-days", "lg-positions", "lg-ticks",
+                    "lg-orders", "lg-trades"):
         assert f'id="{element}"' in html, element
     assert "/static/log.js" in html
 
@@ -269,6 +270,17 @@ const state = {
 };
 ["lg-ticks", "lg-day", "lg-orders", "lg-trades", "lg-accounts", "lg-env", "lg-protection",
  "lg-positions", "lg-working"].forEach(make);
+
+// The three trading boxes are the shared module's. What this harness is about is the SCOPING of
+// every panel, so they are stubbed to something identifiable here — their own contents are
+// exercised in `test_live_refresh` and in the shared module's tests.
+const TraiderSwitch = {
+  tile: (label, value) => `<div class="bt-stat">${label} ${value}</div>`,
+  envTile: (env) => `<div class="bt-stat">Mode ${env}</div>`,
+  tradeTile: (payload) => `<div class="bt-stat">Trading ${payload ? "read" : "—"}</div>`,
+  openTile: () => '<div class="bt-stat">Open ?</div>',
+  flipEnv: () => Promise.resolve(false),
+};
 
 // One day's records: both accounts' rows in the same files, exactly as the loop writes them.
 const tick = (env, at, reason) => ({
@@ -407,15 +419,24 @@ def test_the_way_back_sits_at_the_top_of_the_day_menu(api_settings):
 
 def test_the_account_card_carries_the_switch_and_not_what_is_held(api_settings):
     """Two questions, two panels: what the account IS — what it is worth, and whether the bot is
-    trading it — and what it HOLDS. The switch is part of the first, because "which account" and
-    "is it on" are one question; the holdings are not, because equity and a position are different
-    reads of the broker and one of them is empty most of the time."""
+    trading it — and what it HOLDS. The mode and the switch are part of the first, because "which
+    account" and "is it on" are one question; the holdings are not, because equity and a position
+    are different reads of the broker and one of them is empty most of the time.
+
+    The three trading boxes are the dashboard's three, from the shared module: the mode, the switch
+    and what is open. The separate "Trading status" block that used to hold a chip, a switch button
+    and a warning under all of that is gone — it was the same three answers in a second style.
+    """
     html = client.get("/log").text
 
+    card = html.index("<h2>Account</h2>")
     accounts = html.index('id="lg-accounts"')
     loop = html.index("The Loop")
-    for control in ("lg-state", "lg-strategy", "lg-trading-toggle", "lg-refresh", "lg-loop-warning"):
-        assert accounts < html.index(f'id="{control}"') < loop, control
+    assert card < html.index('id="lg-refresh"') < accounts < loop, (
+        "the reload is in this card's own head, above the boxes it re-reads"
+    )
+    for gone in ("lg-state", "lg-strategy", "lg-loop-warning", "lg-trading-toggle"):
+        assert f'id="{gone}"' not in html, f"{gone} went with the Trading status block"
 
 
 def test_positions_and_working_orders_have_their_own_panel_under_the_loop(api_settings):
@@ -430,14 +451,45 @@ def test_positions_and_working_orders_have_their_own_panel_under_the_loop(api_se
     assert html.index('id="lg-positions"') < html.index('id="lg-working"') < records
 
 
-def test_the_log_page_runs_the_shared_switch_not_a_copy(api_settings):
-    """One confirmation for both pages: this one loads the dashboard's switch, and before its
-    own script, which is what uses it."""
+def test_every_panel_below_the_account_folds_on_the_same_gesture(api_settings):
+    """Four panels, one mechanism, as asked for: the loop showed the pattern first and the three
+    tables under it were given the same head rather than a second convention.
+
+    What folds is the BODY: the head stays, which is what keeps a panel's title — and the loop's
+    countdown — on screen while its tables are away. The button is the whole of the keyboard
+    story, so each head has exactly one.
+    """
     html = client.get("/log").text
 
-    assert 'id="lg-trading-toggle"' in html
-    assert "onclick=\"toggleTrading()\"" in html
+    for body in ("loop-body", "positions-body", "orders-body", "trades-body"):
+        assert f'class="collapse-body" id="{body}"' in html, body
+    # The three tables are inside their own bodies, not floating under the head's.
+    card = html[html.index("Positions and working orders") :]
+    card = card[: card.index("Orders the bot submitted")]
+    for element in ("lg-protection", "lg-positions", "lg-working"):
+        assert f'id="{element}"' in card, element
+    # And the panels that fold are exactly the ones with a body: an unfoldable card with a head
+    # that looks like the others is a click that does nothing.
+    assert html.count('class="card collapsible"') == html.count('class="collapse-body"')
+    assert html.count('onclick="toggleCard(event)"') == 2 * html.count('class="card collapsible"'), (
+        "the head and its button both fold it"
+    )
+
+
+def test_the_log_page_runs_the_shared_switch_and_the_shared_boxes(api_settings):
+    """One confirmation for both pages, and one set of boxes: this page loads the dashboard's
+    shared module before its own script, which is what uses it."""
+    html = client.get("/log").text
+
+    assert "onclick=\"toggleTrading()\"" not in html, (
+        "the switch button is gone: the box is built by the module, and its handler comes with it"
+    )
     assert html.index("/static/trading_switch.js") < html.index("/static/log.js")
+    # The page's own handlers, reachable from the markup the module renders.
+    js = LOG_JS.read_text(encoding="utf-8")
+    assert "window.toggleTrading = toggleTrading;" in js
+    assert "window.flipMode = flipMode;" in js
+    assert 'TraiderSwitch.tradeTile(state.trading, "toggleTrading()")' in js
     # ...and a dialog to ask with, since the switch refuses to start without one.
     for element in ("lg-confirm-backdrop", "lg-confirm-ok", "lg-confirm-cancel", "toast"):
         assert f'id="{element}"' in html, element

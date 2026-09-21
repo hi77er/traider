@@ -452,6 +452,28 @@ def test_payload_includes_strategy_config_schema(tmp_path):
     assert not [k for k in keys if k.startswith("MODEL_")], sorted(keys)
 
 
+def test_empty_risk_settings_ship_the_words_for_what_empty_does(tmp_path):
+    """``empty_means``: the short form of the rule above, for the boxes under the signals.
+
+    The hint is a sentence and a box has room for four words, so the API — which owns the schema —
+    ships the phrase rather than leaving the dashboard to invent one. The field's own text is the
+    source: "no stop" is this file saying what a blank STOP_LOSS_PERCENT means, beside the code
+    that reads it.
+    """
+    st = _settings(tmp_path)
+    groups = rules_service.payload(st)["risk_groups"]
+    fields = {f["key"]: f for f in groups[0]["fields"]}
+    for key in ("MAX_EXPOSURE_PERCENT", "RISK_LIMIT_PERCENT", "STOP_LOSS_PERCENT",
+                "TAKE_PROFIT_PERCENT", "MAX_LOSS_PERCENT", "MAX_CONSECUTIVE_LOSSES"):
+        phrase = fields[key].get("empty_means")
+        assert phrase, f"{key} should say what empty means"
+        assert len(phrase) <= 24, f"{phrase!r} is a sentence, and a box has room for a phrase"
+    # A required setting is not offered a phrase: it is never empty, so "what empty means" would
+    # be an answer to a question nobody can ask.
+    for key in ("ALLOW_SHORT", "POSITION_SIZING_MODE"):
+        assert "empty_means" not in fields[key], key
+
+
 def test_create_strategy_prefills_config_with_globals(tmp_path):
     st = _settings(tmp_path)
     rules_service.create_strategy(st, "alpha")

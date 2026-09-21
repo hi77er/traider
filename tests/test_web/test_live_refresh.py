@@ -18,6 +18,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 APP_JS = (ROOT / "src" / "web" / "static" / "app.js").read_text(encoding="utf-8")
 LOG_JS = (ROOT / "src" / "web" / "static" / "log.js").read_text(encoding="utf-8")
+# The box builders, the switch's wording and the mode write are the SHARED module's: both pages show
+# the same three trading boxes, so the assertions about what a box looks like belong there.
+SWITCH_JS = (ROOT / "src" / "web" / "static" / "trading_switch.js").read_text(encoding="utf-8")
 LOG_HTML = (ROOT / "src" / "web" / "templates" / "log.html").read_text(encoding="utf-8")
 
 
@@ -276,8 +279,9 @@ def test_the_switch_panel_reports_faults_only_for_the_account_being_traded():
 # ---------------------------------------------------------------------------
 def test_the_metrics_are_the_same_boxes_the_backtest_uses():
     """Asked for as "the same style of information boxes as the backtest panel": the same
-    class, so they cannot drift into a second look."""
-    body = _function(APP_JS, "liveTile")
+    class, so they cannot drift into a second look — and now the same BUILDER as the log page's,
+    which shows the same three trading boxes."""
+    body = _function(SWITCH_JS, "tile")
 
     assert '<div class="bt-stat' in body
     assert 'class="label"' in body and 'class="value' in body
@@ -286,7 +290,7 @@ def test_the_metrics_are_the_same_boxes_the_backtest_uses():
 def test_a_box_can_carry_its_explanation():
     """``data-tip``, not ``title``: the embedded browser in the dashboard does not render a
     native tooltip, which is why the backtest boxes use the CSS one."""
-    body = _function(APP_JS, "liveTile")
+    body = _function(SWITCH_JS, "tile")
 
     assert "data-tip" in body
     assert "title=" not in body
@@ -300,14 +304,14 @@ def test_the_mode_and_the_switch_are_boxes_that_flash_when_they_are_the_risky_se
     it is set the safe way (paper, off). Both ends are marked on purpose — an unmarked box beside
     a marked one reads as "unknown" rather than "the safe one".
 
-    The tint goes on the BOX (``liveTile``'s fifth argument) rather than on the number inside it,
+    The tint goes on the BOX (``tile``'s fifth argument) rather than on the number inside it,
     because these two are states and every other tile in the grid is a measurement.
     """
-    body = _function(APP_JS, "renderLiveDetail")
+    mode = _function(SWITCH_JS, "envTile")
+    trade = _function(SWITCH_JS, "tradeTile")
 
-    assert 'liveTile("Mode"' in body and 'liveTile("Trading"' in body
-    assert 'mode === "live" ? "flash-red" : (mode === "paper" ? "tint-blue" : "")' in body
-    assert 'tradingState ? (armed ? "flash-red" : "tint-blue") : ""' in body
+    assert 'live ? "flash-red" : (env === "paper" ? "tint-blue" : "")' in mode
+    assert 'tr ? (armed ? "flash-red" : "tint-blue") : ""' in trade
 
     css = (ROOT / "src" / "web" / "static" / "style.css").read_text(encoding="utf-8")
     assert ".bt-stat.tint-blue" in css
@@ -338,22 +342,26 @@ def test_the_two_state_boxes_are_buttons_on_the_header_s_own_handlers():
     """Asked for: the Mode and Trading boxes act as buttons, with the same handlers and behaviour
     as the controls in the top nav.
 
-    Each calls what the header's own control for that state calls — the master switch's
+    Each calls what the header's own control for that state called — the master switch's
     ``toggleTrading()``, and the mode's single write path — so there is no second implementation of
     either decision, and no second confirmation standing between a click and real money. A real
     ``<button>`` rather than a div with a handler, because the keyboard has to reach it; the
     measurement boxes beside them stay divs, which is what makes "this one is pressable" readable
-    from the shape alone.
+    from the shape alone. Both pages place the same two boxes, with their own handler names.
     """
-    body = _function(APP_JS, "liveTile")
+    body = _function(SWITCH_JS, "tile")
 
     assert '<button type="button" class="bt-stat' in body, "a button, not a div with a click"
     assert 'onclick="' in body
     assert '<div class="bt-stat' in body, "and the plain boxes are still plain"
 
     detail = _function(APP_JS, "renderLiveDetail")
-    assert '"toggleTrading()"' in detail, "the Trading box is the master switch"
-    assert '"onModeBoxClick()"' in detail, "the Mode box is the header's mode control"
+    assert 'TraiderSwitch.envTile(mode, locked, "onModeBoxClick()")' in detail
+    assert 'TraiderSwitch.tradeTile(state.tradingPayload, "toggleTrading()")' in detail
+
+    boxes = _function(LOG_JS, "renderBoxes")
+    assert 'TraiderSwitch.envTile(inPlay, !!trading.locked, "flipMode()")' in boxes
+    assert 'TraiderSwitch.tradeTile(state.trading, "toggleTrading()")' in boxes
 
     css = (ROOT / "src" / "web" / "static" / "style.css").read_text(encoding="utf-8")
     assert "button.bt-stat {" in css, (
@@ -369,29 +377,35 @@ def test_the_mode_cannot_be_switched_while_trading_is_on():
     this app. So the Mode box goes down with every other locked control, and its hint says why
     instead of inviting a click that would be refused.
     """
-    body = _function(APP_JS, "renderLiveDetail")
+    body = _function(SWITCH_JS, "envTile")
 
-    assert "const locked = !!state.tradingLocked;" in body
-    assert '"onModeBoxClick()", locked' in body, "the box is handed the lock"
+    assert "locked" in body, "the box is handed the lock"
     assert "trading is ON — turn it off to switch accounts" in body, "and says why"
 
-    tile = _function(APP_JS, "liveTile")
-    assert "locked" in tile and '? " disabled"' in tile, "a locked box renders disabled"
+    tile = _function(SWITCH_JS, "tile")
+    assert "disabled" in tile and '? " disabled"' in tile, "a locked box renders disabled"
 
     css = (ROOT / "src" / "web" / "static" / "style.css").read_text(encoding="utf-8")
     assert "button.bt-stat:disabled," in css and "cursor: not-allowed" in css
+
+    # Both pages hand it the lock they have: the dashboard's configuration lock, and the log page's
+    # copy of the same field.
+    assert 'TraiderSwitch.envTile(mode, locked, ' in _function(APP_JS, "renderLiveDetail")
+    assert '"flipMode()"' in _function(LOG_JS, "renderBoxes")
 
 
 def test_the_switch_itself_is_never_locked():
     """The one control that has to survive every lock: turning trading OFF.
 
     A disabled switch would leave the bot running with no way to stop it from the page — and it is
-    the lock's own precondition, since the server unlocks when the switch goes off.
+    the lock's own precondition, since the server unlocks when the switch goes off. The box is
+    disabled for one reason only, on both pages: nothing was READ, and a switch must not be used on
+    a guess.
     """
-    body = _function(APP_JS, "renderLiveDetail")
+    body = _function(SWITCH_JS, "tradeTile")
 
-    trading_tile = body[body.index('liveTile("Trading"'):body.index('liveTile("Open"')]
-    assert "locked" not in trading_tile, "the switch is never handed the lock"
+    assert "locked" not in body, "the switch's box is never handed the configuration lock"
+    assert "click, !payload" in body, "only an unread state disables it"
 
 
 def test_the_state_boxes_carry_the_same_two_dots():
@@ -405,10 +419,8 @@ def test_the_state_boxes_carry_the_same_two_dots():
     the header's own: both ends are marked (an unmarked box beside a marked one reads as "unknown"
     rather than "fine"), and with motion reduced the red dot keeps its colour and stops moving.
     """
-    body = _function(APP_JS, "renderLiveDetail")
-
-    assert 'stateDot(mode === "live")' in body
-    assert "stateDot(armed)" in body
+    assert 'dot(live)' in _function(SWITCH_JS, "envTile")
+    assert "dot(armed)" in _function(SWITCH_JS, "tradeTile")
 
     css = (ROOT / "src" / "web" / "static" / "style.css").read_text(encoding="utf-8")
     assert ".bt-stat .dot.calm" in css and ".bt-stat .dot.alert" in css
@@ -418,18 +430,19 @@ def test_the_state_boxes_carry_the_same_two_dots():
 
 
 def test_the_open_count_moved_from_the_header_into_the_panel():
-    """Asked for: an Open box with the count of open positions, in the Trading panel.
+    """Asked for: an Open box with the count of open positions — and then on the log page too.
 
     It is the header's "0 open" pill, moved: the count of the account being traded, with the tip
     still naming what the OTHER account holds — a position there is real whatever mode this run is
     in, and it is what refuses an arming. An account that could not be READ is not a count of zero,
     so that box shows "?" where the pill said "unreadable".
     """
-    body = _function(APP_JS, "openTile")
+    body = _function(SWITCH_JS, "openTile")
 
     assert "known === false" in body and "unknown_count" in body
     assert '"?"' in body, "an unreadable account is not a zero"
-    assert 'liveTile("Open"' in _function(APP_JS, "renderLiveDetail"), "the box is in the grid"
+    assert "TraiderSwitch.openTile(" in _function(APP_JS, "renderLiveDetail"), "in the panel's grid"
+    assert "TraiderSwitch.openTile(" in _function(LOG_JS, "renderBoxes"), "and the log page's"
 
     html = (ROOT / "src" / "web" / "templates" / "index.html").read_text(encoding="utf-8")
     assert 'id="open-count"' not in html, "and the header's copy is gone"
@@ -478,12 +491,12 @@ def test_the_log_page_accounts_are_boxes_like_every_other_screen():
     The grid rule comes with it: the shared one is scoped to ``#bt-metrics``, so a grid under any
     other id stacks its boxes in one column unless the page declares its own. The report page hit
     exactly that, and this test is the one that would catch the log page repeating it."""
-    body = _function(LOG_JS, "renderAccounts")
+    body = _function(LOG_JS, "renderBoxes")
     assert "tile(" in body and "lg-metrics" in body
     assert 'class="lg-acct' in body, "each row of boxes has to say which account it is"
     assert "lg-acct-tag" in body, "and whether it is the one in play"
 
-    tile = _function(LOG_JS, "tile")
+    tile = _function(SWITCH_JS, "tile")
     assert "bt-stat" in tile, "the same box the dashboard and the report page use"
 
     css = (ROOT / "src" / "web" / "static" / "style.css").read_text(encoding="utf-8")
@@ -505,7 +518,7 @@ def test_the_log_page_shows_only_the_account_being_traded():
     what an account HOLDS stays on the next panel — the part of the idle account an operator
     actually needs, and it is what refuses an arming on top of it.
     """
-    body = _function(LOG_JS, "renderAccounts")
+    body = _function(LOG_JS, "renderBoxes")
 
     assert "inPlayEnv()" in body, "the account in play, from the page's one helper"
     assert ".filter(mine)" in body, "and the rows are filtered to it"
@@ -532,32 +545,27 @@ def test_every_panel_on_the_log_page_is_scoped_to_the_account_in_play():
     """
     expected = {
         # panel -> the element it fills, and what scoping it there looks like
-        "renderAccounts": ("lg-accounts", "mine"),
+        "renderBoxes": ("lg-accounts", "mine"),
         "renderAccount": ("lg-positions", "mine"),
         "renderTicks": ("lg-ticks", "mine"),
         "renderOrders": ("lg-orders", "mine"),
         "renderTrades": ("lg-trades", "mine"),
         "renderGates": ("lg-gates", "mine"),
-        "renderStatus": ("lg-strategy", "mine"),
     }
     for name, (host, needle) in expected.items():
         body = _function(LOG_JS, name)
         assert host in body, f"{name} must be the panel that fills #{host}"
         assert needle in body, f"{name} must scope to the account in play"
 
-    # The two status surfaces read the STRATEGY-WIDE heartbeat (one ``latest.json`` per strategy,
-    # whatever account the tick ran for), so they are where another account's data is most likely
-    # to leak in — and it is exactly what the gates panel did, drawing a paper tick's pipeline
-    # under a ``live`` heading. Both must recognise the tick as not this account's.
+    # The gates are the surface that reads the STRATEGY-WIDE heartbeat (one ``latest.json`` per
+    # strategy, whatever account the tick ran for), so it is where another account's data is most
+    # likely to leak in — and it is exactly what that panel did, drawing a paper tick's pipeline
+    # under a ``live`` heading.
     gates = _function(LOG_JS, "renderGates")
     assert "if (!mine(tick))" in gates, "a tick from the other account's gates are not drawn"
     assert "nothing has ticked for the ${inPlayEnv()} account yet" in gates, (
         "and the panel says why it is empty rather than leaving it looking broken"
     )
-
-    status = _function(LOG_JS, "renderStatus")
-    assert "mine(loop.last_tick)" in status, "the age is attributed when the tick is not this one's"
-    assert "for the ${String(loop.last_tick.env).toLowerCase()} account" in status
 
 
 def test_an_unreadable_account_in_play_is_a_warning_not_a_footnote():
@@ -567,7 +575,7 @@ def test_an_unreadable_account_in_play_is_a_warning_not_a_footnote():
 
     This is the state the paper -> live switch produced with no live keys configured.
     """
-    body = _function(LOG_JS, "renderAccounts")
+    body = _function(LOG_JS, "renderBoxes")
 
     assert 'class="warn"' in body, "the traded account's failure is a warning"
     assert "empty(why)" not in body, "not a muted line, and not for some other account"
@@ -580,7 +588,7 @@ def test_an_unreadable_account_in_play_is_a_warning_not_a_footnote():
 def test_the_day_percentage_is_not_divided_by_a_hundred_twice():
     """``day_pl_pct`` arrives as a percentage, while the page's ``percent()`` helper multiplies
     a FRACTION by a hundred — using that helper here would report a 1% day as 100%."""
-    body = _function(LOG_JS, "renderAccounts")
+    body = _function(LOG_JS, "renderBoxes")
 
     assert "percentText(" in body
     assert "percent(" not in body.replace("percentText(", ""), \
@@ -662,18 +670,25 @@ def test_a_written_switch_takes_the_full_read_at_once():
 
     Only the mode box comes from the switch's own read; the account figures come from the broker
     half of the live poll, on a minute cadence. So the write re-reads the switch, re-reads the
-    broker, and only then restarts the cadence — in that order, because the mode has to be the
-    new one before the figures for it are asked for. ONE write path, and one caller: the Mode box
-    is the only control that changes the mode.
+    broker, and only then restarts the cadence — in that order, because the mode has to be the new
+    one before the figures for it are asked for. The write itself is the shared module's, which
+    calls the reload its caller handed it; this is the dashboard's.
     """
-    body = _function(APP_JS, "writeExecutionEnv")
+    shared = _function(SWITCH_JS, "flipEnv")
+    assert "if (deps.reload) await deps.reload();" in shared, (
+        "the shared write re-reads WHATEVER the page says it re-reads, and only on a real change"
+    )
+
+    body = _function(APP_JS, "onModeBoxClick")
 
     assert "await loadTrading();" in body
     assert "await refreshLiveNow();" in body
     assert body.index("await loadTrading();") < body.index("await refreshLiveNow();"), \
         "the new mode is written to the page before the account behind it is read"
 
-    assert "writeExecutionEnv(" in _function(APP_JS, "onModeBoxClick"), "the Mode box goes through it"
+    # The log page's own reload is a full re-read: the mode scopes every panel on that page.
+    log = _function(LOG_JS, "flipMode")
+    assert "loadAll(" in log
 
 
 def test_the_panel_does_not_restate_the_strategy_or_the_endpoint():

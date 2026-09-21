@@ -7,12 +7,6 @@
   --accent: #4c8dff;
   --green: #26a69a;
   --red: #ef5350;
-  /* The header controls' ONE palette. Defined here because both the account pill
-     and the master switch use it in every state, and a single source is what keeps
-     them from drifting apart. */
-  --pill-text: #a8b2c6;
-  --pill-border: rgba(138, 147, 166, 0.6);
-  --pill-bg: rgba(138, 147, 166, 0.16);
 }
 
 * { box-sizing: border-box; }
@@ -51,33 +45,12 @@ header h1 { font-size: 20px; margin: 0; }
   color: var(--muted);
 }
 
-/* THE LOG PAGE'S SWITCH, AND NOTHING STYLED PER STATE.
+/* THE HEADER PILL IS GONE, with the last thing that wore it.
 
-   This is the pill the trading log page's master switch wears — the dashboard's copy went with the
-   rest of the header's trading controls, and its mode dropdown and its status dots in the option
-   text with it. The pill keeps its geometry: border, radius, padding, height, font, tint and
-   background, in every state. Nothing here is styled per state, so the state classes in the DOM are
-   hooks, not appearances: a rule that targeted `.exec-pill.live` would break the invariant a test
-   enforces.
-
-   No `display` property on purpose: the UA [hidden] rule must win. */
-.exec-pill {
-  border-radius: 999px;
-  padding: 5px 14px;
-  font: inherit;
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  white-space: nowrap;
-  cursor: pointer;
-  border: 1px solid var(--pill-border);
-  color: var(--pill-text);
-  background-color: var(--pill-bg);
-  text-align: center;
-}
-.exec-pill:focus-visible { outline: 2px solid rgba(76, 141, 255, 0.6); outline-offset: 2px; }
-.exec-pill:hover { border-color: currentColor; }
-.exec-pill:disabled { opacity: 0.55; cursor: not-allowed; }
+   The rounded pill and its three-colour palette dressed the dashboard's mode dropdown and master
+   switch and then the log page's switch button. All three are boxes in the Trading panel and the
+   Account card now, so the class is deleted rather than left as a hook nothing carries: a rule for
+   an element that does not exist is a rule that quietly comes back to life in the wrong place. */
 
 /* The same signal inside a report, next to "What was tested". */
 .rp-exec { font-weight: 600; }
@@ -1123,6 +1096,17 @@ button.primary.small:disabled, button.ghost.small:disabled {
   margin: 8px 0 0;
 }
 
+/* The risk settings as boxes, under the signals they change. A WIDER minimum than the signal
+   counts: these labels are the panel's own field labels ("Max exposure (% of account)"), which
+   wrap to two or three lines in a narrow box. Declared for this id for the same reason every other
+   grid here is — the shared rule is scoped to `#bt-metrics`. */
+.risk-metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 8px;
+  margin: 8px 0 0;
+}
+
 
 
 /* ---------- Backtest panel (below the chart) ---------- */
@@ -1558,10 +1542,9 @@ td.mkt-sym { font-weight: 600; }
 
 /* ---------- Trading panel: what the loop is doing ----------
 
-   The state is carried by WORDS and by the colour of the text beside them, not by restyling the
-   pill: an `.exec-pill.<state>` rule anywhere is what a test forbids, and the log page's switch
-   has to keep looking like the control it is in every state. `.chip.good`/`.chip.bad` are
-   deliberately scoped to chips, and the log page's own status chip is what still wears them. */
+   Warnings are carried by WORDS and by the colour of the text beside them, never by restyling a
+   control: the mode and the switch are BOXES whose state is read in the box (`.bt-stat.tint-blue` /
+   `.flash-red`, and the dot they end in), not a pill that changes appearance. */
 #live-state { line-height: 1.5; }
 #live-state .bad { color: var(--red); font-weight: 600; }
 #live-state .warn { color: #f0b429; }
@@ -1574,9 +1557,9 @@ td.mkt-sym { font-weight: 600; }
    here — the shared rule does not reach these tiles and they would stack in one column. */
 .live-metrics { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 8px; }
 /* (`.live-row` / `.live-key` retired with the rows they styled — the panel's numbers are
-   `.bt-stat` boxes now, and `#live-state .warn` already carries the warning colour.) */
-.chip.good { color: var(--green); border-color: rgba(38, 166, 154, 0.5); }
-.chip.bad { color: var(--red); border-color: rgba(239, 83, 80, 0.55); }
+   `.bt-stat` boxes now, and `#live-state .warn` already carries the warning colour. `.chip.good` /
+   `.chip.bad` went with the two status chips that were their only users: what is left of the chip
+   is the plain one, on the report and market pages.) */
 
 /* ---------- Trading log page ----------
 
@@ -1584,6 +1567,9 @@ td.mkt-sym { font-weight: 600; }
    colours. A return is coloured by its SIGN, and a refusal by being one. */
 .card-head-static { display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px; }
 .card-head-static h2 { margin: 0; }
+/* The card's own action — the log page's reload — in the top-right corner, on the line with the
+   title rather than under the panel it re-reads. */
+.card-head-static > .settings-actions { margin-left: auto; align-self: center; }
 .lg-sub { font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 18px 0 6px; }
 .lg-table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
 .lg-table th {
@@ -1672,11 +1658,7 @@ td.mkt-sym { font-weight: 600; }
   white-space: nowrap;
 }
 #lg-day { text-transform: none; letter-spacing: 0; font-weight: 400; }
-/* The trading status block, at the foot of the Account card: the switch and what the loop is
-   doing, then the detail under it. The pill wraps rather than shrinking — its label is the state
-   and a clipped one is worse than a second line. */
-.lg-status { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
-#lg-strategy { margin: 8px 0 0; }
-#lg-loop-warning { color: #f0b429; line-height: 1.5; margin: 6px 0 0; }
-#lg-loop-warning[hidden] { display: none; }
+/* (`.lg-status` and the `#lg-strategy` / `#lg-loop-warning` lines retired with the "Trading
+   status" block they styled: the switch is a box in the Account card's own grid now, and the
+   loop's state is the countdown in the Loop panel.) */
 .rp-run.active { border-color: var(--accent); color: var(--accent); }

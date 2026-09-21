@@ -647,37 +647,33 @@ def test_the_header_carries_no_trading_controls_at_all():
     assert "📈 TRAIDER<" in html
 
 
-def test_the_pill_is_never_styled_per_state():
-    """NO state gets its own styling: same border, radius, padding, height, font, tint,
-    background and text colour, whatever the state. One rule that restyles a single state is
-    enough to make the pill read as a different kind of control from the buttons around it, which
-    is the thing this guards.
+def test_the_boxes_are_never_styled_per_state():
+    """NO state gets its own styling: same border, radius, padding, font, tint and background,
+    whatever the state. One rule that restyles a single state is enough to make one box read as a
+    different kind of control from the ones beside it, which is the thing this guards.
 
-    The pill's two dashboard tenants — the paper/live dropdown and the master switch beside it —
-    are gone, and the rule outlives them because the stylesheet is shared: the trading log page's
-    own switch is what wears it now."""
+    The pill that used to dress the header's two controls — and then the log page's switch — is
+    gone with the last thing that wore it: the mode and the switch are `.bt-stat` boxes on both
+    pages now, and what varies between their states is two named tints and the dot.
+    """
     css = (ROOT / "src" / "web" / "static" / "style.css").read_text(encoding="utf-8")
-    log = (ROOT / "src" / "web" / "templates" / "log.html").read_text(encoding="utf-8")
+    shared = (ROOT / "src" / "web" / "static" / "trading_switch.js").read_text(encoding="utf-8")
 
-    # It is worn by the log page's switch, and nothing varies with state.
-    assert 'class="exec-pill exec-toggle"' in log
-
-    # No selector may target a state: paper/live/off/on/blocked are hooks, not looks.
-    state_rules = [ln for ln in css.splitlines() if ln.startswith(".exec-pill.")]
-    assert state_rules == [], f"a state is styled separately: {state_rules}"
+    # Nothing is styled per state: the boxes' own tints are the only ones, and they are named.
+    assert ".exec-pill" not in css, "the pill went with the last control that wore it"
+    assert css.count(".bt-stat.flash-red") >= 1 and ".bt-stat.tint-blue" in css
 
     def rule(selector):
         start = css.index(selector + " {")
         return css[start:css.index("}", start) + 1]
 
-    base = rule(".exec-pill")
-    for prop in ("border", "border-radius", "padding", "color", "background-color", "font-size", "font-weight"):
-        assert prop in base, f"the shared pill must define {prop}"
+    base = rule(".bt-stat")
+    for prop in ("border", "border-radius", "padding", "background"):
+        assert prop in base, f"the shared box must define {prop}"
 
-    # One palette, defined once, used by the pill.
-    assert "--pill-text" in css and "--pill-bg" in css and "--pill-border" in css
+    # The tint goes on the BOX, and only these two states have one.
+    assert 'flash-red' in shared and 'tint-blue' in shared
 
     # The mode that cannot trade still says so in words — quoted on the box that reports it, which
     # is where the dropdown's "⚠ no keys" label went.
-    js = (ROOT / "src" / "web" / "static" / "app.js").read_text(encoding="utf-8")
-    assert "Trading cannot start — " in js
+    assert "Trading cannot start — " in shared

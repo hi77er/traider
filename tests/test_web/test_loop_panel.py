@@ -119,10 +119,14 @@ def test_the_panel_sits_under_the_account_and_carries_the_day_inside_it():
     last one. Everything under it is read from the loop's own files, so it is one panel rather
     than three — and it stays directly under the account it is about."""
     html = LOG_HTML.read_text(encoding="utf-8")
-    assert html.index('id="lg-loop-warning"') < html.index("The Loop")
+    assert html.index("Account") < html.index("The Loop")
     assert html.index("The Loop") < html.index("Positions and working orders")
     for element in ("lg-countdown", "lg-next-when", "lg-gates"):
         assert f'id="{element}"' in html, element
+    # The "trading is armed but no loop is running" line that used to sit in the Account card is
+    # gone with the rest of the Trading status block: whether a process is honouring the claim is
+    # what the countdown below says, in the same words, one panel down.
+    assert 'id="lg-loop-warning"' not in html
 
     # The day's ticks are a SECTION of it, under the gates, rather than a card of their own —
     # and the section heading still carries the day being shown.
@@ -144,11 +148,10 @@ def test_the_panel_folds_away_without_folding_away_the_answer():
     html = LOG_HTML.read_text(encoding="utf-8")
 
     assert 'class="card collapsible"' in html
-    assert 'onclick="toggleLoopPanel(event)"' in html
-    assert 'id="toggle-loop"' in html and 'id="loop-body"' in html
+    assert 'onclick="toggleCard(event)"' in html
     assert 'class="collapse-body" id="loop-body"' in html
 
-    head = html.index('id="toggle-loop"')
+    head = html.index('<h2>The Loop</h2>')
     body = html.index('id="loop-body"')
     countdown = html.index('id="lg-countdown"')
     assert head < countdown < body, "the clock is in the HEAD, so it survives the collapse"
@@ -160,23 +163,32 @@ def test_the_panel_folds_away_without_folding_away_the_answer():
 
 
 def test_nothing_else_on_the_page_claims_the_same_toggle():
-    """One panel, one id per element: a second `loop-body` would collapse under the first one's
-    button, and a duplicate id is invisible until it is not."""
+    """One panel, one id per element: a duplicate id is invisible until it is not, and a body with
+    two owners folds under whichever button was pressed first.
+
+    Every collapsible card on the page carries its own head and its own toggle button, and both
+    call the SAME handler — which is why the count below is per panel rather than one: the head
+    covers the whole row, the button is what a keyboard reaches.
+    """
     html = LOG_HTML.read_text(encoding="utf-8")
-    for element in ("toggle-loop", "loop-body"):
+    bodies = ("loop-body", "positions-body", "orders-body", "trades-body")
+    for element in bodies:
         assert html.count(f'id="{element}"') == 1, element
-    assert html.count("toggleLoopPanel(") == 2, "the head and its button both toggle it"
+    assert html.count('class="card collapsible"') == len(bodies), "one per foldable panel"
+    assert html.count('onclick="toggleCard(event)"') == len(bodies) * 2, (
+        "the head and its button both toggle it"
+    )
 
 
 # ---------------------------------------------------------------------------
 # the countdown
 # ---------------------------------------------------------------------------
-# The real block, from the timer's own constants down to the status renderer. It brings the
+# The real block, from the timer's own constants down to the loop-state renderer. It brings the
 # page's own `$`, `esc`, `empty` and `setIfChanged` with it — the point is to exercise those too,
 # so the harness fakes the BROWSER (elements, clock, timers) and nothing else. `state` is declared
 # above the marker in the real file, which is why the harness supplies it.
 START_MARKER = "const COUNTDOWN_MS"
-END_MARKER = "\n  function renderStatus()"
+END_MARKER = "\n  function renderLoopState()"
 
 HARNESS = r"""
 // ---- fakes: the document, the clock, and the timers ------------------------

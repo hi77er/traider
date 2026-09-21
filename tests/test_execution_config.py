@@ -241,13 +241,15 @@ def test_the_dashboard_shows_which_environment_orders_would_use():
     js = (root / "src" / "web" / "static" / "app.js").read_text(encoding="utf-8")
     assert "async function loadTrading()" in js
     assert "/api/v1/trading" in js
-    assert 'liveTile("Mode"' in js, "the mode is a box in the Trading panel"
+    assert 'TraiderSwitch.envTile(mode, locked, "onModeBoxClick()")' in js, (
+        "the mode is a box in the Trading panel, built by the shared module"
+    )
     # Rendered at boot, and re-rendered after the account form is saved (the keys
     # may have just changed, which decides whether trading may start at all).
     assert js.count("loadTrading()") >= 2
     assert js.count("await loadTrading()") >= 1
 
     css = (root / "src" / "web" / "static" / "style.css").read_text(encoding="utf-8")
-    # The pill is the log page's switch now, and still nothing is styled per state.
-    assert ".exec-pill {" in css
-    assert [ln for ln in css.splitlines() if ln.startswith(".exec-pill.")] == []
+    # Nothing is styled per state: the mode and the switch are boxes whose state is read in the
+    # box, and the pill that used to dress them is deleted rather than left as a hook.
+    assert ".exec-pill" not in css

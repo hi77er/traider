@@ -111,5 +111,193 @@ const TraiderSwitch = (function () {
     return { wrote: true, ok: !(r && r.ok === false), payload: r };
   }
 
-  return { flip, waitForLoop };
+/* ---------- the state boxes, shared by both pages ----------
+ *
+ * The dashboard's Trading panel and the trading log's Account card show the SAME boxes — the mode,
+ * the switch, and what is open — so they are built here, once, for the reason the switch itself
+ * lives here: two copies of "which account is this", or of a confirmation standing between a click
+ * and real money, is two chances to get it wrong. Each page places them in its own grid and hands
+ * over the name of its own handler; nothing else about them is per-page.
+ *
+ * `tile` is the box itself — the same `.bt-stat` the backtest KPIs and the report page use. `click`
+ * makes it a real `<button>`, and `disabled` renders it unpressable with no handler left on it, so
+ * a write the server would refuse cannot look or behave like a live one.
+ */
+function tile(label, value, cls, tip, boxCls, click, disabled) {
+  const tipAttr = tip ? ` data-tip="${esc(tip)}"` : "";
+  const inner = `<span class="label">${esc(label)}</span>`
+    + `<span class="value${cls ? ` ${cls}` : ""}">${value}</span>`;
+  return click
+    ? `<button type="button" class="bt-stat${boxCls ? ` ${boxCls}` : ""}"${tipAttr}`
+      + (disabled ? " disabled" : ` onclick="${esc(click)}"`) + `>${inner}</button>`
+    : `<div class="bt-stat${boxCls ? ` ${boxCls}` : ""}"${tipAttr}>${inner}</div>`;
+}
+
+/* The dot that ends the mode and switch boxes: blue is the calm setting, red is the one that
+ * spends money and it BLINKS, and the calm end is marked too — an unmarked box beside a marked one
+ * reads as "unknown" rather than "fine".
+ *
+ * A styled circle rather than an emoji glyph: this is a real element, so the blink is a CSS
+ * animation instead of a per-tick in-place rewrite. That matters twice over here — a rewrite would
+ * re-render the boxes, replacing the two BUTTONS under the cursor every 700ms, which restarts
+ * their pulse and can swallow a click mid-press. */
+function dot(alert) {
+  return `<span class="dot ${alert ? "alert" : "calm"}"></span>`;
+}
+
+/* The box that says which account orders would go to, and is the only way to change it.
+ *
+ * `locked` is the configuration lock (trading ON): the server refuses the write, and a strategy
+ * running on one account must not be pointed at the other in flight — sending LIVE orders against
+ * positions the loop opened on paper is the worst case in this app. The hint says why instead of
+ * inviting a click that would be refused. */
+function envTile(env, locked, click) {
+  const live = env === "live";
+  return tile("Mode",
+    (env ? esc(env) : "—") + (env ? dot(live) : ""),
+    live ? "neg" : "",
+    (live
+      ? "orders go to the LIVE Alpaca account — real money"
+      : (env ? "orders go to the PAPER Alpaca account — no real money"
+              : "the account this run is pointed at has not been read yet"))
+      + (locked
+          ? " · trading is ON — turn it off to switch accounts"
+          : ` · click to switch to the ${live ? "paper" : "live"} account`),
+    // A blue edge for paper, a pulsing red one for live: the two settings are read at a glance, and
+    // the safe one is marked too.
+    live ? "flash-red" : (env === "paper" ? "tint-blue" : ""),
+    click, locked);
+}
+
+/* The box that IS the master switch, so its hint is where the two facts a click depends on are
+ * quoted: a FAILED credential check, and a process running older gate code than the files on disk.
+ * Nothing read yet means nothing may be claimed or toggled either — the box says "—" and is not
+ * pressable, rather than repeating a last-known state this one would act on. */
+function tradeTile(payload, click) {
+  const tr = (payload || {}).trading || null;
+  const armed = !!(tr && tr.on);
+  return tile("Trading",
+    (tr ? (armed ? "on" : "off") : "—") + (tr ? dot(armed) : ""),
+    armed ? "neg" : "",
+    switchTip(payload || {}),
+    tr ? (armed ? "flash-red" : "tint-blue") : "",
+    click, !payload);
+}
+
+/* How much is OPEN. Counted per account from the switch's own payload: what is held in the OTHER
+ * account is real whatever mode this run is in, and it is what refuses an arming, so the tip names
+ * it rather than hiding it. An account that could not be READ is not a count of zero, so the box
+ * says "?" — a number is what this box is for, and a floor must not be printed as one. */
+function openTile(payload, env) {
+  const accounts = (payload && payload.positions) || [];
+  const active = env || ((payload && payload.execution && payload.execution.env) || "paper");
+  const count = (value) => accounts.filter((a) => String(a.env) === value)
+    .reduce((total, a) => total + Number(a.count || 0), 0);
+  const mine = count(active);
+  const others = ["live", "paper"]
+    .filter((value) => value !== active && count(value) > 0)
+    .map((value) => `${count(value)} in ${value}`);
+  const blind = accounts.filter((a) => a.known === false).map((a) => a.env);
+  const unknown = Number((payload && payload.unknown_count) || 0);
+  const unreadable = blind.indexOf(active) > -1;
+
+  let tip;
+  if (unreadable) {
+    tip = `the ${active} account could not be read — what it holds is unknown`;
+  } else {
+    tip = mine
+      ? `${mine} position(s) in the ${active} account` + (others.length ? ` — and ${others.join(", ")}` : "")
+      : "nothing is held in the account being traded";
+    const floors = [];
+    if (blind.length) floors.push(`the ${blind.join(" and ")} account(s) could not be read`);
+    if (unknown) floors.push(`${unknown} could not be attributed to an account`);
+    if (floors.length) tip += ` — ${floors.join(", ")}, so this count is a floor rather than the truth`;
+  }
+  return tile("Open", esc(unreadable ? "?" : String(mine)), "", tip);
+}
+
+/* What the master-switch box will do, or why it cannot — its hover hint, and the same words on both
+ * pages. It is the one place that quotes a FAILED credential check and the freshness warning, and
+ * both of those decide whether arming is possible at all. Returns a plain string, so the wording can
+ * be exercised without a DOM. */
+function switchTip(d) {
+  const exec = d.execution || {};
+  const tr = d.trading || {};
+  const ver = d.verification || {};
+  const fresh = d.freshness || {};
+  const env = String(exec.env || "").toUpperCase();
+  let tip = tr.on
+    ? `Trading is ON (${env}) for ${d.strategy || "this strategy"} — click to stop`
+    : !exec.ok
+      ? `Trading cannot start — ${exec.message}`
+      : ver.verified
+        // Verified is not a promise: the check is repeated on every attempt, so a key revoked an
+        // hour ago cannot be armed from a green light that is stale.
+        ? `Start sending orders for ${d.strategy || "the active strategy"} — the ${env} credentials are re-checked first`
+        : ver.has_verdict && ver.message
+          // A check that FAILED is quoted: there is nothing to press first, so pointing at the
+          // Validate button would send the operator in a circle.
+          ? `Trading cannot start unless the ${env} credentials work — ${ver.message} They are re-checked when you switch it on.`
+          : `Start sending orders for ${d.strategy || "the active strategy"} — the ${env} credentials are checked when you switch it on`;
+  // A process running older gate code than the files on disk will answer the switch with last
+  // week's rules. Nothing on screen would show it, so the tooltip says it.
+  if (fresh.stale && fresh.message) tip += ` ⚠ ${fresh.message}`;
+  return tip;
+}
+
+/* Move the orders to `deps.env`, and answer whether the mode actually changed.
+ *
+ * ONE path, because the confirmation standing between a click and real money must not exist twice:
+ * the dashboard's Mode box and the log page's are two screens onto the same decision. `from` is what
+ * the caller last read — what it puts its own control back to when this answers false — and
+ * `reload` is the caller's own re-read, because the two pages watch different things. */
+async function flipEnv(deps) {
+  const api = deps.api;
+  const confirmDialog = deps.confirmDialog;
+  const flashToast = deps.flashToast;
+  const env = deps.env;
+  const from = deps.from;
+  if (!env || env === from) return false;
+  let r = null;
+  try {
+    if (env === "live") {
+      const ok = await confirmDialog({
+        title: "Route orders to the LIVE account?",
+        messageHtml:
+          "Every order for this strategy will go to your <b>real</b> Alpaca account. " +
+          "Nothing is sent until you turn trading on.",
+        confirmText: "Use the live account",
+      });
+      if (!ok) return false;
+    }
+    r = await api("/api/v1/execution/env", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ env: env }),
+    });
+  } catch (err) {
+    // The write never landed, so neither page may start reporting the new mode.
+    flashToast(`Could not change the environment: ${err.message}`, "warn");
+    return false;
+  }
+  if (r && r.ok === false) {
+    flashToast((r.errors || []).join("; ") || r.message || "Could not change the environment", "warn");
+    return false;
+  }
+  flashToast(r && r.message ? r.message : "Environment updated", "ok");
+  if (deps.reload) await deps.reload();
+  return true;
+}
+
+  return {
+    flip,
+    waitForLoop,
+    tile,
+    dot,
+    envTile,
+    tradeTile,
+    openTile,
+    switchTip,
+    flipEnv,
+  };
 })();

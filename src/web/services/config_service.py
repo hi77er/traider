@@ -177,6 +177,20 @@ _HINTS: Dict[str, str] = {
     "losing trades in a row (e.g. 3). Leave empty to not halt.",
 }
 
+# The same statement as a VALUE, for anywhere the settings are reported outside the panel: a
+# blank field is a decision — "leave this behaviour out" — and a box that printed "—" for five of
+# the eight risk settings would say nothing about what the bot does. Read the hint line for the
+# sentence; this is what fits in a box. Only for fields that CAN be empty.
+_EMPTY_MEANS: Dict[str, str] = {
+    "MAX_EXPOSURE_PERCENT": "the whole account",
+    "RISK_LIMIT_PERCENT": "sized by the cap",
+    "STOP_LOSS_PERCENT": "no stop",
+    "TAKE_PROFIT_PERCENT": "no target",
+    "MAX_LOSS_PERCENT": "no daily halt",
+    "MAX_CONSECUTIVE_LOSSES": "no streak halt",
+}
+
+
 # Both loss limits are measured over ONE EXCHANGE DAY and clear when it turns over — that is
 # what lets a halt lift by itself, since a halted bot takes no trades and a streak only a win
 # could break would never be broken. At a bar size of a day or coarser that changes what they
@@ -489,6 +503,10 @@ def strategy_config_groups(settings: Settings, overrides: Optional[Dict[str, str
                 # pointed at, which is why this is here and not in the curated hints: the
                 # same field means something different at 1h and at 1d.
                 fields[-1]["hints"].append(_DAILY_BAR_NOTES[key])
+            if key in _EMPTY_MEANS:
+                # ...and what leaving it BLANK does, as a value rather than a sentence: the
+                # readers outside this panel report the setting, not the field.
+                fields[-1]["empty_means"] = _EMPTY_MEANS[key]
             if bounds := _field_bounds(info):
                 fields[-1].update(bounds)
             if key == "HISTORICAL_BAR_SIZE":

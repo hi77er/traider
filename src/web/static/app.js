@@ -546,25 +546,63 @@ function renderSignals(d) {
 }
 
 /* The counts as BOXES, the same `.bt-stat` the trading panel, the backtest and the report use:
- * three numbers and a state are read by glancing at boxes, while a sentence has to be read to
- * the end. The grid is declared for this id — the shared rule is scoped to `#bt-metrics` — and
- * with a narrower minimum than the trading panel's, so all four fit the half-width slot.
+ * three numbers are read by glancing at boxes, while a sentence has to be read to the end. The
+ * grid is declared for this id — the shared rule is scoped to `#bt-metrics` — and with a narrower
+ * minimum than the trading panel's, so all three fit the half-width slot.
  *
- * The risk box is a STATE, not a count, and it is the one that changes how the others are read:
- * with the risk layer off, these are the raw strategy's signals rather than the ones this
- * configuration would act on. */
+ * The risk STATE that used to be the fourth box is the Risk section under this one now: a box
+ * saying "on"/"off" reported that the settings exist, and the settings themselves are what decides
+ * whether these signals are the ones the bot would act on. */
 function signalTiles(d) {
   const counts = d.counts || {};
-  const risk = d.risk || {};
-  const applied = risk.applied !== false;
   const tiles = [
     liveTile("Buy", String(counts.BUY ?? 0)),
     liveTile("Sell", String(counts.SELL ?? 0)),
     liveTile("Hold", String(counts.HOLD ?? 0)),
-    liveTile("Risk", applied ? "on" : "off", applied ? "" : "neg",
-      applied ? "the risk settings were applied" : "no risk settings — raw strategy positions"),
   ];
   return `<div class="signal-metrics">${tiles.join("")}</div>`;
+}
+
+/* One risk setting as a box: what it is set to, or — when it is EMPTY — what empty means, in the
+ * schema's own words ("no stop", "the whole account").
+ *
+ * EMPTY MEANS NOT APPLIED is the rule the whole risk layer is built on (``src/strategy/config``):
+ * there is deliberately no master switch, so a blank field is a decision rather than a gap. A box
+ * that showed "—" for five of the eight settings would say nothing about what the bot does with
+ * them, which is the one thing this section is for. */
+function riskValue(field, value) {
+  const text = String(value === null || value === undefined ? "" : value).trim();
+  if (!text) return escapeHtml(field.empty_means || "—");
+  if (field.type === "bool") return text === "True" ? "on" : "off";
+  // A select ships its values as tokens ("fixed_risk"); the words in a box are not worth a second
+  // schema, so the underscores go and nothing else is touched.
+  return escapeHtml(text.replace(/_/g, " "));
+}
+
+function strategyRiskTiles() {
+  const groups = strategyRiskGroups();
+  const rs = activeRuleset();
+  const stored = (rs && rs.config) || {};
+  const tiles = [];
+  for (const group of groups) {
+    for (const f of group.fields || []) {
+      // The same resolution the Risk Management panel makes: the strategy's stored value, or the
+      // current default it would fall back to. One source, so the box and the field cannot
+      // disagree.
+      const value = stored[f.key] != null ? stored[f.key] : f.default_value;
+      tiles.push(liveTile(f.label, riskValue(f, value), "", (f.hints || []).join(" ")));
+    }
+  }
+  return tiles;
+}
+
+function renderStrategyRisk() {
+  const host = $("strategy-risk");
+  if (!host) return;
+  const tiles = strategyRiskTiles();
+  setIfChanged(host, tiles.length
+    ? tiles.join("")
+    : `<p class="muted">No active strategy — create one with “＋ New” in the Strategy bar above.</p>`);
 }
 
 function computeSignalMarkers() {
@@ -1160,55 +1198,26 @@ async function loadTrading() {
 
 /* The one way into the mode: a click on the Mode box. The mode it moves FROM is the one the box
  * is showing, so the box and the account it is about can never disagree about which way "the
- * other one" is. */
+ * other one" is. The write itself is the shared module's, because the log page's box moves the
+ * same mode — one confirmation, one endpoint, one wording. */
 function onModeBoxClick() {
   const from = inPlayEnv() || "paper";
-  return writeExecutionEnv(from === "live" ? "paper" : "live", from);
-}
-
-/* Write the environment the orders go to, and answer whether it actually changed.
- *
- * ONE path, because the confirmation standing between a click and real money must not exist
- * twice. Called from the Mode box, which is the only control that changes the mode: the header's
- * dropdown that used to be the other way in is gone. `from` is what the caller last read, and is
- * what it puts its own control back to when this answers false. */
-async function writeExecutionEnv(env, from) {
-  if (!env || env === from) return false;
-  let r = null;
-  try {
-    if (env === "live") {
-      const ok = await confirmDialog({
-        title: "Route orders to the LIVE account?",
-        messageHtml:
-          "Every order for this strategy will go to your <b>real</b> Alpaca account. " +
-          "Nothing is sent until you turn trading on.",
-        confirmText: "Use the live account",
-      });
-      if (!ok) return false;
-    }
-    r = await api("/api/v1/execution/env", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ env: env }),
-    });
-  } catch (err) {
-    // The write never landed, so the page must not start reporting the new mode.
-    flashToast(`Could not change the environment: ${err.message}`, "warn");
-    return false;
-  }
-  if (r && r.ok === false) {
-    flashToast((r.errors || []).join("; ") || r.message || "Could not change the environment", "warn");
-    return false;
-  }
-  flashToast(r && r.message ? r.message : "Environment updated", "ok");
-  await loadTrading();
-  // ...and then read the OTHER ACCOUNT's figures at once, not on the next slow poll. The panel
-  // has just changed which account it is about, while every box on screen still holds the one
-  // we left: waiting up to a minute would show the paper account's equity under a live label,
-  // which is the exact confusion this panel exists to prevent. `loadTrading` above cannot do it
-  // — it reads the switch, and deliberately takes only the files half of the live panel.
-  await refreshLiveNow();
-  return true;
+  return TraiderSwitch.flipEnv({
+    api,
+    confirmDialog,
+    flashToast,
+    env: from === "live" ? "paper" : "live",
+    from: from,
+    reload: async () => {
+      await loadTrading();
+      // ...and then read the OTHER ACCOUNT's figures at once, not on the next slow poll. The panel
+      // has just changed which account it is about, while every box on screen still holds the one
+      // we left: waiting up to a minute would show the paper account's equity under a live label,
+      // which is the exact confusion this panel exists to prevent. `loadTrading` cannot do it — it
+      // reads the switch, and deliberately takes only the files half of the live panel.
+      await refreshLiveNow();
+    },
+  });
 }
 
 // The switch itself lives in ``trading_switch.js``: the trading log page carries the same
@@ -1261,37 +1270,6 @@ async function stopAndFlatten() {
   else flashToast(r && r.message ? r.message : "Trading is OFF", "ok");
   await loadTrading();
   if (state.rulesPayload && typeof renderStrategyBar === "function") renderStrategyBar();
-}
-
-// What the master switch will do, or why it cannot — as the Trading box's hover hint.
-//
-// This was the tooltip on the header's switch button, and it moved into the panel with the switch:
-// it is the one place that quotes a FAILED credential check and the freshness warning, and both of
-// those decide whether arming is possible at all. Returns a plain string, so the wording can be
-// exercised without a DOM.
-function switchTip(d) {
-  const exec = d.execution || {};
-  const tr = d.trading || {};
-  const ver = d.verification || {};
-  const fresh = d.freshness || {};
-  const env = String(exec.env || "").toUpperCase();
-  let tip = tr.on
-    ? `Trading is ON (${env}) for ${d.strategy || "this strategy"} — click to stop`
-    : !exec.ok
-      ? `Trading cannot start — ${exec.message}`
-      : ver.verified
-        // Verified is not a promise: the check is repeated on every attempt, so a
-        // key revoked an hour ago cannot be armed from a green light that is stale.
-        ? `Start sending orders for ${d.strategy || "the active strategy"} — the ${env} credentials are re-checked first`
-        : ver.has_verdict && ver.message
-          // A check has already FAILED: quote it. There is nothing to press first,
-          // so pointing at the Validate button would send the operator in a circle.
-          ? `Trading cannot start unless the ${env} credentials work — ${ver.message} They are re-checked when you switch it on.`
-          : `Start sending orders for ${d.strategy || "the active strategy"} — the ${env} credentials are checked when you switch it on`;
-  // A process running older gate code than the files on disk will answer the switch
-  // with last week's rules. Nothing on screen would show it, so the tooltip says it.
-  if (fresh.stale && fresh.message) tip += ` ⚠ ${fresh.message}`;
-  return tip;
 }
 
 function renderTradingPanel(d) {
@@ -2276,44 +2254,9 @@ function shortAge(seconds) {
   return `${Math.round(s / 86400)}d ago`;
 }
 
-/* How much is OPEN, as the Open box.
- *
- * This was the header's "0 open" pill, moved into the panel with the switch it sat beside. It is
- * counted per account from the switch's own payload, and what is held in the OTHER account is
- * reported too: a position there is real whatever mode this run is in, and it is what refuses an
- * arming. An account that could not be READ is not a count of zero, so the box says "?" where the
- * pill said "unreadable" — a number is what this box is for, and a floor must not be printed as
- * one. */
-function openTile(payload) {
-  const accounts = (payload && payload.positions) || [];
-  const active = inPlayEnv() || ((payload && payload.execution && payload.execution.env) || "paper");
-  const count = (env) => accounts.filter((a) => String(a.env) === env)
-    .reduce((total, a) => total + Number(a.count || 0), 0);
-  const mine = count(active);
-  const others = ["live", "paper"]
-    .filter((env) => env !== active && count(env) > 0)
-    .map((env) => `${count(env)} in ${env}`);
-  // "It refused" and "it could not be asked" are different facts, and only the second one
-  // makes the count a floor. Naming the account is what makes it actionable — a rejected
-  // live key is a thing to fix, not a mystery.
-  const blind = accounts.filter((a) => a.known === false).map((a) => a.env);
-  const unknown = Number((payload && payload.unknown_count) || 0);
-  const unreadable = blind.indexOf(active) > -1;
-
-  let tip;
-  if (unreadable) {
-    tip = `the ${active} account could not be read — what it holds is unknown`;
-  } else {
-    tip = mine
-      ? `${mine} position(s) in the ${active} account` + (others.length ? ` — and ${others.join(", ")}` : "")
-      : "nothing is held in the account being traded";
-    const floors = [];
-    if (blind.length) floors.push(`the ${blind.join(" and ")} account(s) could not be read`);
-    if (unknown) floors.push(`${unknown} could not be attributed to an account`);
-    if (floors.length) tip += ` — ${floors.join(", ")}, so this count is a floor rather than the truth`;
-  }
-  return { value: unreadable ? "?" : String(mine), tip: tip };
-}
+/* How much is OPEN, and the other two trading boxes, now live in ``trading_switch.js``: the log
+ * page shows the same three, and one box with two implementations is how the two screens start
+ * disagreeing about what "open" means. This page hands over the payload and its own handler names. */
 
 function showLiveError(message) {
   const state_ = $("live-state");
@@ -2619,43 +2562,11 @@ function renderProtection(verdict) {
     + "A level was set and no order is resting at it — check the broker.";
 }
 
-// One number in a box, the same `.bt-stat` the backtest KPIs and the report page use — with
-// the same pos/neg tinting and the same hover hint. A dashboard is read by glancing at boxes,
-// while a key/value list is read by scanning labels one at a time.
-//
-// `boxCls` tints the BOX rather than the number: the two state readings (the mode, the switch)
-// are not measurements, and a state that spends money is shown by the whole box pulsing — a red
-// figure inside a quiet border is exactly what a glance skips over.
-//
-// `click` turns the box into a BUTTON — the same handler the header's own control for that state
-// calls — so either setting can be changed where it is read. A real `<button>`, not a div with a
-// handler: the keyboard has to reach it, and the measurement boxes beside it stay divs, which is
-// what makes "this one is pressable" readable from the shape alone.
-//
-// `locked` renders that button disabled AND drops the handler with it: a write the server is going
-// to refuse must not look pressable.
-function liveTile(label, value, cls, tip, boxCls, click, locked) {
-  const tipAttr = tip ? ` data-tip="${escapeHtml(tip)}"` : "";
-  const inner = `<span class="label">${escapeHtml(label)}</span>`
-    + `<span class="value${cls ? ` ${cls}` : ""}">${value}</span>`;
-  return click
-    ? `<button type="button" class="bt-stat${boxCls ? ` ${boxCls}` : ""}"${tipAttr}`
-      + (locked ? " disabled" : ` onclick="${escapeHtml(click)}"`) + `>${inner}</button>`
-    : `<div class="bt-stat${boxCls ? ` ${boxCls}` : ""}"${tipAttr}>${inner}</div>`;
-}
-
-/* The dot that ends the Mode and Trading boxes — the same two dots the header pills carried, and
- * the same rules: blue is the calm setting, red is the one that spends money and it BLINKS, and
- * the calm end is marked too, because an unmarked box beside a marked one reads as "unknown"
- * rather than "fine".
- *
- * A styled circle rather than the 🔵/🔴 glyphs the dropdown uses: this is a real element, so the
- * blink is a CSS animation instead of the per-tick text rewrite the pill needed. That matters
- * twice over here — a rewrite would go through `setIfChanged`, replacing the two BUTTONS under
- * the cursor every 700ms, which would restart their pulse and could swallow a click mid-press. */
-function stateDot(alert) {
-  return `<span class="dot ${alert ? "alert" : "calm"}"></span>`;
-}
+// One number in a box, the same `.bt-stat` the backtest KPIs and the report page use — the box
+// itself is built by the shared module, which the log page uses too, so a dashboard box and a log
+// box cannot drift apart. Everything this page puts in one is its own: the numbers, the account's
+// figures, the counts.
+const liveTile = TraiderSwitch.tile;
 
 function renderLiveDetail(loop, orders) {
   const host = $("live-metrics");
@@ -2678,40 +2589,17 @@ function renderLiveDetail(loop, orders) {
   // mode box flips to the other account, the trading box flips the master switch. Acting from
   // where the state is read is the point — the box is what the operator is looking at when they
   // decide to change it.
-  // Trading ON freezes the MODE with the rest of the configuration: the server refuses the write
-  // (409), and a strategy running on one account must not be pointed at the other in flight —
-  // sending LIVE orders against positions the loop opened on paper is the worst case in this app.
-  // So the box goes down with every other locked control, and its hint says why instead of
-  // inviting a click that would be refused. The switch itself is never locked: stopping has to
-  // stay reachable.
+  // The three trading boxes are built by the shared module (``trading_switch.js``), because the log
+  // page shows the same three: the mode, the switch, and what is open. Each is handed the name of
+  // this page's own handler for it.
+  //
+  // Trading ON freezes the MODE with the rest of the configuration. The switch itself is never
+  // locked: stopping has to stay reachable.
   const locked = !!state.tradingLocked;
   const mode = inPlayEnv();
-  const tradingState = state.tradingState || null;
-  tiles.push(liveTile("Mode", (mode ? escapeHtml(mode) : "—") + (mode ? stateDot(mode === "live") : ""),
-    mode === "live" ? "neg" : "",
-    (mode === "live"
-      ? "orders go to the LIVE Alpaca account — real money"
-      : (mode ? "orders go to the PAPER Alpaca account — no real money"
-              : "the account this run is pointed at has not been read yet"))
-      + (locked
-          ? " · trading is ON — turn it off to switch accounts"
-          : ` · click to switch to the ${mode === "live" ? "paper" : "live"} account`),
-    // A blue edge for paper, a pulsing red one for live: the two settings are read at a glance,
-    // and the safe one is marked too — an unmarked box beside a marked one reads as "unknown"
-    // rather than "fine".
-    mode === "live" ? "flash-red" : (mode === "paper" ? "tint-blue" : ""),
-    "onModeBoxClick()", locked));
-  const armed = !!(tradingState && tradingState.on);
-  tiles.push(liveTile("Trading",
-    (tradingState ? (armed ? "on" : "off") : "—") + (tradingState ? stateDot(armed) : ""),
-    armed ? "neg" : "",
-    switchTip(state.tradingPayload || {}),
-    tradingState ? (armed ? "flash-red" : "tint-blue") : "",
-    "toggleTrading()"));
-  // What is OPEN, right after what it is open in: the two are read together, and a position held
-  // while trading is OFF is the state this count matters most in.
-  const open = openTile(state.tradingPayload);
-  tiles.push(liveTile("Open", escapeHtml(open.value), "", open.tip));
+  tiles.push(TraiderSwitch.envTile(mode, locked, "onModeBoxClick()"));
+  tiles.push(TraiderSwitch.tradeTile(state.tradingPayload, "toggleTrading()"));
+  tiles.push(TraiderSwitch.openTile(state.tradingPayload, mode));
 
   // -- the account being traded -------------------------------------------
   // The one the panel is about, so its numbers come first. An account that cannot be read draws
@@ -2753,13 +2641,10 @@ function renderLiveDetail(loop, orders) {
   }
 
   // -- what is held, and what protects it ---------------------------------
-  const position = (orders && orders.protection && orders.protection.position)
-    || (loop.last_tick && loop.last_tick.position)
-    || null;
-  tiles.push(position
-    ? liveTile("Position", `${position.short ? "short" : "long"} @ ${Number(position.entry_price).toFixed(2)}`)
-    : liveTile("Position", "flat"));
-
+  // There is no position box: it said "flat" or the same thing the Open box says, from the loop's
+  // own record rather than the broker's — two readings of one question, in two vocabularies. What
+  // is held is the Open box's count, and the direction and entry price, when there is one, are in
+  // the facts grid below with the account's own name against them.
   if (orders && orders.ok !== false) {
     tiles.push(liveTile("Working orders", String((orders.open || []).length),
       "", "orders still at the broker: an unfilled entry, or a bracket parent"));
@@ -2893,6 +2778,7 @@ async function loadRules() {
     renderRules();
     renderPConfig();
     renderRiskPanel();
+    renderStrategyRisk();
     renderStrategyBar();
     // NO line about where the rules are stored. A load that succeeded has nothing to
     // report — "Editing <path>" is a description of the file, it said the same thing on
