@@ -73,7 +73,7 @@ def test_the_page_says_which_strategy_it_is_showing():
     name the strategy every panel below it belongs to. Without that line the reader has to work
     out whose session the ticks, orders, trades and roadmap are, which is how a page ended up
     being read as the previous strategy's."""
-    assert 'id="lg-strategy-name"' in client.get("/log").text
+    assert 'id="lg-strategy-name"' in client.get("/monitor").text
 
     body = LOG_JS.read_text(encoding="utf-8")
     assert "Strategy: ${name}" in body, "and it is filled from the payload's own name"
@@ -276,7 +276,7 @@ def test_the_log_endpoint_never_fails_on_a_strategy_with_no_files(api_settings, 
 # the page
 # ---------------------------------------------------------------------------
 def test_the_page_is_served_with_its_own_placeholders(api_settings):
-    response = client.get("/log")
+    response = client.get("/monitor")
 
     assert response.status_code == 200
     html = response.text
@@ -292,7 +292,7 @@ def test_the_page_puts_the_account_before_the_local_record(api_settings):
     A page that led with its own files would let a stale or deleted log pass for the state of
     the account, which is the one mistake this screen must not make.
     """
-    html = client.get("/log").text
+    html = client.get("/monitor").text
 
     assert html.index("Account") < html.index("What the loop did")
     assert html.index("What the loop did") < html.index("Trades closed")
@@ -740,7 +740,7 @@ def test_the_days_two_lists_sit_under_the_days_as_collapsible_references(api_set
     the title and nothing else. The ↻ names the panel it screens, because two lists sit here and one
     handler has to know which of them was pressed.
     """
-    html = client.get("/log").text
+    html = client.get("/monitor").text
 
     menu = html.index('class="card report-menu"')
     days = html.index('id="lg-days"')
@@ -927,7 +927,7 @@ def test_the_way_back_sits_at_the_top_of_the_day_menu(api_settings):
     The report page already puts its back link at the top of its menu; this page carries the
     same one in the same place rather than a second convention in the header.
     """
-    html = client.get("/log").text
+    html = client.get("/monitor").text
 
     menu = html.index('class="card report-menu"')
     back = html.index('href="/">← Back to the Strategy lab')
@@ -945,7 +945,7 @@ def test_the_account_card_carries_the_switch_and_not_what_is_held(api_settings):
     and what is open. The separate "Trading status" block that used to hold a chip, a switch button
     and a warning under all of that is gone — it was the same three answers in a second style.
     """
-    html = client.get("/log").text
+    html = client.get("/monitor").text
 
     card = html.index("<h2>Account</h2>")
     accounts = html.index('id="lg-accounts"')
@@ -964,7 +964,7 @@ def test_positions_and_working_orders_have_their_own_panel_under_the_loop(api_se
     The page reads top-down as sent, held, closed: what the bot submitted, then what the broker
     holds, then what the strategy closed out of it.
     """
-    html = client.get("/log").text
+    html = client.get("/monitor").text
 
     card = html.index("Positions and working orders")
     records = html.index("Orders the bot submitted")
@@ -983,7 +983,7 @@ def test_the_security_card_is_gone_from_the_monitor(api_settings):
     template-owned and now mounted nowhere: a security panel on another page is one element away,
     and the lock screen's own card keeps the change-PIN flow that was offered here.
     """
-    html = client.get("/log").text
+    html = client.get("/monitor").text
 
     assert "lg-security-card" not in html, "the box is gone, not merely hidden"
     assert "data-security" not in html
@@ -997,7 +997,7 @@ def test_every_panel_below_the_account_folds_on_the_same_gesture(api_settings):
     countdown — on screen while its tables are away. The button is the whole of the keyboard
     story, so each head has exactly one.
     """
-    html = client.get("/log").text
+    html = client.get("/monitor").text
 
     for body in ("loop-body", "positions-body", "orders-body", "trades-body"):
         assert f'class="collapse-body" id="{body}"' in html, body
@@ -1018,7 +1018,7 @@ def test_every_panel_below_the_account_folds_on_the_same_gesture(api_settings):
 def test_the_log_page_runs_the_shared_switch_and_the_shared_boxes(api_settings):
     """One confirmation for both pages, and one set of boxes: this page loads the dashboard's
     shared module before its own script, which is what uses it."""
-    html = client.get("/log").text
+    html = client.get("/monitor").text
 
     assert "onclick=\"toggleTrading()\"" not in html, (
         "the switch button is gone: the box is built by the module, and its handler comes with it"

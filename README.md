@@ -24,7 +24,7 @@ replay of it.
 | Live order execution — order building, retries, brackets, cancel/flatten | done |
 | Portfolio state (DynamoDB) | **not implemented** |
 | The execution loop — `src/main.py`, a separate process | done |
-| The Session monitor's view of it — positions, orders, the day's log (`/log`) | done |
+| The Session monitor's view of it — positions, orders, the day's log (`/monitor`) | done |
 
 The current strategy **does not pass its own Gate yet** (see
 [CHECKLIST.md](CHECKLIST.md) for the metrics). Treat every stored result as
@@ -90,7 +90,7 @@ flowchart LR
 |  | **The loop** — `src/main.py` | **The dashboard** — `src/web` |
 | --- | --- | --- |
 | Started by | `scripts/run-bot.sh` | `scripts/run-dashboard.sh` |
-| Owns | the bar clock, the shared strategy machine, **every order** | HTTP: the UI, configuration, backtests, reports, and the read-only view of the loop (the Session monitor, `/log`) |
+| Owns | the bar clock, the shared strategy machine, **every order** | HTTP: the UI, configuration, backtests, reports, and the read-only view of the loop (the Session monitor, `/monitor`) |
 | Must never | serve HTTP | place an order, or start the loop |
 | Reaches the other by | reading and writing files | reading files |
 

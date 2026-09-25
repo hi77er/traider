@@ -1,6 +1,7 @@
 """The Session monitor — what the loop did, and what the account looks like now.
 
-``GET /log``  -> the page itself
+``GET /monitor``  -> the page itself (and ``GET /log``, its address before the rename, redirects
+there so a bookmark still lands)
 
 The data comes from the ``/api/v1`` reads that already exist (``loop``, ``positions``,
 ``orders``, ``trades``, ``log``) rather than from a page-specific endpoint, because every one
@@ -25,7 +26,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import APIRouter, Depends
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 
 
 router = APIRouter()
@@ -33,7 +34,13 @@ router = APIRouter()
 _LOG_PAGE = Path(__file__).resolve().parents[1] / "templates" / "log.html"
 
 
-@router.get("/log", include_in_schema=False)
-def log_page() -> FileResponse:
+@router.get("/monitor", include_in_schema=False)
+def monitor_page() -> FileResponse:
     """Serve the Session monitor."""
     return FileResponse(_LOG_PAGE)
+
+
+@router.get("/log", include_in_schema=False)
+def log_page() -> RedirectResponse:
+    """The page's address before it was called the monitor, kept so old links still land."""
+    return RedirectResponse("/monitor")

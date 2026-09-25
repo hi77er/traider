@@ -618,7 +618,7 @@ strategy and a bar with no local log, which is the one thing a deleted log canno
 | 6.1–6.2 | `GET /api/v1/positions`, `GET /api/v1/orders` | ✅ |
 | 6.3 | `GET /api/v1/loop`: lease holder, last-tick age, next wake, last refusal | ✅ |
 | 6.4 | The "N open" header pill, from the broker | ✅ |
-| 6.5 | The Session monitor: account state first, local context second, tolerant of a deleted log | ✅ (`/log`) |
+| 6.5 | The Session monitor: account state first, local context second, tolerant of a deleted log | ✅ (`/monitor`) |
 | 6.6 | The Trading panel: last tick, position with its exits, environment, the session's ticks | ✅ |
 | 6.7 | The loud case surfaced: a position held with NO resting exits | ✅ |
 | 6.8 | Write `orders.jsonl` / `trades.jsonl` from the loop — built in Phase 3, called by nothing yet | ✅ |

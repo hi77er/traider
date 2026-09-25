@@ -112,7 +112,7 @@ def test_the_lab_says_which_account_and_whether_trading_is_on():
     assert 'id="lab-state"' in INDEX
     bar = INDEX[INDEX.index('class="strategy-bar-main"') :]
     bar = bar[: bar.index("strategy-bar-actions")]
-    assert bar.index('href="/log"') < bar.index('id="lab-state"'), "beside the monitor link"
+    assert bar.index('href="/monitor"') < bar.index('id="lab-state"'), "beside the monitor link"
 
     js = (STATIC / "app.js").read_text(encoding="utf-8")
     assert 'api("/api/v1/trading")' in js, "the answer comes from the switch's own endpoint"
@@ -157,13 +157,13 @@ def test_the_lab_reaches_the_monitor_from_beside_its_strategy_picker():
     bar = INDEX[INDEX.index('class="strategy-bar-main"') :]
     bar = bar[: bar.index("strategy-bar-actions")]
 
-    assert 'href="/log"' in bar, "the way to the monitor"
+    assert 'href="/monitor"' in bar, "the way to the monitor"
     assert "Session monitor" in bar, "named, not 'log'"
-    assert bar.index('id="strategy-select"') < bar.index('href="/log"'), "right of the picker"
+    assert bar.index('id="strategy-select"') < bar.index('href="/monitor"'), "right of the picker"
 
     actions = INDEX[INDEX.index('class="header-actions"') :]
     actions = actions[: actions.index("</header>")]
-    assert 'href="/log"' not in actions, "the header is not where it lives any more"
+    assert 'href="/monitor"' not in actions, "the header is not where it lives any more"
 
     assert '<a class="rp-backlink" href="/">← Back to the Strategy lab</a>' in LOG
 
@@ -171,7 +171,7 @@ def test_the_lab_reaches_the_monitor_from_beside_its_strategy_picker():
 def test_the_way_to_the_monitor_is_purple():
     """The lab's own controls are blue. This one LEAVES the page, and the colour is how a reader
     tells the two apart before clicking — so it is styled by its own class, not by ``.btn-link``."""
-    assert '<a class="btn-link purple" href="/log"' in INDEX
+    assert '<a class="btn-link purple" href="/monitor"' in INDEX
 
     css = (STATIC / "style.css").read_text(encoding="utf-8")
     assert "--purple: #9b7bff;" in css
@@ -181,8 +181,8 @@ def test_the_way_to_the_monitor_is_purple():
 
 @pytest.mark.parametrize("path", sorted(TEMPLATES.glob("*.html")) + sorted(STATIC.glob("*.js")))
 def test_neither_old_page_name_survives_in_the_web_layer(path: Path):
-    """Names, not the words: "log" is still a file, a route and a table of ticks, and ``/log`` is
-    the monitor's URL — what must not survive is a page being CALLED the old thing."""
+    """Names, not the words: "log" is still a file, a template and a table of ticks, and ``/log``
+    is kept as a redirect — what must not survive is a page being CALLED the old thing."""
     text = path.read_text(encoding="utf-8")
     for gone in ("Trading log", "trading log", "Dashboard", "Back to dashboard",
                  "Strategy dashboard"):

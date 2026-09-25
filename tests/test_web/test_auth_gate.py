@@ -104,7 +104,7 @@ def _routes() -> list:
 # ---------------------------------------------------------------------------
 def test_with_no_store_the_portal_is_exactly_as_it_was(client):
     """The lock is off until somebody sets one, which is what keeps a fresh checkout working."""
-    for method, path in (("GET", "/"), ("GET", "/log"), ("GET", "/api/v1/loop"),
+    for method, path in (("GET", "/"), ("GET", "/monitor"), ("GET", "/api/v1/loop"),
                          ("GET", "/api/v1/positions")):
         response = client.request(method, _sample(path))
         assert response.status_code == 200, f"{method} {path} answered {response.status_code}"
@@ -134,10 +134,10 @@ def test_the_allowlist_is_exactly_the_pinned_one(locked):
 
 
 def test_a_page_is_sent_to_the_lock_screen_and_an_api_call_is_told_why(client, locked):
-    page = client.get("/log")
+    page = client.get("/monitor")
     assert page.status_code == 303
     assert page.headers["location"].startswith("/login")
-    assert "next=%2Flog" in page.headers["location"], "and back to where they were going"
+    assert "next=%2Fmonitor" in page.headers["location"], "and back to where they were going"
 
     api = client.get("/api/v1/loop")
     assert api.status_code == 401
@@ -183,7 +183,7 @@ def test_a_wrong_pin_is_refused_with_a_reason_and_the_right_one_lets_you_in(clie
     assert ok.status_code == 200 and ok.json()["signed_in"] is True
     assert COOKIE in ok.cookies or COOKIE in ok.headers.get("set-cookie", "")
 
-    assert client.get("/log").status_code == 200, "and the page is no longer refused"
+    assert client.get("/monitor").status_code == 200, "and the page is no longer refused"
     assert client.get("/api/v1/loop").status_code == 200
 
 
@@ -306,7 +306,7 @@ def test_the_lock_never_touches_the_trading_switch(client, settings, locked):
     switch = trading_state.state_path(settings)
     before = switch.read_text(encoding="utf-8")
 
-    client.get("/log")                                     # refused
+    client.get("/monitor")                                  # refused
     client.post("/api/v1/trading/on")                      # refused
     for _attempt in range(auth_service.MAX_ATTEMPTS):      # locked out
         client.post("/api/v1/auth/login", json={"pin": "0000"})
@@ -331,7 +331,7 @@ def test_setup_writes_the_first_pin_and_signs_you_in(client, settings):
     assert response.status_code == 200
     assert response.json()["signed_in"] is True and response.json()["created"] is True
     assert auth_service.enabled(settings) is True
-    assert client.get("/log").status_code == 200, "and they are through the door already"
+    assert client.get("/monitor").status_code == 200, "and they are through the door already"
     assert auth_service.verify(settings, PIN)["ok"] is True, "hashed and usable, not stored raw"
 
 

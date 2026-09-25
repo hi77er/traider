@@ -193,7 +193,7 @@ starts or stops the other — see [Two processes](README.md#two-processes).
 Endpoints:
 - `GET /` — the Strategy lab (left: summary, chart, Backtest; right: the collapsible
   strategy/risk forms, the instrument automation panel, Daily Delta and the data table)
-- `GET /log` — the Session monitor: the account's state, then a day of the loop's own ticks,
+- `GET /monitor` — the Session monitor: the account's state, then a day of the loop's own ticks,
   submitted orders and closed trades (account state first, local context second)
 - `GET /api/v1/health` — health check
 - `GET /api/v1/loop` — is a loop running, when it next wakes, its last tick and last refusal
