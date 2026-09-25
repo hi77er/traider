@@ -633,8 +633,6 @@
     const days = (state.log && state.log.days) || [];
     const current = state.log && state.log.day;
     const name = (state.log && state.log.strategy) || (state.loop || {}).strategy || "";
-    const label = $("lg-strategy-name");
-    if (label) setIfChanged(label, name ? `Strategy: ${name}` : "no strategy is selected");
     if (!days.length) {
       $("lg-days").innerHTML = empty(name
         ? `no day has been recorded for ${name} yet`

@@ -33,15 +33,6 @@
            the same gesture on both screens and never depends on the header. -->
       <a class="rp-backlink" href="/">← Back to the Strategy lab</a>
       <h2>Days</h2>
-      <!-- WHICH strategy every panel on this page is about. The page follows the strategy the
-           lab has selected (the switch's stamp while trading is on), and there is no picker
-           here on purpose — so without this line the reader has to work out whose session the
-           ticks, orders, trades and roadmap belong to. It is set from the same payload that
-           names the strategy for the rest of the page (``/api/v1/loop``). -->
-      <p class="muted note" id="lg-strategy-name" title="The Session monitor follows the strategy selected in the Strategy lab"></p>
-      <p class="muted note">Every day this strategy has run, newest first, with the exchange's
-        today at the top — the day this page opens on, whether or not its session has started.
-        The list comes from the loop's own index, so it stays fast however large the logs get.</p>
       <div id="lg-days" class="rp-runs"></div>
 
       <!-- ── The day's tape, as the two lists worth having beside the session: the biggest gainers

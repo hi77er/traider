@@ -68,18 +68,21 @@ def _tick(settings, *, action="decided", reason="", when=None, order_ids=None, n
 # ---------------------------------------------------------------------------
 # the endpoint
 # ---------------------------------------------------------------------------
-def test_the_page_says_which_strategy_it_is_showing():
-    """There is no strategy picker on this page — it follows the lab — so the sidebar has to
-    name the strategy every panel below it belongs to. Without that line the reader has to work
-    out whose session the ticks, orders, trades and roadmap are, which is how a page ended up
-    being read as the previous strategy's."""
-    assert 'id="lg-strategy-name"' in client.get("/monitor").text
+def test_the_sidebar_no_longer_names_the_strategy_or_explains_the_list():
+    """Both lines were removed at the operator's request: ``Strategy: <name>`` and the caption
+    saying the list is every day the strategy has run, newest first.
+
+    Consequence worth knowing: this page has no strategy picker (it follows the lab), so with days
+    on file nothing here now names the strategy — the lab's own picker is the source of truth. The
+    EMPTY-state lines still name it, because "nothing has ticked yet" over a panel that belongs to a
+    named strategy is a sentence about the wrong thing.
+    """
+    html = client.get("/monitor").text
+    assert "lg-strategy-name" not in html
+    assert "Every day this strategy has run" not in html
 
     body = LOG_JS.read_text(encoding="utf-8")
-    assert "Strategy: ${name}" in body, "and it is filled from the payload's own name"
-    assert "lg-strategy-name" in body
-    # The empty roadmap names the strategy too: "nothing has ticked yet" over a panel that
-    # belongs to a named strategy is a sentence about the wrong thing.
+    assert "lg-strategy-name" not in body, "and the code that filled it went too"
     assert "${name} has not ticked yet" in body
 
 
