@@ -487,7 +487,7 @@ The unfinished Phase 2 & 3 work lives here so Risk & Execution can proceed first
 
 - [ ] **test-instrument-automation** (42) — Instrument automation, by hand
   - [ ] Open the **Instrument Automation** panel (below Risk Management), switch it on and press **Save** — with trading ON as well: this panel is the one write the config lock does not refuse
-  - [ ] Press **↻ Refresh list**: the Top-10 appears with each name's two ranks and the criteria it was screened with, and `data/automation-list-<strategy>.json` is written beside `trading.json`
+  - [ ] Press **↻ Refresh list**: the Top-10 appears with each name's two ranks and the criteria it was screened with, and `data/strategies/automation/automation-list-<strategy>.json` is written there
   - [ ] Change an entering criterion and save: the cached list is dropped rather than judged against criteria it was not screened for
   - [ ] Turn trading on and wait for a bar: the tick log shows `switched` at the `instrument` gate, the Session monitor's roadmap stops there with the loop's own reason, and the strategy now names the new instrument
   - [ ] Confirm the new instrument's history is in the dataset *before* the switch is written — a provider that refuses leaves the instrument alone and says so in the tick's notes

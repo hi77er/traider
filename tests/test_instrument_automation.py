@@ -144,8 +144,8 @@ def test_junk_in_a_criterion_falls_back_rather_than_raising():
 
 
 def test_the_criteria_round_trip_through_their_own_file(settings):
-    """Their own file, beside the data: the strategy config is frozen while trading is on, and
-    turning this OFF is how you stop it."""
+    """Their own file, under the strategies folder: the strategy config is frozen while trading is
+    on, and turning this OFF is how you stop it."""
     written = _arm(settings, on=True, once_per_day=False)
     path = automation_mod.locate(settings, "Alpha")
 
@@ -153,6 +153,16 @@ def test_the_criteria_round_trip_through_their_own_file(settings):
     stored = automation_mod.read(settings, "Alpha")
     assert stored.on is True and stored.once_per_day is False
     assert stored.enter == written.enter
+
+
+def test_both_files_live_in_the_strategies_folder(settings):
+    """Under the strategies folder — that is what they are about — in a folder of their own, since
+    they are explicitly not the frozen store beside them."""
+    criteria = automation_mod.locate(settings, "Alpha")
+    listed = automation_mod.list_path(settings, "Alpha")
+
+    assert criteria.parent == listed.parent, "one folder for both, or they can drift apart"
+    assert criteria.parent.parts[-2:] == ("strategies", "automation")
 
 
 def test_a_list_is_stale_when_it_answers_a_different_question(settings):

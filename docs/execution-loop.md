@@ -101,13 +101,13 @@ identical from the dashboard.
 Step 3 is the one gate that changes what the rest of the tick is *about*: every step below it —
 the dataset, the clock, the window, the decision — belongs to the instrument it may replace.
 
-The criteria live in `data/automation-<strategy>.json`, beside `trading.json` rather than in the
+The criteria live in `data/strategies/automation/automation-<strategy>.json`, under the strategies folder rather than in the
 strategy store, because the store is frozen while trading is ON and turning this OFF has to be
 possible then. The list comes from `src/data/instrument_automation.py`: one screener request
 through `src.data.screener` (the same path the Market page uses) for US small caps above a price
 and a volume floor, ranked by the **sum** of a rank by day % change and a rank by dollar volume —
 one number would have to invent an exchange rate between percent and dollars. It is cached in
-`data/automation-list-<strategy>.json` with the criteria that made it; the tick re-screens through
+`data/strategies/automation/automation-list-<strategy>.json` with the criteria that made it; the tick re-screens through
 `cache_and_screen` only when the cache is missing, aged past the criteria's own limit (60 minutes
 by default), screened against different criteria, or **screened in another session** — and the
 panel's ↻ calls the same function.

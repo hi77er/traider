@@ -423,10 +423,10 @@ data/backtest_results/<strategy>/latest.json   trimmed view the panel reads
 data/backtest_results/<strategy>/runs/<id>.json full, self-describing run
 data/backtest_results/<strategy>/index.json    run-menu index
 data/trading/trading.json                    trading ON/OFF (runtime, not config)
-data/automation-<strategy>.json                instrument automation criteria (runtime,
-                                               written by its panel only)
-data/automation-list-<strategy>.json           the cached Top-10 it screens (written by the
-                                               panel's ↻, or by the loop when it has aged)
+data/strategies/automation/automation-<s>.json         instrument automation criteria (runtime,
+                                                       written by its panel only)
+data/strategies/automation/automation-list-<s>.json    the cached Top-10 it screens (written by the
+                                                       panel's ↻, or by the loop when it has aged)
 ```
 
 The trading state is deliberately **not** configuration: it lives beside the

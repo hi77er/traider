@@ -242,11 +242,11 @@ penny stocks are excluded (`price > $1`) and OTC/pink sheets are dropped.
 The tick may replace the strategy's instrument with the leader of a screened list.
 Open **Instrument Automation** and flip the switch — that saves at once, so the automation
 can be disarmed while a loop is trading; the fields are changed and stored with **Save**. The
-criteria go to `data/automation-<strategy>.json`, beside `trading.json`, which is why they stay
+criteria go to `data/strategies/automation/automation-<strategy>.json`, under the strategies folder, which is why they stay
 editable while trading is ON — this is the only panel on the page that does. The fields above the
 list are the screen the Top-10 is picked from (US small caps $300M–$2B, price above $3, day
 volume above 1M shares, ten names kept), and **↻ Refresh list** runs it now into
-`data/automation-list-<strategy>.json`; the loop refreshes it on its own once it is older
+`data/strategies/automation/automation-list-<strategy>.json`; the loop refreshes it on its own once it is older
 than **List maximum age** (60 minutes), through the same call the button uses. Each row
 carries its two ranks — by day % change and by dollar volume — and the sum that orders the
 list. The **Instrument switch** criteria (default: the current instrument has dropped out
@@ -266,7 +266,7 @@ configuration — each edited from its own place:
 | Account | **🏦 Account Settings** (header) | `data/account/account.json` | the Alpaca paper + live key pairs, the data folder, backtest costs, and how long the portal may sit idle before it signs itself out |
 | Strategy | **Strategy Configuration** / **Rules** / **Risk Management** panels | `data/strategies/store.json` | instrument, bar size + history period, trading hours + exchange, features, gates, schedule, risk limits, rules, paper/live |
 | Runtime | **master switch** + mode (Session monitor) | `data/trading/trading.json` | trading ON/OFF. Deliberately NOT configuration: it lives in a folder of its own under the data root, because the configuration files it freezes cannot hold the switch that freezes them. |
-| Runtime | **Instrument Automation** panel (Strategy lab) | `data/automation-<strategy>.json` · `data/automation-list-<strategy>.json` | the automation's criteria, and the cached Top-10 they screen. Not configuration either: the panel must stay editable while trading is ON, and the loop writes the list too |
+| Runtime | **Instrument Automation** panel (Strategy lab) | `data/strategies/automation/` · `automation-<strategy>.json` and `automation-list-<strategy>.json` | the automation's criteria, and the cached Top-10 they screen. Not configuration either: the panel must stay editable while trading is ON, and the loop writes the list too |
 
 Precedence: **strategy > account > .env**. Booleans render as on/off switches and
 secrets (`*_PASSWORD`, `*_API_KEY`, …) are masked — leave a secret field empty to

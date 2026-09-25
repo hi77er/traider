@@ -5,7 +5,9 @@ settings are runtime state rather than frozen configuration: turning it off has 
 loop is trading, and everything under the trading lock (``strategies/store.json``) may not be
 written then. It gets its own files for that reason, not for convenience.
 
-Two of them, each with one writer:
+Two of them, each with one writer, in ``data/strategies/automation/`` — the strategies folder,
+because that is what they are about, and a folder of their own inside it because they are not the
+frozen store beside them:
 
 ``automation-<strategy>.json``       the criteria — written by the panel.
 ``automation-list-<strategy>.json``  the cached Top-10 — written by whoever refreshed it: the
@@ -36,6 +38,10 @@ __all__ = [
     "describe", "from_payload", "list_path", "read", "read_list", "to_payload",
     "write", "write_list", "locate",
 ]
+
+#: Under the strategies folder, in a folder of their own. One string for both files, so the criteria
+#: and the list they screen can never end up in different places.
+FOLDER = "strategies/automation"
 
 #: The universe the list is picked from. Small caps by the conventional band, priced above a
 #: dollar floor, and traded enough to be enterable at all — the entering criteria in the panel.
@@ -189,13 +195,17 @@ def describe(automation: Automation) -> List[str]:
 # the files
 # ---------------------------------------------------------------------------
 def locate(settings, strategy: str) -> Path:
-    """``<data root>/automation-<strategy>.json`` — the criteria."""
-    return state_files.state_path(settings, f"automation-{slug(strategy or 'strategy')}.json")
+    """``<data root>/strategies/automation/automation-<strategy>.json`` — the criteria."""
+    return state_files.state_path(
+        settings, f"automation-{slug(strategy or 'strategy')}.json", FOLDER
+    )
 
 
 def list_path(settings, strategy: str) -> Path:
-    """``<data root>/automation-list-<strategy>.json`` — the cached Top-10."""
-    return state_files.state_path(settings, f"automation-list-{slug(strategy or 'strategy')}.json")
+    """``<data root>/strategies/automation/automation-list-<strategy>.json`` — the cached Top-10."""
+    return state_files.state_path(
+        settings, f"automation-list-{slug(strategy or 'strategy')}.json", FOLDER
+    )
 
 
 def read(settings, strategy: str) -> Automation:

@@ -72,7 +72,7 @@ def test_the_panel_reads_the_criteria_the_list_and_the_verdict(client):
     assert body["strategy"], "the page is strategy-scoped, like every other panel"
 
 
-def test_the_criteria_are_their_own_file_beside_the_data(client, _tmp_data_root):
+def test_the_criteria_are_their_own_file_under_the_strategies_folder(client, _tmp_data_root):
     saved = client.post("/api/v1/automation", json={
         "on": True, "enter": {"size": 4, "min_price": 7.5}, "switch": {"mode": "not_first"},
     }).json()
@@ -85,7 +85,8 @@ def test_the_criteria_are_their_own_file_beside_the_data(client, _tmp_data_root)
     assert stored["criteria"]["switch"]["mode"] == "not_first"
 
     path = automation_mod.locate(_tmp_data_root, stored["strategy"])
-    assert path.exists() and path.parent == Path(_tmp_data_root.historical_data_dir).parent
+    root = Path(_tmp_data_root.historical_data_dir).parent
+    assert path.exists() and path.parent == root / "strategies" / "automation"
     document = json.loads(path.read_text(encoding="utf-8"))
     assert document["on"] is True and document["enter"]["size"] == 4
 
