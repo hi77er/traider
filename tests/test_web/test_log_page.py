@@ -390,9 +390,9 @@ const order = (env, clientId) => ({
   expected: 1, bar: "2026-09-18T14:20:00+00:00", order_id: "b-" + env,
   client_order_id: clientId, detail: "",
 });
-const trade = (env, reason) => ({
+const trade = (env, reason, pnl) => ({
   at: "2026-09-18T15:00:00+00:00", env, direction: "long", entry_price: 1, exit_price: 2,
-  ret: 0.01, weight: 1, bars: 3, reason,
+  ret: 0.01, weight: 1, bars: 3, reason, pnl,
 });
 const position = (env, symbol) => ({
   env, known: true, count: 1,
@@ -418,7 +418,7 @@ state.log = {
 };
 // The trades exist for ONE account only. In the other mode the panel has to be empty AND say whose
 // trade it is — "nothing has been closed" would be the lie this test exists to prevent.
-state.trades = { trades: [trade("paper", "paper trade")] };
+state.trades = { trades: [trade("paper", "paper trade", 12.5)] };
 
 const shot = () => {
   renderAccount();   // the accounts panel, the page header, and the positions panel
@@ -468,6 +468,18 @@ state.trades = { trades: [dated("2026-09-18", "live")] };
 out.equityOtherAccount = equityWanted();
 state.trades = { trades: [{ env: "paper", ret: 0.01 }] };
 out.equityUndated = equityWanted();
+
+// The P/L column's other two readings: a loss, and a row with no size at all (every row written
+// before the loop recorded one). Both have to render, one in red and one as a dash.
+state.trades = { trades: [
+  { at: "2026-09-18T15:00:00+00:00", env: "paper", day: "2026-09-18", direction: "short",
+    entry_price: 100, exit_price: 103, ret: -0.03, weight: 1, bars: 2, reason: "stop",
+    pnl: -250 },
+  { at: "2026-09-18T16:00:00+00:00", env: "paper", day: "2026-09-18", direction: "long",
+    entry_price: 10, exit_price: 11, ret: 0.1, weight: 1, bars: 2, reason: "signal" },
+] };
+renderTrades();
+out.profitAndLoss = els["lg-trades"].innerHTML;
 
 process.stdout.write(JSON.stringify(out));
 """
@@ -633,6 +645,30 @@ def test_the_paper_page_shows_only_paper_data(scoping):
     assert "c-paper" in paper["orders"] and "c-live" not in paper["orders"]
     assert "paper trade" in paper["trades"], "this account's own trade is the one that IS shown"
     assert "from the live account" not in paper["trades"], "no note about a filter that dropped none"
+
+
+def test_the_trades_table_shows_the_realized_profit_and_loss(scoping):
+    """Asked for by name: a money column beside the return. The colours follow the MONEY, which
+    is what makes it a different reading from the return next to it."""
+    html = scoping["paper"]["trades"]
+
+    assert "<th>P/L</th>" in html
+    assert "+12.50" in html, "the money the round trip made, signed"
+    assert '<td class="good">+12.50</td>' in html
+    assert html.index("<th>return</th>") < html.index("<th>P/L</th>"), (
+        "the return the strategy computed, then what it came to"
+    )
+
+
+def test_a_losing_round_trip_is_red_and_a_row_with_no_size_is_a_dash(scoping):
+    """A dash is the honest answer where the size is not known — every row written before the
+    loop recorded one — and a loss has to be visibly negative rather than merely smaller."""
+    html = scoping["profitAndLoss"]
+
+    assert '<td class="bad">-250.00</td>' in html, "signed, and red for the money"
+    assert '<td class="bad">-3.00%</td>' in html, "the return beside it is red too"
+    assert '<td class="muted">—</td>' in html, "and the row with no size says so"
+    assert "+NaN" not in html and "undefined" not in html
 
 
 def test_the_working_orders_table_names_the_symbol_and_when_each_order_was_placed(scoping):

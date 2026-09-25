@@ -332,12 +332,17 @@ def tick(
                     # question, and ``client_order_id`` is what joins the two.
                     for row in orders or []:
                         store.append_order(settings, strategy, row)
+                    # The size this tick's CLOSE filled, if it closed anything: a return on a price
+                    # is not a profit until it is multiplied by the shares that were held, and the
+                    # broker's fill is the only place that number exists (see
+                    # ``trade_record``'s ``qty``).
+                    closed_qty = _filled_size(orders)
                     for leg in record_["trades"]:
                         store.append_trade(
                             settings, strategy,
                             store.trade_record(
                                 settings=settings, strategy=strategy, env=env,
-                                at=at, bar=record_["bar"], leg=leg,
+                                at=at, bar=record_["bar"], leg=leg, qty=closed_qty,
                             ),
                         )
                     _bump_day(
@@ -548,6 +553,26 @@ def tick(
         position=None if position is None else position.as_dict(),
         order_ids=order_ids,
     )
+
+
+def _filled_size(orders: Optional[List[Dict[str, Any]]]) -> Optional[float]:
+    """How many shares this tick's CLOSE filled, or ``None`` when nothing closed.
+
+    Read from the tick's own order rows rather than from the broker: the rows were just built
+    from the fills, and asking again would be a second read of the same answer — with a window
+    in which the position no longer exists.
+    """
+    size: Optional[float] = None
+    for row in orders or []:
+        if str(row.get("intent") or "") != "close":
+            continue
+        try:
+            filled = float(row.get("filled_qty") or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if filled > 0:
+            size = filled
+    return size
 
 
 def _default_clock(settings) -> Callable[[], Dict[str, Any]]:

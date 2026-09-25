@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 
 from src.config.settings import Settings as S
 from src.web.app import app
-from src.web.services import config_service
+from src.web.services import auth_service, config_service
 
 client = TestClient(app)
 ROOT = __import__("pathlib").Path(__file__).resolve().parents[2]
@@ -160,7 +160,7 @@ def test_the_scheduler_section_is_gone():
 def test_account_schema_groups_and_derived_folders():
     groups = config_service.account_sections(S(_env_file=None))
     names = [g["name"] for g in groups]
-    assert names == ["Trading Account", "Data & Folders", "Backtest"]
+    assert names == ["Trading Account", "Data & Folders", "Backtest", "Security"]
     by_key = {f["key"]: f for g in groups for f in g["fields"]}
     # All four Alpaca credential fields are secrets, and a secret is never echoed
     # back through the schema — this machine may or may not have keys configured
@@ -182,6 +182,28 @@ def test_account_schema_groups_and_derived_folders():
     assert by_key["BACKTEST_DIR"]["readonly"] is True
     assert by_key["HISTORICAL_DATA_DIR"]["value"] == "data/historical"
     assert by_key["BACKTEST_DIR"]["value"] == "data/backtest_results"
+
+
+def test_the_inactivity_setting_is_offered_and_bounded():
+    """Asked for in as many words: 1-30 WHOLE minutes, in Account Settings.
+
+    The bounds are the point, not decoration: zero would lock the portal between two page
+    loads, and an hour would leave a screen nobody is watching open on an armed account.
+    Both come from the field's own constraints, so the form's min/max and the server's
+    validation cannot drift apart.
+    """
+    groups = config_service.account_sections(S(_env_file=None))
+    security = [g for g in groups if g["name"] == "Security"]
+    assert security, "the setting needs a home in the form"
+
+    (field,) = security[0]["fields"]
+    assert field["key"] == "AUTH_IDLE_MINUTES"
+    assert field["label"] == "Sign Out User Inactivity Minutes"
+    assert field["type"] == "int", "whole minutes only"
+    assert (field["min"], field["max"]) == (1, 30)
+    assert field["sensitive"] is False and field["readonly"] is False
+    assert str(field["value"]) == "15", "the default window, as the bot would use it"
+    assert "idle" in field["description"].lower()
 
 
 def test_the_removed_account_settings_are_gone_from_the_form():
@@ -264,6 +286,33 @@ def test_update_account_persists_json_and_drives_folders(tmp_path, monkeypatch):
                  "S3_BUCKET", "DYNAMODB_TABLE"):
         refused = config_service.update_account({gone: "x"})
         assert refused["ok"] is False and refused["errors"], gone
+
+
+def test_the_inactivity_setting_saves_and_is_what_the_portal_obeys(tmp_path, monkeypatch):
+    """The requirement end to end: 1-30 WHOLE minutes, saved to the account file, and the number
+    the portal actually locks on — a field the form writes and nothing reads would be decoration.
+    """
+    monkeypatch.setattr(config_service.account_mod, "account_file_path",
+                        lambda settings: tmp_path / "account.json")
+
+    saved = config_service.update_account({"AUTH_IDLE_MINUTES": "5"})
+
+    assert saved["ok"] is True, saved
+    assert json.loads((tmp_path / "account.json").read_text())["settings"] == {
+        "AUTH_IDLE_MINUTES": "5",
+    }
+    # And it is the WINDOW, not just a stored string: the effective settings carry it and the
+    # auth service turns it into seconds.
+    effective = config_service.get_effective_settings()
+    assert effective.auth_idle_minutes == 5
+    assert auth_service.idle_seconds(effective) == 300, "five minutes, enforced"
+
+    # Whole minutes only, and only between 1 and 30. Both ends are inside the range.
+    for allowed in ("1", "30"):
+        assert config_service.update_account({"AUTH_IDLE_MINUTES": allowed})["ok"] is True, allowed
+    for refused in ("0", "31", "7.5", "-5", "soon", ""):
+        answer = config_service.update_account({"AUTH_IDLE_MINUTES": refused})
+        assert answer["ok"] is False and answer["errors"], refused
 
 
 def test_account_api_roundtrip(tmp_path, monkeypatch):

@@ -738,7 +738,7 @@ def test_the_trades_reveal_the_pane_they_answer_to():
     out of turn; the chart refreshes it on every draw while it is wanted.
     """
     body = LOG_JS.read_text(encoding="utf-8")
-    trades = body[body.index("function renderTrades()") :][:1800]
+    trades = body[body.index("function renderTrades()") :][:2600]
     assert "if (showEquityPane()) loadEquity();" in trades
 
     session = body[body.index("async function renderSession(day)") :][:3000]

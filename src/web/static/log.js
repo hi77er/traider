@@ -933,13 +933,21 @@
     // The account, and the rows filtered to it: a round trip closed on paper is not one closed
     // with real money, and entry, exit and return look exactly the same.
     setIfChanged($("lg-trades"), table(
-      ["closed", "account", "direction", "entry", "exit", "return", "weight", "bars", "reason"],
+      ["closed", "account", "direction", "entry", "exit", "return", "P/L", "weight", "bars", "reason"],
       trades,
       (trade) => {
         const cls = Number(trade.ret) < 0 ? "bad" : "good";
+        // Money, where the record knows the size the broker filled; a dash where it does not —
+        // every row written before the size was recorded has no P/L, and a guess would be worse
+        // than a dash. The colours follow the money, not the return: they disagree whenever the
+        // size is not what the weight implied.
+        const pl = trade.pnl;
+        const plCls = pl === null || pl === undefined || pl === ""
+          ? "muted" : (Number(pl) < 0 ? "bad" : "good");
         return `<tr>${cell(stamp(trade.at))}${accountCell(trade.env)}${cell(trade.direction)}
           ${cell(money(trade.entry_price))}${cell(money(trade.exit_price))}
-          ${cell(percent(trade.ret), cls)}${cell(trade.weight)}${cell(trade.bars)}
+          ${cell(percent(trade.ret), cls)}${cell(signedMoney(pl), plCls)}
+          ${cell(trade.weight)}${cell(trade.bars)}
           ${proseCell(trade.reason, `trade:${trade.at}:reason`)}</tr>`;
       }
     ) || empty(all.length - trades.length

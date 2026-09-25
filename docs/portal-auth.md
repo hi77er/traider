@@ -218,6 +218,16 @@ counts as well, but only as a timestamp written to a variable: never a request, 
   `POST /api/v1/trading/on` from another tab, curl or devtools — a screen lock that only hides
   pixels is not a lock.
 
+**The idle window is a SETTING.** `Account Settings → Security → Sign Out User Inactivity
+Minutes`, 1-30 whole minutes, default 15. It lives in `data/account/account.json` as
+`AUTH_IDLE_MINUTES` and is read per request, so a change takes effect on the next page load
+rather than at the next login. One reader — `auth_service.idle_seconds` — serves the three
+places that care: the middleware refusing a stale session, the login that tells the browser the
+window, and `GET /api/v1/auth/status`, which is what the Security card prints. The bounds come
+from the field's own pydantic constraints, so the form's `min`/`max` and the server's validation
+cannot drift. `data/auth.json` still carries an `idle_seconds` from when it was created, and it
+is only the fallback for an object without the setting.
+
 **The poll must not hold the session open.** This is the whole problem: the page reads the log every
 twenty seconds, so if the server slid its idle window on *any* authenticated request, the session
 would never expire while a tab was open — the dashboard's own traffic would prop the door open. So

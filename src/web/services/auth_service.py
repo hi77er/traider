@@ -120,6 +120,29 @@ def enabled(settings) -> bool:
     return bool(record and record.get("users"))
 
 
+def idle_seconds(settings, record: Optional[Dict[str, Any]] = None) -> int:
+    """The idle window, in seconds: the SETTING wins, then the store, then the default.
+
+    One reader, so the three places that care cannot disagree: the middleware refusing a
+    stale session, the login that reports the window to the browser, and ``status`` which is
+    what the security card prints. ``record`` is passed in where the caller already has it.
+
+    The setting is the operator's control — Account Settings, 1-30 whole minutes — and it is
+    read from the SETTINGS rather than copied into the store, so changing it takes effect on
+    the next request instead of at the next login. The store's own value is kept for a
+    deployment that has never touched the setting, which keeps the window it always had.
+    """
+    try:
+        minutes = int(getattr(settings, "auth_idle_minutes", 0) or 0)
+    except (TypeError, ValueError):
+        minutes = 0
+    if minutes > 0:
+        return minutes * 60
+    if record is None:
+        record = load(settings)
+    return int((record or {}).get("idle_seconds") or DEFAULT_IDLE_SECONDS)
+
+
 def disable(settings) -> bool:
     """Turn the lock off by removing the store. Returns whether there was one."""
     path = store_path(settings)
@@ -267,7 +290,7 @@ def verify(settings, pin: str, *, at: Optional[datetime] = None) -> Dict[str, An
         return {
             "ok": True, "enabled": True, "user": user.get("id"),
             "generation": int(user.get("generation") or 1),
-            "idle_seconds": int((record or {}).get("idle_seconds") or DEFAULT_IDLE_SECONDS),
+            "idle_seconds": idle_seconds(settings, record),
             "absolute_seconds": int(
                 (record or {}).get("absolute_seconds") or DEFAULT_ABSOLUTE_SECONDS
             ),
@@ -452,7 +475,7 @@ def read(settings, token: Optional[str], *, at: Optional[datetime] = None) -> Op
     issued = loop_state.parse_stamp(payload.get("iat"))
     if seen is None or issued is None:
         return None
-    idle = int(record.get("idle_seconds") or DEFAULT_IDLE_SECONDS)
+    idle = idle_seconds(settings, record)
     absolute = int(record.get("absolute_seconds") or DEFAULT_ABSOLUTE_SECONDS)
     if (moment - seen).total_seconds() > idle:
         return None
@@ -500,7 +523,7 @@ def describe(settings) -> Dict[str, Any]:
         "updated_at": (user or {}).get("updated_at"),
         "locked_until": (user or {}).get("locked_until"),
         "failed_attempts": int((user or {}).get("failed_attempts") or 0),
-        "idle_seconds": int((record or {}).get("idle_seconds") or DEFAULT_IDLE_SECONDS),
+        "idle_seconds": idle_seconds(settings, record),
         "absolute_seconds": int((record or {}).get("absolute_seconds") or DEFAULT_ABSOLUTE_SECONDS),
         "machine_token": bool((record or {}).get("machine_token")),
     }

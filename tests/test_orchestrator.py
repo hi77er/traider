@@ -594,6 +594,36 @@ def test_a_closed_position_writes_a_trade_row(tmp_path, armed):
     assert len(orchestrator.store.read_orders(settings, STRATEGY)) == 2, "the open and the close"
 
 
+def test_a_closed_position_records_the_money_it_made(tmp_path, armed):
+    """A return becomes a profit only with a SIZE, and the size comes from the fill: the
+    strategy's own leg has no quantity at all.
+
+    End to end, through the driver and the simulated broker — which is also the path a dry
+    run takes, so a simulated round trip must carry a real size rather than zero.
+    """
+    settings = armed()
+    broker = SimulatedBroker()
+    generator = _SellAfterBuy()
+
+    first = _driver(settings, broker)
+    first.generator = generator
+    orchestrator.tick(settings, now=_at("2024-01-05 14:05"), sync_call=lambda: {},
+                      clock_call=Calls().clock, driver=first)
+    second = _driver(settings, broker)
+    second.generator = generator
+    orchestrator.tick(settings, now=_at("2024-01-05 15:05"), sync_call=lambda: {},
+                      clock_call=Calls().clock, driver=second)
+
+    (trade,) = orchestrator.store.read_trades(settings, STRATEGY)
+    assert trade["qty"] == 1.0, "the shares the simulated close flattened"
+    entry, exit_price = trade["entry_price"], trade["exit_price"]
+    assert trade["pnl"] == pytest.approx(round((exit_price - entry) * 1.0, 2))
+
+    # And the size is on the ORDER row too, which is where a reader asks what an exit sold.
+    orders = orchestrator.store.read_orders(settings, STRATEGY)
+    assert [o["filled_qty"] for o in orders] == [1.0, 1.0], orders
+
+
 # ---------------------------------------------------------------------------
 # the bar the decision is made on
 # ---------------------------------------------------------------------------

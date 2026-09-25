@@ -104,6 +104,7 @@ _LABELS: Dict[str, str] = {
     "DATA_CACHE_ENABLED": "Cache fetched candles",
     "CACHE_DIR": "Cache folder",
     "LIVE_LOOKBACK_DAYS": "Live poll lookback (days)",
+    "AUTH_IDLE_MINUTES": "Sign Out User Inactivity Minutes",
     # ── Strategy settings that moved out of the global form ───────
     "MARKET_TIMEZONE": "Market timezone",
     "TRADING_START_HOUR": "Trading window start",
@@ -429,6 +430,16 @@ _ACCOUNT_SECTIONS: List[Tuple[str, Tuple[str, ...]]] = [
             # is rule-based, so there is nothing to train on. A window here would be a
             # second, quieter answer to a question the strategy panel already answers.
             "BACKTEST_SLIPPAGE_PERCENT", "BACKTEST_COMMISSION_PER_TRADE",
+        ),
+    ),
+    (
+        "Security",
+        (
+            # The portal's own lock. Here rather than on a strategy because it is a
+            # property of this DEPLOYMENT — one person, one machine, one PIN — and
+            # here rather than hidden in .env because it is the kind of setting an
+            # operator wants to change when the room they leave the laptop in changes.
+            "AUTH_IDLE_MINUTES",
         ),
     ),
 ]

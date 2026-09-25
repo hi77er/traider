@@ -285,6 +285,19 @@ class Settings(BaseSettings):
     execution_retry_base_delay_seconds: float = Field(default=1.0, ge=0.0)
     execution_order_timeout_seconds: int = Field(default=60, ge=1)
 
+    # ── The portal's own lock ─────────────────────────────────────────
+    # How long a signed-in browser may sit idle before the portal locks itself.
+    # Configured in Account Settings because it is a property of this DEPLOYMENT, not
+    # of a strategy — and read by ``src/web`` alone: the trading loop is a separate
+    # process that never sees a session, so none of this can stop or start a run.
+    # 1-30 WHOLE minutes, which also bounds what a typo can do: 0 would lock the
+    # portal between two page loads, and an hour would leave a screen nobody is
+    # watching open on a live account.
+    auth_idle_minutes: int = Field(
+        default=15, ge=1, le=30,
+        description="Minutes a signed-in browser may sit idle before the portal signs it out.",
+    )
+
     # ── Scheduler ────────────────────────────────────────────────────
     # There is nothing here any more, and that is the decision rather than an
     # omission. ``SCHEDULER_ENABLED`` was read by no code: the loop runs when its

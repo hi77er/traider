@@ -270,6 +270,10 @@ def order_record(
         "detail": intent.get("detail") or "",
         "price": intent.get("price"),
         "expected": intent.get("expected"),
+        # How many shares the broker filled. On the order row because it is the order that has a
+        # size — a return on a price becomes a profit only once it is multiplied by this — and
+        # because a reader asking "what did that exit actually sell" has nowhere else to look.
+        "filled_qty": intent.get("filled_qty"),
         "order_id": intent.get("order_id"),
         "client_order_id": intent.get("client_order_id"),
     }
@@ -283,6 +287,7 @@ def trade_record(
     at: Any,
     bar: Any = None,
     leg: Optional[Dict[str, Any]] = None,
+    qty: Optional[float] = None,
 ) -> Dict[str, Any]:
     """One closed round trip, in the shape ``trades.jsonl`` holds.
 
@@ -290,9 +295,16 @@ def trade_record(
     live trade and a replayed one are described identically and the two can be compared
     without translating between them. The wall-clock moment is added because a leg carries
     only the bar INDEX it ended on, and "when" is the first thing anyone asks of a trade.
+
+    ``qty`` is the size the BROKER filled, and it is the one input that does not come from
+    the leg: the strategy's ``weight`` is a fraction of a notional that was never recorded,
+    so a percentage cannot be turned into money from the record alone. It is passed in by
+    the loop, which sees the closing fill, and a row without it carries ``pnl: null`` rather
+    than an estimate — a guess at somebody's profit is worse than a dash.
     """
     leg = dict(leg or {})
     moment = at or datetime.now(timezone.utc)
+    shares = _shares(qty)
     return {
         "at": moment.isoformat() if hasattr(moment, "isoformat") else str(moment),
         "day": trading_day(settings, moment) if settings is not None else str(moment)[:10],
@@ -308,10 +320,42 @@ def trade_record(
         "equity_ret": leg.get("equity_ret"),
         "weight": leg.get("weight"),
         "bars": leg.get("bars"),
+        # The realized money: this round trip's own two prices, times the shares that were held.
+        "qty": shares,
+        "pnl": realized_pnl(leg, shares),
         "reason": leg.get("reason"),
         "stop_percent": leg.get("stop_percent"),
         "skipped": bool(leg.get("skipped")),
     }
+
+
+def _shares(qty: Any) -> Optional[float]:
+    """A filled size worth multiplying by, or ``None``. Fractional shares are real."""
+    try:
+        value = float(qty)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def realized_pnl(leg: Dict[str, Any], qty: Any) -> Optional[float]:
+    """What this round trip made or lost, in the account's currency, or ``None``.
+
+    Both prices come from the leg, which is what makes the column agree with the entry, exit
+    and return columns beside it — those prices carry the strategy's own modelled cost, so
+    the figure is the strategy's accounting of the trade rather than a broker statement.
+    """
+    shares = _shares(qty)
+    if shares is None:
+        return None
+    try:
+        entry = float(leg.get("entry_price"))
+        exit_price = float(leg.get("exit_price"))
+    except (TypeError, ValueError):
+        return None
+    short = str(leg.get("direction") or "").strip().lower() == "short"
+    move = (entry - exit_price) if short else (exit_price - entry)
+    return round(move * shares, 2)
 
 
 def append_line(path: Path, record: Dict[str, Any]) -> Path:

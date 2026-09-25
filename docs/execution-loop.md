@@ -304,10 +304,18 @@ data/live_results/<strategy-slug>/
   latest.json               # the panel's view: the LAST tick, whatever it did
   index.json                # one record per trading day
   ticks/<date>.jsonl        # append-only: bar key, signal, intents, refusals
-  orders.jsonl              # every submit: env, client_order_id, status, fill
-  trades.jsonl              # closed round trips (the ledger)
+  orders.jsonl              # every submit: env, client_order_id, status, fill, filled_qty
+  trades.jsonl              # closed round trips (the ledger): prices, return, qty, P/L
   state-<env>.json          # driver state, PER ENVIRONMENT
 ```
+
+- **A trade row carries the MONEY, not just the return.** `pnl` is `(exit - entry) x qty`, with the
+  two prices from the row itself (so the column agrees with the entry, exit and return beside it)
+  and the size from the broker's fill. That size is the one input the strategy's own record cannot
+  supply — `weight` is a fraction of a notional nobody wrote down — so the loop reads it from the
+  closing fill it just made and writes `qty`/`pnl` onto the row. A row without it (every row
+  written before this existed) carries `pnl: null`, which the panel shows as a dash: a guess at
+  somebody's profit is worse than nothing.
 
 - **State is keyed by (strategy, env), and both halves matter.** The environment because
   paper and live are different ACCOUNTS — a shared file reconciles a paper position against

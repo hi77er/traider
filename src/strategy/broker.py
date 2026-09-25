@@ -201,16 +201,22 @@ class SimulatedBroker:
         # Track what is held, like a real broker would: a live driver reconciles against
         # this, and a simulator that always reported "flat" would make every run refuse
         # to trade — which is how this was noticed.
+        filled = abs(self.quantity)
         if intent.action == OPEN:
             self.quantity = -1.0 if intent.short else 1.0
             self.entry_price = price
+            filled = abs(self.quantity)
         elif intent.action == CLOSE:
+            # What a close FILLS is the position it flattened, so the size is taken before the
+            # book is zeroed. Reporting zero made a simulated round trip look like a trade of
+            # no size, and a trade of no size has no profit — the one number the live trade log
+            # needs to turn a return into money.
             self.quantity = 0.0
             self.entry_price = None
         return Fill(
             status=FILLED,
             price=price,
-            quantity=abs(self.quantity),
+            quantity=filled,
             client_order_id=client_order_id,
         )
 

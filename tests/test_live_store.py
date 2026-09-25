@@ -405,6 +405,74 @@ def test_a_skipped_leg_is_still_a_row(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# the money: what the round trip made, once the SIZE is known
+# ---------------------------------------------------------------------------
+def test_a_trade_row_carries_the_money_the_round_trip_made(tmp_path):
+    """A return on a price is not a profit until it is multiplied by the shares that were
+    held — and the size is the broker's, because nothing in the strategy's own record has
+    one (``weight`` is a fraction of a notional that was never written down)."""
+    settings = _s(tmp_path)
+    leg = {"entry_idx": 1, "exit_idx": 5, "direction": "long", "entry_price": 100.0,
+           "exit_price": 103.0, "ret": 0.03, "bars": 4, "reason": "signal"}
+
+    row = store.trade_record(
+        settings=settings, strategy="Alpha", env="paper",
+        at=datetime(2026, 9, 16, 14, 0, tzinfo=timezone.utc), leg=leg, qty=40,
+    )
+
+    assert row["qty"] == 40.0
+    assert row["pnl"] == 120.0, "40 shares, 3.00 better each"
+
+    sold = store.trade_record(
+        settings=settings, strategy="Alpha", env="paper",
+        at=datetime(2026, 9, 16, 14, 0, tzinfo=timezone.utc),
+        leg=dict(leg, direction="short", exit_price=97.0), qty=40,
+    )
+    assert sold["pnl"] == 120.0, "a short makes the same 3.00 the other way round"
+
+
+def test_a_losing_trade_is_a_negative_number(tmp_path):
+    settings = _s(tmp_path)
+    row = store.trade_record(
+        settings=settings, strategy="Alpha", env="paper",
+        at=datetime(2026, 9, 16, 14, 0, tzinfo=timezone.utc),
+        leg={"direction": "long", "entry_price": 100.0, "exit_price": 99.0, "ret": -0.01},
+        qty=250,
+    )
+
+    assert row["pnl"] == -250.0
+
+
+def test_a_trade_without_a_size_has_no_profit_rather_than_a_guess(tmp_path):
+    """Every row written before the size was recorded is in this state, and a dash is the
+    honest answer: a guess at somebody's profit is worse than nothing."""
+    settings = _s(tmp_path)
+    leg = {"direction": "long", "entry_price": 100.0, "exit_price": 103.0, "ret": 0.03}
+
+    for missing in (None, 0, "", "not-a-number", "0"):
+        row = store.trade_record(
+            settings=settings, strategy="Alpha", env="paper",
+            at=datetime(2026, 9, 16, 14, 0, tzinfo=timezone.utc), leg=leg, qty=missing,
+        )
+        assert row["pnl"] is None, missing
+        assert row["qty"] is None, missing
+
+
+def test_an_order_row_carries_the_size_the_broker_filled(tmp_path):
+    """The orders log is where a reader asks "what did that exit actually sell"."""
+    settings = _s(tmp_path)
+    row = store.order_record(
+        settings=settings, strategy="Alpha", env="paper",
+        at=datetime(2026, 9, 16, 14, 0, tzinfo=timezone.utc),
+        intent={"intent": "close", "reason": "signal", "status": "filled", "price": 101.5,
+                "expected": 101.0, "filled_qty": 40.0, "order_id": "ord-9",
+                "client_order_id": "traider-A-b3"},
+    )
+
+    assert row["filled_qty"] == 40.0
+
+
+# ---------------------------------------------------------------------------
 # the pre-(strategy, env) state file
 # ---------------------------------------------------------------------------
 def test_a_day_asked_for_by_name_stays_that_day(tmp_path):

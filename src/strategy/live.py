@@ -582,6 +582,11 @@ class LiveDriver:
                 "reason": intent.reason,
                 "price": real if real is not None else intent.expected_price,
                 "expected": intent.expected_price,
+                # How many shares the broker actually filled. It is the ONE thing a return needs
+                # to become money, it exists nowhere else — the strategy's own ``weight`` is a
+                # fraction of a notional nobody wrote down — and the order row is where the loop
+                # can still see it when it records the round trip.
+                "filled_qty": fill.quantity,
                 "status": fill.status,
                 # The broker's words, on every outcome: for a refusal this is the only
                 # explanation of it, and the orders log is where someone looks for one.
@@ -602,6 +607,9 @@ class LiveDriver:
                 "reason": intent.reason,
                 "price": real if real is not None else intent.expected_price,
                 "expected": intent.expected_price,
+                # The size that was SOLD or BOUGHT back — the shares the round trip was actually
+                # made of, and therefore the multiplier the loop needs to write down a profit.
+                "filled_qty": fill.quantity,
                 "status": fill.status,
                 "detail": fill.detail or "",
                 **identity,

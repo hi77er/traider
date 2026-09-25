@@ -348,3 +348,43 @@ def test_sign_out_others_keeps_the_pin_and_kills_the_cookies(armed):
 
 def test_sign_out_others_needs_a_store(settings):
     assert auth_service.sign_out_others(settings)["ok"] is False
+
+
+# ---------------------------------------------------------------------------
+# the idle window: a SETTING an operator changes, not a constant
+# ---------------------------------------------------------------------------
+def _with_idle(settings, minutes: int) -> Settings:
+    return settings.model_copy(update={"auth_idle_minutes": minutes})
+
+
+def test_the_idle_window_comes_from_the_setting(armed):
+    """Account Settings owns it, so changing it takes effect without a new login."""
+    token = str(auth_service.issue(armed, at=_at()))
+
+    short = _with_idle(armed, 1)
+    assert auth_service.idle_seconds(short) == 60
+    assert auth_service.read(short, token, at=_at(1.5)) is None, "90s is past a 1-minute window"
+
+    long = _with_idle(armed, 30)
+    assert auth_service.idle_seconds(long) == 1800
+    assert auth_service.read(long, token, at=_at(1.5)) is not None, "and inside a 30-minute one"
+    assert auth_service.read(long, token, at=_at(31)) is None, "but not past it"
+
+
+def test_the_setting_is_what_the_login_and_the_status_report(armed):
+    """The browser locks on the number the server tells it, so both answers must be this one."""
+    five = _with_idle(armed, 5)
+
+    assert auth_service.verify(five, PIN, at=_at())["idle_seconds"] == 300
+    assert auth_service.describe(five)["idle_seconds"] == 300
+
+
+def test_a_store_written_before_the_setting_existed_still_has_its_window(armed):
+    """``auth.json`` carries the window it was created with; only an object without the field
+    falls back to it, which is the deployment that never opens Account Settings."""
+    class Bare:
+        """A settings object from before the field existed — no ``auth_idle_minutes``."""
+
+    assert auth_service.idle_seconds(Bare(), auth_service.load(armed)) == (
+        auth_service.DEFAULT_IDLE_SECONDS
+    )
