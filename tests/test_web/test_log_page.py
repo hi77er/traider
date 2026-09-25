@@ -440,6 +440,35 @@ state.loop.env = "paper";
 state.accounts.env = "paper";
 out.paper = shot();
 
+// One more pass with something actually WORKING, for the two columns the panel grew: an order
+// resting for a symbol this run does not trade is still working in the account, and when it was
+// submitted is what makes a past session's order visibly not today's.
+state.orders.open = [
+  { id: "o-1", symbol: "GPRO", side: "buy", type: "limit", qty: "10", status: "new",
+    submitted_at: "2026-09-17T13:31:00+00:00" },
+  { id: "o-2", symbol: "OTHERCO", side: "sell", type: "stop", qty: "5", status: "new",
+    submitted_at: "2026-09-18T14:31:00+00:00" },
+];
+renderAccount();
+out.working = els["lg-working"].innerHTML;
+
+// The equity pane's own rule, and the one thing the trades table's new scope could have broken:
+// the rows behind it are the strategy's WHOLE history, so a round trip closed on another day —
+// or in the other account — must not switch the account's pane on for the session being drawn.
+const dated = (day, env) => ({ at: "2026-09-18T15:00:00+00:00", env: env || "paper", day,
+                               ret: 0.01, direction: "long" });
+state.loop.env = "paper";
+state.trades = { trades: [dated("2026-09-11")] };
+out.equityOtherDay = equityWanted();
+state.trades = { trades: [dated("2026-09-18")] };
+out.equityThisDay = equityWanted();
+state.trades = { trades: [dated("2026-09-11"), dated("2026-09-18")] };
+out.equityEitherDay = equityWanted();
+state.trades = { trades: [dated("2026-09-18", "live")] };
+out.equityOtherAccount = equityWanted();
+state.trades = { trades: [{ env: "paper", ret: 0.01 }] };
+out.equityUndated = equityWanted();
+
 process.stdout.write(JSON.stringify(out));
 """
 
@@ -604,6 +633,38 @@ def test_the_paper_page_shows_only_paper_data(scoping):
     assert "c-paper" in paper["orders"] and "c-live" not in paper["orders"]
     assert "paper trade" in paper["trades"], "this account's own trade is the one that IS shown"
     assert "from the live account" not in paper["trades"], "no note about a filter that dropped none"
+
+
+def test_the_working_orders_table_names_the_symbol_and_when_each_order_was_placed(scoping):
+    """The account's whole book, with the two columns that make it readable.
+
+    A working order outlives the session that placed it, and it can belong to a symbol this run
+    does not trade. Neither is a reason to hide it from a panel that answers "what is working",
+    so the SYMBOL is a column — and so is the moment it was submitted, because an order resting
+    from a past session has to be visibly not this one's.
+    """
+    working = scoping["working"]
+
+    assert "<th>symbol</th>" in working and "<th>submitted</th>" in working
+    assert "GPRO" in working, "the instrument this run trades"
+    assert "OTHERCO" in working, "a symbol it does not trade is still working in the account"
+    assert "o-1" in working and "o-2" in working, "every row of the book, not just today's"
+    assert "2026" in working, "each order carries the moment it was submitted"
+
+
+def test_the_accounts_pane_is_still_about_the_DAY_on_screen(scoping):
+    """The rows behind it are the strategy's whole history now, so the pane picks its own day out
+    of them: a curve under today's candles because a round trip closed last week would be a verdict
+    on the wrong session.
+
+    A row with no ``day`` at all counts — the same tolerance ``mine`` gives a row with no account:
+    it cannot be shown to be another session's.
+    """
+    assert scoping["equityOtherDay"] is False
+    assert scoping["equityThisDay"] is True
+    assert scoping["equityEitherDay"] is True, "one of the day's own is enough"
+    assert scoping["equityOtherAccount"] is False, "and still that account's round trips only"
+    assert scoping["equityUndated"] is True
 
 
 def test_the_page_script_never_declares_a_function_twice():
@@ -862,14 +923,21 @@ def test_the_account_card_carries_the_switch_and_not_what_is_held(api_settings):
 
 def test_positions_and_working_orders_have_their_own_panel_under_the_loop(api_settings):
     """One panel, two sections: a working order is not a position, so they cannot share a table —
-    but they are the same question asked of the same place, so they cannot be two cards either."""
+    but they are the same question asked of the same place, so they cannot be two cards either.
+
+    The page reads top-down as sent, held, closed: what the bot submitted, then what the broker
+    holds, then what the strategy closed out of it.
+    """
     html = client.get("/log").text
 
     card = html.index("Positions and working orders")
     records = html.index("Orders the bot submitted")
-    assert html.index("The Loop") < card, "the account's panel, then the loop, then this"
-    assert card < html.index('id="lg-protection"') < html.index('id="lg-positions"') < records
-    assert html.index('id="lg-positions"') < html.index('id="lg-working"') < records
+    assert html.index("The Loop") < card, "the loop, then the tables that explain it"
+    assert records < card < html.index("Trades closed"), (
+        "what was sent, then what is held, then what came of it — the last panel on the page"
+    )
+    assert card < html.index('id="lg-protection"') < html.index('id="lg-positions"')
+    assert html.index('id="lg-positions"') < html.index('id="lg-working"')
 
 
 def test_every_panel_below_the_account_folds_on_the_same_gesture(api_settings):
@@ -885,8 +953,9 @@ def test_every_panel_below_the_account_folds_on_the_same_gesture(api_settings):
     for body in ("loop-body", "positions-body", "orders-body", "trades-body"):
         assert f'class="collapse-body" id="{body}"' in html, body
     # The three tables are inside their own bodies, not floating under the head's.
+    # Its slice runs to the next card's head, which is the trades panel — the last one on the page.
     card = html[html.index("Positions and working orders") :]
-    card = card[: card.index("Orders the bot submitted")]
+    card = card[: card.index("Trades closed")]
     for element in ("lg-protection", "lg-positions", "lg-working"):
         assert f'id="{element}"' in card, element
     # And the panels that fold are exactly the ones with a body: an unfoldable card with a head

@@ -68,6 +68,24 @@ def _order_views(orders: Any) -> List[Dict[str, Any]]:
     return [_order_view(order) for order in (orders or []) if isinstance(order, dict)]
 
 
+def _for_instrument(orders: Any, instrument: str) -> List[Dict[str, Any]]:
+    """The orders placed for ``instrument``, out of a whole-account list.
+
+    An order carries its own symbol; a bracket's legs usually carry none, which is why a leg
+    with no symbol is KEPT — it cannot be shown to belong to another instrument, and dropping
+    it would hide the very leg that protects this position. The same rule the monitor's own
+    ``mine`` filter applies to accounts, for the same reason.
+    """
+    wanted = str(instrument or "").upper()
+    if not wanted:
+        return list(orders or [])
+    return [
+        order
+        for order in (orders or [])
+        if not order.get("symbol") or str(order.get("symbol")).upper() == wanted
+    ]
+
+
 @router.get("/loop")
 def get_loop(settings=Depends(get_effective_settings_dep)) -> dict:
     """The loop's state: is anything running it, and what did it last do."""
@@ -173,6 +191,11 @@ def get_orders(
     entry that has not filled yet is an open order, and a bracket parent is an open order,
     while only a stop or a limit leg protects anything. "Is this position protected?" is the
     question that matters, and it is not answered by "are there orders".
+
+    ``open`` is the ACCOUNT's whole working book, with no symbol on the query: the panel that
+    reads it is about what the account has working, and an order still resting from an earlier
+    session — or for a symbol this run does not trade — is working in it. ``resting`` is the
+    other question, about THIS instrument's position, so it is narrowed to it here.
     """
     status_info = execution_status(settings)
     env = status_info.get("env")
@@ -195,9 +218,13 @@ def get_orders(
         # ONE fetch, then both lists derived from it. ``resting`` is a filter over the same
         # rows ``open`` is, so asking twice is a second round trip for an identical answer —
         # and this route is polled, which turns that into a recurring cost.
-        working = executor.open_orders(settings.instrument)
+        working = executor.open_orders()
         payload["open"] = _order_views(working)
-        payload["resting"] = _order_views(executor.resting_exits(settings.instrument, orders=working))
+        payload["resting"] = _order_views(
+            executor.resting_exits(
+                settings.instrument, orders=_for_instrument(working, settings.instrument)
+            )
+        )
         payload["closed"] = _order_views(executor.closed_orders(settings.instrument, limit=limit))
     except Exception as exc:  # noqa: BLE001 - a broker outage must render, not 500
         logger.exception("Could not read orders for %s", settings.instrument)
@@ -222,9 +249,11 @@ def get_trades(
     A deleted local log therefore degrades to an empty list rather than an error — which is
     the case the log page has to survive.
 
-    ``day`` narrows it to ONE session, which is what the monitor asks for: the page draws a
-    day, and a round trip from last week under today's heading is a row about the wrong
-    session. Without it every closed trade is returned, which is what the Strategy lab wants.
+    ``day`` narrows it to ONE session. The monitor asks for the WHOLE history: its panel is
+    about how the strategy has done, and a table that emptied every midnight answered a
+    question nobody asks — every row carries the day it closed on, so the page can cut the
+    list down itself. The filter stays for a caller that genuinely wants one session, which
+    is what the loss limits reading this file are about.
     """
     from src.execution import store
 

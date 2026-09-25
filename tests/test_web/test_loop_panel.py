@@ -147,8 +147,9 @@ def test_the_two_sections_under_the_strip_explain_themselves_or_are_gone():
     lines the tables print ("nothing was decided on this day") still say why a table has no rows.
     """
     html = LOG_HTML.read_text(encoding="utf-8")
-    loop = html[html.index('id="loop-body"') : html.index('id="positions-body"')]
-
+    # Up to the NEXT card's body, which is the first thing after the loop panel — the orders card,
+    # now that the tables under the loop are ordered sent, held, closed.
+    loop = html[html.index('id="loop-body"') : html.index('id="orders-body"')]
     assert loop.count('class="muted note"') == 0, "the section's own prose is gone"
     assert "eight possible causes" not in html
     assert "the heartbeat is per strategy" not in html
@@ -285,6 +286,19 @@ out.naming.starting = { clock: text("lg-countdown"), when: text("lg-next-when") 
 syncCountdown("not a timestamp", "stopped");
 out.naming.unparseable = text("lg-countdown");
 
+// 6. Stalled: alive, past the wake it declared, and NOT about to tick. The same moment, counted
+// the other way round — and the seconds move, so it is visibly not getting shorter.
+stopCountdown();
+syncCountdown(new Date(NOW - 38 * 60 * 1000).toISOString(), "stalled");
+out.stalled = {
+  clock: text("lg-countdown"),
+  when: text("lg-next-when"),
+  interval: activeTimer === null ? null : activeTimer.ms,
+};
+NOW += 60 * 1000;
+activeTimer.cb();
+out.stalled.afterOneMinute = text("lg-countdown");
+
 process.stdout.write(JSON.stringify(out));
 """
 
@@ -374,6 +388,23 @@ def test_a_dead_claim_is_named_rather_than_counted_down_to(countdown):
     """An ``overdue`` lease names a boundary a process committed to before it died. Counting
     down to that would promise a tick nothing is going to make."""
     assert "gone" in countdown["naming"]["overdue"]
+
+
+def test_a_stalled_loop_counts_UP_and_is_named_as_late(countdown):
+    """A loop that woke for its bar and wedged is not "about to tick".
+
+    Standing at 00:00:00 said exactly that, which is how a whole session went by unnoticed
+    (2026-09-25): the panel was describing the loop it expected rather than the one on disk.
+    So the clock counts the lateness up, and the line under it says what that means.
+    """
+    stalled = countdown["stalled"]
+
+    assert stalled["clock"] == "+00:38:00"
+    assert stalled["afterOneMinute"] == "+00:39:00", "the seconds move, and it is not counting down"
+    assert stalled["interval"] == 1000, "still the page's own local timer, not a poll"
+    assert "38 min" in stalled["when"]
+    assert "has not ticked" in stalled["when"]
+    assert "restarting it" in stalled["when"]
 
 
 def test_nothing_scheduled_means_no_timer_at_all(countdown):

@@ -1,6 +1,6 @@
 """The ↻ in each panel's head: re-read THAT panel now, instead of waiting out the poll.
 
-Asked for, panel by panel: the Loop, Positions and working orders, Orders the bot submitted and
+Asked for, panel by panel: the Loop, Orders the bot submitted, Positions and working orders and
 Trades closed. The page already had one ↻ — the Account card's, which re-reads everything — and
 these are deliberately not that: a reader looking at the last tick should not have to make the
 page ask the broker about positions, or redraw the session chart, to find out what it decided.
@@ -44,9 +44,8 @@ CHART = ("Session chart", "refreshChart", "renderSession(")
 #: Every head that carries one, for the wiring checks.
 HEADS = PANELS + [CHART]
 
-#: Handlers whose read+render pair lives in a helper they share with another caller: the day's
-#: round trips are re-read WITH the day (``loadLog`` does it too, so the table and the account's
-#: pane answer for the session being shown), and the render goes with them.
+#: Handlers whose read+render pair lives in a helper they share with another caller: the strategy's
+#: closed round trips are read by ``loadLog`` as well, and the render goes with the read.
 DELEGATED = {"refreshTrades": "loadTrades"}
 
 START_MARKER = "async function reloadDayRecords() {"
@@ -183,7 +182,7 @@ HARNESS = r"""
 const calls = { api: [], renders: [], fails: [] };
 const replies = {
   "/api/v1/log?day=2026-09-22": { day: "2026-09-22", ticks: [], today: "2026-09-22" },
-  "/api/v1/trades?day=2026-09-22": { trades: [] },
+  "/api/v1/trades?limit=200": { trades: [] },
   "/api/v1/positions": { positions: [] },
   "/api/v1/accounts": { accounts: [] },
   "/api/v1/orders": { open: [], resting: [] },
@@ -234,7 +233,7 @@ function reset() { calls.api = []; calls.renders = []; calls.fails = []; }
 
   // A read that fails: reported, and the panel it belongs to is NOT redrawn.
   reset();
-  replies["/api/v1/trades?day=2026-09-22"] = "fail";
+  replies["/api/v1/trades?limit=200"] = "fail";
   await refreshTrades();
   out.tradesFailed = { renders: calls.renders, fails: calls.fails };
 
@@ -292,10 +291,12 @@ def test_the_orders_button_reads_the_loops_records_and_redraws_the_orders(behavi
 
 
 def test_the_trades_button_reads_the_closed_round_trips(behaviour):
-    """...and only the DAY's, like the table and the account's pane they feed: a round trip from
-    another session is not this one's, and the panel's ↻ must not pull one in."""
+    """...the strategy's WHOLE history, and not the day on screen: the panel answers "how has this
+    strategy done", and a table that emptied every midnight answered a question nobody asks. Each
+    row carries the day it closed on, so the page can cut the list down where it needs to (the
+    account's pane under the chart does exactly that)."""
     assert behaviour["trades"]["renders"] == ["trades"]
-    assert behaviour["trades"]["api"] == ["/api/v1/trades?day=2026-09-22"]
+    assert behaviour["trades"]["api"] == ["/api/v1/trades?limit=200"]
     assert behaviour["trades"]["stored"] == {"trades": []}
 
 

@@ -1,9 +1,11 @@
 """The dashboard's read of the loop: what state it is in, and the endpoints that serve it.
 
-The interesting case is not "is there a lease file" but telling four situations apart that a
-timestamp alone cannot: never ran, stopped cleanly, died (claim present, nobody honouring
-it), and running. Getting that wrong shows a crashed loop as healthy, which is the failure
-the whole design exists to prevent — so the state machine is tested rather than the file.
+The interesting case is not "is there a lease file" but telling FIVE situations apart that a
+timestamp alone cannot: never ran, stopped cleanly, died (claim present, nobody honouring it),
+running, and the one a pid HIDES — alive and past the wake it committed to (``stalled``, which
+is what a loop wedged inside a tick looks like). Getting any of them wrong shows a dead loop as
+a working one, which is the failure the whole design exists to prevent — so the state machine is
+tested rather than the file.
 """
 
 from __future__ import annotations
@@ -123,6 +125,56 @@ def test_a_live_holder_is_running(tmp_path, armed):
     assert status["state"] == loop_service.RUNNING
     assert status["holder"] is not None and status["holder"]["pid"] == claim.pid
     assert "pid" in status["holder_text"]
+
+
+def test_a_live_holder_past_the_wake_it_declared_is_stalled(tmp_path, armed):
+    """The case a pid cannot answer, and the session it cost (2026-09-25).
+
+    The loop woke for its bar, blocked on one open socket inside the tick, and held its lease —
+    so the file said a live process was honouring it and the panel said ``running`` while no bar
+    was traded. The boundary it committed to and never reached is the evidence that survives.
+    """
+    settings = armed()
+    claim = lease_mod.acquire(settings, strategy="Alpha")
+    lease_mod.refresh(claim, next_wake=datetime.now(timezone.utc) - timedelta(minutes=40))
+
+    status = loop_service.status(settings)
+
+    assert status["state"] == loop_service.STALLED
+    assert status["holder"] is not None, "the process really is alive"
+    assert status["late_by_seconds"] == pytest.approx(40 * 60, abs=15)
+
+
+def test_a_loop_inside_the_grace_of_its_wake_is_still_running(tmp_path, armed):
+    """The grace is sized for a provider sync that runs long, so ordinary lateness is not a
+    stall — and a warning that fires on a slow sync is one an operator learns to ignore."""
+    settings = armed()
+    claim = lease_mod.acquire(settings, strategy="Alpha")
+    lease_mod.refresh(claim, next_wake=datetime.now(timezone.utc) - timedelta(minutes=1))
+
+    status = loop_service.status(settings)
+
+    assert status["state"] == loop_service.RUNNING
+    assert status["late_by_seconds"] == pytest.approx(60, abs=15)
+
+
+def test_a_loop_long_inside_its_first_tick_is_not_called_stalled(tmp_path, armed):
+    """A first tick syncs a whole history, and ``acquire`` writes no ``next_wake`` until one
+    finishes. Running past the grace on the CLAIM is not evidence of a wedge; a wake that was
+    declared and then missed is."""
+    settings = armed()
+    lease_mod.acquire(settings, strategy="Alpha")
+    record = dict(loop_state.read(settings))
+    stale = loop_state.stamp(datetime.now(timezone.utc) - timedelta(minutes=20))
+    record["heartbeat"] = stale
+    record["expires_at"] = stale
+    state_files.write_json(loop_state.lease_path(settings), record)
+
+    status = loop_service.status(settings)
+
+    assert status["state"] == loop_service.RUNNING
+    assert status["late_by_seconds"] is None, "no boundary was declared to be late for"
+    assert status["expires_at"] is not None, "...even though the claim itself has expired"
 
 
 def test_the_age_is_measured_from_the_ticks_own_moment(tmp_path, armed):
@@ -491,6 +543,55 @@ def test_resting_exits_uses_the_orders_it_was_given(monkeypatch):
     legs = executor.resting_exits("AAPL", orders=[{"id": "o2", "type": "stop"}])
 
     assert [leg["id"] for leg in legs] == ["o2"]
+
+
+def test_the_orders_route_reads_the_WHOLE_account_but_protects_THIS_instrument(
+    api_settings, monkeypatch
+):
+    """Two questions, two scopes, one fetch.
+
+    ``open`` is what the ACCOUNT has working — including an order still resting from an earlier
+    session, or one for a symbol this run does not trade, because it is working in the account all
+    the same, and a panel called "what the broker holds" must not be wrong about what it holds.
+    ``resting`` answers "is THIS position protected", which a foreign symbol's bracket cannot
+    answer, so the rows it is given are narrowed to the instrument — while a row that carries no
+    symbol of its own is kept, since it cannot be shown to be anyone else's.
+    """
+    from src.web.routes import live as live_routes
+
+    class FakeExecutor:
+        def open_orders(self, instrument=None):
+            assert instrument is None, "the panel asks for the account's whole book"
+            return [
+                {"id": "aapl-stop", "symbol": "AAPL", "type": "stop", "stop_price": "95.0",
+                 "status": "new", "submitted_at": "2026-09-24T14:31:00+00:00"},
+                {"id": "tsla-stop", "symbol": "TSLA", "type": "stop", "stop_price": "410",
+                 "status": "new", "submitted_at": "2026-09-18T14:31:00+00:00"},
+                {"id": "orphan-leg", "type": "stop", "stop_price": "94.0", "status": "new"},
+            ]
+
+        def resting_exits(self, instrument=None, orders=None):
+            return [order for order in (orders or []) if order.get("type") == "stop"]
+
+        def closed_orders(self, instrument=None, limit=20):
+            return []
+
+    monkeypatch.setattr(live_routes, "execution_status",
+                        lambda settings: {"ok": True, "env": "paper"})
+    monkeypatch.setattr(live_routes.positions, "executor_for",
+                        lambda settings, env: FakeExecutor())
+
+    body = client.get("/api/v1/orders").json()
+
+    assert [order["id"] for order in body["open"]] == [
+        "aapl-stop", "tsla-stop", "orphan-leg"
+    ], "the account's whole working book, whatever symbol and whenever it was placed"
+    assert [order["id"] for order in body["resting"]] == ["aapl-stop", "orphan-leg"], (
+        "the stop that cannot protect this position is not counted as protecting it"
+    )
+    assert body["open"][0]["submitted_at"] == "2026-09-24T14:31:00+00:00", (
+        "the panel dates each order, so a past session's is visibly not today's"
+    )
 
 
 def test_the_log_payload_names_the_exchange_today(api_settings):

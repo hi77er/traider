@@ -11,6 +11,7 @@
   <link rel="stylesheet"
         href="https://fonts.googleapis.com/css2?family=Inter:wght@600;700&display=swap" />
   <link rel="stylesheet" href="/static/style.css" />
+  <link rel="stylesheet" href="/static/auth.css" />
 </head>
 <body class="report-page">
   <header>
@@ -247,40 +248,6 @@
         </div>
       </div>
 
-      <!-- ── What the account HOLDS, in a panel of its own: the broker's own answer, which is
-           the one thing on this page the loop cannot know better. A working order is not a
-           position, so the two are separate sections rather than one table with a column that
-           means "not filled yet".
-
-           Collapsible, like every card below the Loop: this page is read top-down and asked one
-           question at a time, and the four tables under the account are four different questions
-           (what the broker holds, what the bot sent, what it closed). -->
-      <div class="card collapsible">
-        <div class="card-head" onclick="toggleCard(event)"
-             title="Collapse / expand positions and working orders">
-          <button class="ghost small" onclick="toggleCard(event)"
-                  title="Collapse positions and working orders">−</button>
-          <h2>Positions and working orders</h2>
-          <!-- Its own ↻ rather than the Account card's: this panel is the one that asks the
-               BROKER, and a reader who wants the broker asked again now should not have to reload
-               the loop's records with it. -->
-          <div class="settings-actions" onclick="event.stopPropagation()">
-            <button class="ghost small" onclick="refreshPositions()"
-                    title="Ask the broker what is held and working, now">↻ Refresh</button>
-          </div>
-        </div>
-        <div class="collapse-body" id="positions-body">
-          <p class="muted note">Read from the broker, never from the loop's records: something
-            held or resting that the loop has forgotten about still shows here, and that is the
-            point of asking the account rather than the bot.</p>
-          <h3 class="lg-sub">Positions</h3>
-          <p id="lg-protection" class="muted"></p>
-          <div id="lg-positions"></div>
-          <h3 class="lg-sub">Working orders</h3>
-          <div id="lg-working"></div>
-        </div>
-      </div>
-
       <div class="card collapsible">
         <div class="card-head" onclick="toggleCard(event)"
              title="Collapse / expand the orders the bot submitted">
@@ -300,6 +267,47 @@
         </div>
       </div>
 
+      <!-- ── What the account HOLDS, in a panel of its own: the broker's own answer, which is
+           the one thing on this page the loop cannot know better. A working order is not a
+           position, so the two are separate sections rather than one table with a column that
+           means "not filled yet".
+
+           Collapsible, like every card below the Loop: this page is read top-down and asked one
+           question at a time, and the three tables under the account are three different
+           questions — what the bot sent, what the broker holds, what the strategy closed. -->
+      <div class="card collapsible">
+        <div class="card-head" onclick="toggleCard(event)"
+             title="Collapse / expand positions and working orders">
+          <button class="ghost small" onclick="toggleCard(event)"
+                  title="Collapse positions and working orders">−</button>
+          <h2>Positions and working orders</h2>
+          <!-- Its own ↻ rather than the Account card's: this panel is the one that asks the
+               BROKER, and a reader who wants the broker asked again now should not have to reload
+               the loop's records with it. -->
+          <div class="settings-actions" onclick="event.stopPropagation()">
+            <button class="ghost small" onclick="refreshPositions()"
+                    title="Ask the broker what is held and working, now">↻ Refresh</button>
+          </div>
+        </div>
+        <div class="collapse-body" id="positions-body">
+          <p class="muted note">Read from the broker, never from the loop's records — everything
+            this account holds or has working RIGHT NOW, however long ago it was opened, including
+            symbols this run does not trade. Something the loop has forgotten about still shows
+            here, and that is the point of asking the account rather than the bot.</p>
+          <h3 class="lg-sub">Positions</h3>
+          <p id="lg-protection" class="muted"></p>
+          <div id="lg-positions"></div>
+          <h3 class="lg-sub">Working orders</h3>
+          <div id="lg-working"></div>
+        </div>
+      </div>
+
+      <!-- ── What the strategy has CLOSED, last on the page because it is the OUTCOME of the two
+           tables above it: first what was sent, then what is held, then what came of it.
+
+           Every round trip the strategy has ever closed, not only today's — a strategy runs for
+           weeks, and a table that emptied every midnight answered a question nobody asks. Each
+           row carries the day it closed on, so the day menu does not have to filter it. -->
       <div class="card collapsible">
         <div class="card-head" onclick="toggleCard(event)"
              title="Collapse / expand the trades closed">
@@ -312,8 +320,9 @@
           </div>
         </div>
         <div class="collapse-body" id="trades-body">
-          <p class="muted note">Round trips this day's loop finished, newest first — entry, exit,
-            the reason, and the return the strategy machine itself computed.</p>
+          <p class="muted note">Every round trip this strategy has closed, newest first — the
+            whole history, across sessions, not only the day on screen. Entry, exit, the reason,
+            and the return the strategy machine itself computed.</p>
           <div id="lg-trades"></div>
         </div>
       </div>
@@ -340,6 +349,7 @@
   <script src="/static/chart_time.js"></script>
   <script src="/static/chart_volume.js"></script>
   <script src="/static/trading_switch.js"></script>
+  <script src="/static/auth.js"></script>
   <script src="/static/log.js"></script>
 </body>
 </html>

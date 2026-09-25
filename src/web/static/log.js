@@ -335,10 +335,12 @@
   function renderNextTick() {
     const loop = state.loop || {};
     const running = loop.state === "running";
-    // Only a RUNNING loop has a boundary worth counting down to. An ``overdue`` claim names one
-    // too — the boundary a process committed to before it died — and counting down to that would
-    // promise a tick that nothing is going to make.
-    syncCountdown(running ? loop.next_wake : null, loop.state);
+    const stalled = loop.state === "stalled";
+    // Only a LIVE loop has a boundary worth counting against. An ``overdue`` claim names one too
+    // — the boundary a process committed to before it died — and counting down to that would
+    // promise a tick that nothing is going to make. A ``stalled`` loop counts UP from its
+    // boundary instead: the same moment read the other way round is how late it is.
+    syncCountdown(running || stalled ? loop.next_wake : null, loop.state);
     renderGates(loop.last_tick);
   }
 
@@ -363,6 +365,16 @@
     return when.toLocaleString([], sameDay
       ? { hour: "2-digit", minute: "2-digit" }
       : { weekday: "short", hour: "2-digit", minute: "2-digit" });
+  }
+
+  /* Lateness in words, because the line under the clock reads as a sentence: "+00:38:12" is a
+   * number, "38 min" is a delay an operator can act on. */
+  function lateText(ms) {
+    const seconds = Math.max(0, Math.round(ms / 1000));
+    if (seconds < 60) return `${seconds} sec`;
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes} min`;
+    return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
   }
 
   // The countdown is the page's only clock of its own, and it is LOCAL: no request, no poll, just
@@ -410,6 +422,18 @@
       return;
     }
     const left = countdownUntil - Date.now();
+    if (loopState === "stalled") {
+      // Counting UP, because that number is the whole symptom. A loop that woke for its bar and
+      // never finished the tick is not about to tick, and standing at 00:00:00 said "any moment
+      // now" — which is exactly the lie that let a wedged loop go unnoticed for a session. The
+      // seconds keep moving so it is visibly NOT getting shorter.
+      setIfChanged(clock, `+${clockText(-left)}`);
+      setIfChanged(when, `It is ${lateText(-left)} past the `
+        + `${whenText(new Date(countdownUntil).toISOString())} bar it woke for and has not ticked `
+        + "since — the process is stuck inside a tick, and restarting it is the only way it "
+        + "ticks again.");
+      return;
+    }
     // Past the boundary and still running: the loop is inside the tick it woke up for, so the
     // clock stands at zero and the line under it says so. The next status read brings the
     // boundary it commits to next.
@@ -703,16 +727,23 @@
             + "something, and this page does not show it"
           : "nothing is held")));
 
+    // EVERY working order in the account, not just this instrument's: an order resting for a symbol
+    // this run does not trade is still working in the account, and hiding it is how a panel called
+    // "what the broker holds" comes to be wrong about what the broker holds. The symbol is a column
+    // for that reason. The PROTECTION verdict is a different question and stays this instrument's
+    // (the route filters the legs it hands it).
     const working = [...(orders.open || []), ...(orders.resting || [])];
     setIfChanged($("lg-working"), orders.ok === false
       ? empty("the broker could not be read, so nothing is known about working orders")
       : (table(
-        ["id", "client id", "side", "type", "qty", "filled", "avg price", "stop", "limit", "status"],
+        ["symbol", "id", "client id", "side", "type", "qty", "filled", "avg price", "stop",
+          "limit", "submitted", "status"],
         working,
-        (order) => `<tr>${cell(order.id)}${cell(order.client_order_id)}${cell(order.side)}
-          ${cell(order.type)}${cell(order.qty)}${cell(order.filled_qty)}
+        (order) => `<tr>${cell(order.symbol)}${cell(order.id)}${cell(order.client_order_id)}
+          ${cell(order.side)}${cell(order.type)}${cell(order.qty)}${cell(order.filled_qty)}
           ${cell(money(order.filled_avg_price))}${cell(money(order.stop_price))}
-          ${cell(money(order.limit_price))}${cell(order.status)}</tr>`
+          ${cell(money(order.limit_price))}${cell(stamp(order.submitted_at))}
+          ${cell(order.status)}</tr>`
       ) || empty("no orders are working")));
   }
 
@@ -1656,17 +1687,23 @@
   /* Is the account's pane wanted at all?
    *
    * It is what the account was WORTH through the session, which is an answer to what the day's
-   * decisions did — and there is nothing to answer until a round trip has been closed. An account
-   * that has not finished one has a flat line, and a flat line under a price chart reads as a
-   * verdict on the strategy. Filtered to the account in play, like every other table here: the
-   * curve drawn is that account's, so it answers to that account's round trips.
+   * decisions did — and there is nothing to answer until a round trip has been closed ON THAT
+   * DAY. The rows behind this are the strategy's whole history, so the day on screen is what
+   * separates them here: a curve under today's candles because a trade closed last week would be
+   * a verdict on the wrong session. Filtered to the account in play as well, like every other
+   * table here: the curve drawn is that account's, so it answers to that account's round trips.
    *
    * Unless the reader has said otherwise: the chip over the chart is their word, and it wins over
    * this rule in BOTH directions — showing the pane on a day whose trades say nothing, and keeping
    * it off on a day where a curve is not what they are reading. */
   function equityWanted() {
     if (equityChoice !== null) return equityChoice;
-    return ((state.trades && state.trades.trades) || []).filter(mine).length > 0;
+    const day = state.log && state.log.day;
+    return ((state.trades && state.trades.trades) || [])
+      .filter(mine)
+      // A row with no ``day`` at all — hand-written, or written before days were recorded — cannot
+      // be shown to be another session's, so it counts: the same rule ``mine`` applies to accounts.
+      .some((trade) => !day || !trade.day || String(trade.day) === day);
   }
 
   /* Put the pane on screen or take it off, and build nothing.
@@ -1865,10 +1902,11 @@
       url.searchParams.set("day", state.log.day);
       history.replaceState(null, "", url);
     }
-    // The day's round trips BEFORE the chart, because the account's pane under it appears when a
-    // round trip has closed — and on a day that has not started, none has: the pane belongs to
-    // the session being drawn, so it goes with the day the reader picked, not the last day.
-    await loadTrades(state.log && state.log.day);
+    // The strategy's closed round trips BEFORE the chart, because the account's pane under it
+    // appears when a round trip has closed — and the pane is ONE session's, while the rows are the
+    // whole history: they carry the day they closed on, so the pane picks its own out of them
+    // (``equityWanted``). The table above does not change with the day.
+    await loadTrades();
     renderTicks();
     renderOrders();
     // The chart is OF this day, so it is redrawn with the tables that changed under it — picking
@@ -2198,16 +2236,21 @@
     renderOrders();
   }
 
-  /* The DAY's closed round trips.
+  /* The strategy's closed round trips — EVERY one of them, not only the day on screen.
    *
-   * Read with the day rather than once per page: the trades table, and the account's pane under
-   * the chart, both answer for the session being shown — and a day that has not started has none.
-   * The broker's own panels are deliberately NOT re-read here: positions and working orders are
-   * what the account holds NOW, and walking the day menu must not touch them. */
-  async function loadTrades(day) {
-    const query = day ? `?day=${encodeURIComponent(day)}` : "";
+   * The panel answers "how has this strategy done", and a strategy runs for weeks: a table that
+   * emptied every midnight answered a question nobody asks. Nothing is lost by reading the log
+   * whole, because every row carries the day it closed on — which is also how the account's pane
+   * under the chart, which IS about one session, picks its own rows out of this list.
+   *
+   * ``limit`` counts from the END: the newest of the history, which is the half anyone reads. The
+   * broker's own panels are deliberately NOT re-read here: positions and working orders are what
+   * the account holds NOW, and walking the day menu must not touch them. */
+  const TRADES_LIMIT = 200;
+
+  async function loadTrades() {
     try {
-      state.trades = await api(`/api/v1/trades${query}`);
+      state.trades = await api(`/api/v1/trades?limit=${TRADES_LIMIT}`);
     } catch (err) {
       fail(`could not read the trades: ${err.message}`);
       return;
@@ -2216,7 +2259,7 @@
   }
 
   async function refreshTrades() {
-    await loadTrades(state.log && state.log.day);
+    await loadTrades();
   }
 
   /* The CHART panel's ↻: the bars and the read-outs drawn over them, re-read for the day on
@@ -2254,13 +2297,20 @@
     return !!(state.log && state.log.day && state.log.day === state.log.today);
   }
 
+  /* The lock lives in ``auth.js``, which a page may not have (a node harness, or an install with
+   * no PIN set). Asking whether it exists is cheaper than a page that cannot load at all. */
+  function isLockedByAuth() {
+    return !!(window.Auth && window.Auth.isLocked && window.Auth.isLocked());
+  }
+
   /* Is there anything LIVE to keep an eye on? The day's tables do not change on a past day, but
    * the status block does: a loop can die, and the switch can be armed from another tab. That
    * block is what this page now carries, so it is what decides whether the page keeps reading —
    * and with both quiet there is nothing to watch. */
   function statusIsLive() {
     const status = state.loop || {};
-    if (status.state === "running" || status.state === "overdue") return true;
+    if (status.state === "running" || status.state === "stalled"
+        || status.state === "overdue") return true;
     return !!((state.trading || {}).trading || {}).on;
   }
 
@@ -2271,7 +2321,9 @@
   // Self-scheduling, so a slow day read delays the next poll instead of stacking one on top.
   function schedulePoll(delay) {
     stopPoll();
-    if (document.hidden || !(isToday() || statusIsLive())) return;
+    // Locked: the overlay covers the page, so reading it again is traffic nobody can see. The
+    // lock's own heartbeat is what keeps the session alive, not this poll.
+    if (document.hidden || isLockedByAuth() || !(isToday() || statusIsLive())) return;
     pollTimer = setTimeout(async () => {
       pollTimer = null;
       if (document.hidden) return;
