@@ -189,6 +189,31 @@ Auth.state.pin = "4821";
 await Auth.submit();
 out.windowAfterUnlock = Auth.state.idleSeconds;
 
+// 14. The keyboard: the digits, Backspace and Enter drive the same press()/submit() the buttons do.
+//     Nothing is captured while no card is up — a page with a live session keeps its own keys.
+Auth.watchKeyboard();
+Auth.state.pin = "";
+Auth.state.locked = false;
+Auth.state.page = false;
+if (Auth.state.overlay) Auth.state.overlay.hidden = true;
+fire("keydown", { key: "4" });
+out.pinWhileNoCard = Auth.state.pin;
+
+Auth.state.locked = true;                       // the card is up, as show() would leave it
+reply = { status: 200, body: { ok: true, enabled: true, signed_in: true, idle_seconds: 180 } };
+["4", "8", "2", "1"].forEach((key) => fire("keydown", { key }));
+out.pinFromKeys = Auth.state.pin;
+fire("keydown", { key: "Backspace" });
+fire("keydown", { key: "6" });
+out.pinAfterBackspace = Auth.state.pin;
+fire("keydown", { key: "x" });                  // letters are not a PIN
+out.pinAfterLetter = Auth.state.pin;
+calls.length = 0;
+fire("keydown", { key: "Enter" });
+for (let step = 0; step < 8; step += 1) await Promise.resolve();
+out.signedInByEnter = calls.filter((path) => path.indexOf("/api/v1/auth/login") >= 0).length;
+out.pinAfterEnter = Auth.state.pin;
+
 process.stdout.write(JSON.stringify(out));
 """
 
@@ -287,6 +312,16 @@ def test_a_tab_that_did_not_change_the_setting_hears_it_from_its_own_beat(lock):
 
 def test_the_answer_that_signs_you_in_carries_the_window(lock):
     assert lock["windowAfterUnlock"] == 300
+
+
+def test_the_keyboard_types_the_pin_and_enter_submits(lock):
+    """The keypad is the visible way in; a keyboard has the same digits on it."""
+    assert lock["pinWhileNoCard"] == "", "no card up, no keys captured"
+    assert lock["pinFromKeys"] == "4821"
+    assert lock["pinAfterBackspace"] == "4826", "backspace takes one digit back"
+    assert lock["pinAfterLetter"] == "4826", "and a letter is not a digit"
+    assert lock["signedInByEnter"] == 1, "Enter walks the same path the keypad's enter does"
+    assert lock["pinAfterEnter"] == "", "and the field is cleared once it is accepted"
 
 
 # ---------------------------------------------------------------------------

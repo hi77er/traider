@@ -53,6 +53,7 @@
     newPin: "",
     hasPin: true,
     page: false,
+    keyboard: false,
     started: false,
     dismissable: false,
     status: null,
@@ -195,21 +196,24 @@
     return links;
   }
 
-  /* The two things somebody looking at this card would otherwise have to guess: what a PIN may be,
-   * and what to do when it has been forgotten. The second one is TEXT and not a button on purpose —
-   * a "reset it" button on a public page is the bypass the CLI exists to avoid, while a line naming
-   * the command is no help at all to anybody who cannot already run it. */
+  /* The three things somebody looking at this card would otherwise have to guess: what a PIN may
+   * be, what to do when it has been forgotten, and that the keyboard is a second way in. The second
+   * one is TEXT and not a button on purpose — a "reset it" button on a public page is the bypass
+   * the CLI exists to avoid, while a line naming the command is no help at all to anybody who
+   * cannot already run it. */
   function noteText() {
+    let body;
     if (state.mode === "unlock") {
-      return "Forgotten it? On the machine that runs the bot — the one with data/ beside it — run "
+      body = "Forgotten it? On the machine that runs the bot — the one with data/ beside it — run "
         + ".venv/bin/python -m src.web.auth reset";
-    }
-    if (state.mode === "create") {
-      return "4-12 digits, and longer is better. Not one digit repeated, and not 1234 or 123456. "
+    } else if (state.mode === "create") {
+      body = "4-12 digits, and longer is better. Not one digit repeated, and not 1234 or 123456. "
         + "Stored salted and hashed, and never shown again.";
+    } else {
+      body = "4-12 digits, and longer is better. Not one digit repeated, and not 1234 or 123456. "
+        + "Changing it signs out every OTHER session, so this one stays signed in.";
     }
-    return "4-12 digits, and longer is better. Not one digit repeated, and not 1234 or 123456. "
-      + "Changing it signs out every OTHER session, so this one stays signed in.";
+    return body + " Type the digits and press Enter, or use the keypad.";
   }
 
   function paint() {
@@ -255,6 +259,47 @@
     else if (state.pin.length < 12) state.pin += key;
     if (state.reason) state.reason = "";
     paint();
+  }
+
+  /* ---------- the keyboard ----------
+   *
+   * A PIN is digits and a keyboard has digits on it, so the card takes them — and Enter, which is
+   * what "hitting enter" means to somebody who is typing. Nothing is captured unless the card is
+   * up: on a page with a live session every key belongs to the page's own controls, and swallowing
+   * a keystroke there would be a bug nobody would think to look for in this file. Every key goes
+   * through ``press``, so the length cap, the clearing of a stale reason and the submit are the
+   * same code the buttons use. */
+
+  //: The named keys the card answers to. Backspace and Delete are one gesture on a Mac keyboard.
+  const KEY_TO_PRESS = { Backspace: "back", Delete: "back", Enter: "enter", Clear: "clear" };
+
+  function keyToPress(event) {
+    if (!event || typeof event.key !== "string") return "";
+    if (/^[0-9]$/.test(event.key)) return event.key;
+    return KEY_TO_PRESS[event.key] || "";
+  }
+
+  function cardIsUp() {
+    return Boolean(state.locked || state.page || (state.overlay && !state.overlay.hidden));
+  }
+
+  function watchKeyboard() {
+    if (!root.addEventListener || state.keyboard) return false;
+    state.keyboard = true;
+    const handler = (event) => {
+      if (!cardIsUp()) return;
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      const target = event.target || {};
+      const tag = typeof target.tagName === "string" ? target.tagName : "";
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      const key = keyToPress(event);
+      if (!key || state.busy) return;
+      if (event.preventDefault) event.preventDefault();
+      press(key);
+    };
+    root.addEventListener("keydown", handler);
+    state.listeners.push(["keydown", handler]);
+    return true;
   }
 
   /* ---------- talking to the server ---------- */
@@ -771,6 +816,9 @@
     state.status = status || {};
     state.hasPin = Boolean(status && status.enabled);
     mountSecurity();
+    // Installed before the no-PIN branch below: with no PIN the card comes up in its create mode,
+    // and that mode needs the keyboard as much as the others.
+    watchKeyboard();
 
     if (!state.hasPin) {
       // No PIN yet. On the lock page that is a job to do, and it is the only way a PIN is ever
@@ -856,6 +904,7 @@
     submit,
     unlock,
     watchFetch,
+    watchKeyboard,
   };
 
   // A real page boots itself; the node harness (a fake document, with no ``readyState``) does not,

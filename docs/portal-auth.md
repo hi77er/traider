@@ -199,6 +199,11 @@ thing on that page about the portal rather than the account, and the flow it off
 is on the lock screen's own card. What it printed about the idle window is set in
 `Account Settings → Security` on the lab, which is the same popup that writes it.
 
+**Two ways to type it.** The keypad is the visible one; the keyboard types the same PIN through the
+same `press()` — digits, Backspace or Delete to take one back, Enter to submit. Nothing is captured
+unless the card is up (`state.locked`, the lock page itself, or a raised overlay), and never from a
+field: on a page with a live session every key belongs to that page's own controls.
+
 **Inactivity note.** The heartbeat is the only thing that slides a session's idle clock. It used to
 slide on **any** authenticated request as well (`SLIDE_AFTER_SECONDS` in the middleware) — that was
 the permissive half of stage 3, and it defeated the point of it: the monitor polls every twenty
