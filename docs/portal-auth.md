@@ -127,20 +127,19 @@ The PIN itself must be **4-12 digits** and not one of the shapes everyone tries 
 digit; `1234` and friends) — `auth_service.pin_problem` is the rule, mirrored in `auth.js` so a
 mistake is answered without a round trip. It is a nudge, not a policy.
 
-**And the card says so.** A quiet line under the keypad carries the two things somebody would
-otherwise have to guess, per mode:
+**And the card says so.** A quiet line under the keypad carries what somebody would otherwise have
+to guess, per mode:
 
 - **create** — `4-12 digits, and longer is better. Not one digit repeated, and not 1234 or 123456.
-  Stored salted and hashed, and never shown again.`
+  Stored salted and hashed, and never shown again. Type the digits and press Enter, or use the
+  keypad.`
 - **change** — the same rules, plus `Changing it signs out every OTHER session, so this one stays
   signed in.`
-- **unlock** — `Forgotten it? On the machine that runs the bot — the one with data/ beside it — run
-  .venv/bin/python -m src.web.auth reset`
-
-That last one is **text, not a button**, and that is the point: running it already requires the
-machine, so naming the command helps only the operator, while a "reset it" link would be the bypass
-the CLI exists to avoid. (`tests/test_web/test_lock_screen.py` pins both halves: the sentence is
-there, and the only link on the unlock card is "Change PIN".)
+- **unlock** — **nothing.** It used to name the command for a forgotten PIN, as plain text rather
+  than a button (`Forgotten it? … run .venv/bin/python -m src.web.auth reset`); that was removed at
+  the operator's request, and the empty line now collapses rather than leaving a gap. The recovery
+  path is unchanged and documented where somebody who has the machine will look: the CLI's own
+  `python -m src.web.auth --help` and this file.
 
 **Changing the PIN — `POST /api/v1/auth/change` (current, new).** `auth_service.change_pin`
 re-hashes, bumps `generation` and rotates `secret`, so **every other device is signed out** — while

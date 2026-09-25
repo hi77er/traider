@@ -171,8 +171,9 @@
 
 .lock-hint.empty { display: none; }
 
-/* What a PIN may be, and how to recover a forgotten one. Deliberately the quietest line on the
- * card: it is a caption for the keypad, not something to read before typing four digits. */
+/* What a PIN may be. Deliberately the quietest line on the card: it is a caption for the keypad,
+ * not something to read before typing four digits. The unlock mode has no note at all, so the line
+ * has to stop taking up space when it is empty rather than leave a gap above the links. */
 .lock-note {
   margin: 12px 0 0;
   font-size: 11px;
@@ -180,6 +181,8 @@
   color: var(--muted);
   opacity: 0.7;
 }
+
+.lock-note:empty { display: none; }
 
 /* The other things the card can do — change the PIN, go back, reach the dashboard. Text buttons
  * rather than controls: they sit under the keypad, and the keypad is the thing to press. */

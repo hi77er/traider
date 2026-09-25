@@ -196,17 +196,16 @@
     return links;
   }
 
-  /* The three things somebody looking at this card would otherwise have to guess: what a PIN may
-   * be, what to do when it has been forgotten, and that the keyboard is a second way in. The second
-   * one is TEXT and not a button on purpose — a "reset it" button on a public page is the bypass
-   * the CLI exists to avoid, while a line naming the command is no help at all to anybody who
-   * cannot already run it. */
+  /* What a PIN may be — and, on the two modes that WRITE one, that the keyboard is a second way in.
+   *
+   * The unlock card carries no note at all: it asks one question and the answer is the PIN. The
+   * command for a forgotten one used to be printed here, as plain text rather than a button; it was
+   * removed at the operator's request, and it is still in the CLI's own help and in
+   * ``docs/portal-auth.md``. */
   function noteText() {
+    if (state.mode === "unlock") return "";
     let body;
-    if (state.mode === "unlock") {
-      body = "Forgotten it? On the machine that runs the bot — the one with data/ beside it — run "
-        + ".venv/bin/python -m src.web.auth reset";
-    } else if (state.mode === "create") {
+    if (state.mode === "create") {
       body = "4-12 digits, and longer is better. Not one digit repeated, and not 1234 or 123456. "
         + "Stored salted and hashed, and never shown again.";
     } else {

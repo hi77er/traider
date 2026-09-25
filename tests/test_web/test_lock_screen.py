@@ -905,14 +905,18 @@ def test_the_change_card_says_what_the_change_costs(modes):
     note = modes["changeAsksFirst"]["note"]
     assert "4-12 digits" in note
     assert "every OTHER session" in note, "which is the consequence worth knowing before you do it"
+    assert "press Enter" in note, "and that the card can be typed into"
 
 
-def test_the_unlock_card_says_where_a_forgotten_pin_is_reset(modes):
-    """Text, not a button: running it needs the machine, so naming it helps only the operator."""
-    note = modes["unlockMode"]["note"]
-    assert "auth reset" in note
-    assert "data/" in note, "and where that command has to be run from"
-    assert modes["unlockMode"]["links"] == ["Change PIN"], "no reset button, then"
+def test_the_unlock_card_carries_no_note(modes):
+    """The forgotten-PIN line was removed at the operator's request: the card asks one question and
+    the answer is the PIN, with nothing printed under it.
+
+    The command itself is not gone — it is in the CLI's own help (``python -m src.web.auth``) and in
+    ``docs/portal-auth.md``, which is where somebody who has the machine will look for it.
+    """
+    assert modes["unlockMode"]["note"] == ""
+    assert modes["unlockMode"]["links"] == ["Change PIN"], "no reset button, then or now"
 
 
 def test_a_confirmation_that_does_not_match_sends_nothing(modes):
