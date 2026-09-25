@@ -124,20 +124,6 @@
         <div id="lg-accounts"></div>
       </div>
 
-      <!-- ── SECURITY: the portal's own door, which is a different thing from the trading. Hidden
-           until the page knows whether there is a PIN at all, and filled by auth.js — the
-           component that knows the state and owns the change-PIN and sign-out flows. It sits high
-           up because "this portal is open" is something to SEE without going looking for it: with
-           no PIN, anyone who can reach this address can arm the bot. ── -->
-      <div class="card" id="lg-security-card" data-security hidden>
-        <div class="card-head-static">
-          <h2>Security</h2>
-          <span class="muted" data-security-state></span>
-        </div>
-        <p class="muted note" data-security-note></p>
-        <div class="settings-actions" data-security-actions></div>
-      </div>
-
       <!-- ── THE SESSION CHART, in prices and in the account: what the instrument did, and what the
            account did about it. Above the Loop because it is the thing the loop's decisions
            were made against — the gates and the day's ticks read as an answer once the price

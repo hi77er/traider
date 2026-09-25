@@ -231,10 +231,6 @@
 
 .lock-toast.up { opacity: 1; transform: translate(-50%, 0); }
 
-/* The Session monitor's Security card. Wrapped in a block so it keeps its place in the column
- * whether the card inside is shown or not. */
-[data-security] .settings-actions { margin-top: 12px; }
-
 .lock-card.shake { animation: lock-shake 320ms cubic-bezier(0.36, 0.07, 0.19, 0.97); }
 
 @keyframes lock-shake {

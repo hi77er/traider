@@ -3,7 +3,7 @@
 > **Status.** Stages 1, 2 and 3 are BUILT (`src/web/services/auth_service.py`, `python -m
 > src.web.auth`, `src/web/middleware.py`, `src/web/routes/auth.py`, `src/web/templates/login.html`,
 > `src/web/static/auth.{js,css}`), including the three jobs of the lock screen — set the first PIN,
-> enter it, change it — and the Security card on the Session monitor. The lock
+> enter it, change it. The lock
 > is OFF until a PIN exists, and from then on the middleware gates every request
 > (it reads the store per request, so no restart is involved). What remains is at the foot of each
 > stage below.
@@ -180,16 +180,24 @@ button on a public page is the bypass the CLI exists to avoid.
 4. **`auth_service.change(current, new)` + `reset`,** with the generation/secret rotation and the
    tests that prove an old cookie is refused while the caller's fresh one works. **BUILT**
 5. **`POST /api/v1/auth/change`**, `POST /api/v1/auth/setup`, `POST /api/v1/auth/sign-out-everywhere`,
-   `GET /api/v1/auth/status`, and the **Security** card on the Session monitor: change PIN, sign out
+   `GET /api/v1/auth/status`, and a **Security** card: change PIN, sign out
    everywhere, when it was last changed (`updated_at`), and — with no PIN set — that the portal is
-   open, with the button that closes it. **BUILT**
+   open, with the button that closes it. **BUILT**, and the card has since been REMOVED from the
+   Session monitor at the operator's request. The component that filled it
+   (`auth.js::mountSecurity`, template-owned and mounted nowhere now) and its tests stay, so a
+   security panel on another page is one element away.
 6. **The CLI verbs** `set | change | reset | disable | status`, wired to the service, so the
    forgotten-PIN path is testable and documented rather than a paragraph in a README. **BUILT**
 
 **One component, three modes.** The card is `mode: "unlock" | "create" | "change"` over a shared
-step machine (`FLOWS`), so `/login`, the overlay a page raises on 401, and the Security card's
+step machine (`FLOWS`), so `/login`, the overlay a page raises on 401, and the Security component's
 buttons are all the same DOM with the same behaviour. Adding a fourth job means adding a mode, not a
 second card — which is also why the overlay can offer "Change PIN" without a new screen.
+
+**The monitor's Security panel is gone.** Removed at the operator's request: the card was the one
+thing on that page about the portal rather than the account, and the flow it offered (change PIN)
+is on the lock screen's own card. What it printed about the idle window is set in
+`Account Settings → Security` on the lab, which is the same popup that writes it.
 
 **Inactivity note.** The heartbeat is the only thing that slides a session's idle clock. It used to
 slide on **any** authenticated request as well (`SLIDE_AFTER_SECONDS` in the middleware) — that was
@@ -230,7 +238,7 @@ key.
 Minutes`, 1-30 whole minutes, default 15. It lives in `data/account/account.json` as
 `AUTH_IDLE_MINUTES` and is read per request. One reader — `auth_service.idle_seconds` — serves the
 places that care: the middleware refusing a stale session, the login that tells the browser the
-window, `GET /api/v1/auth/status`, which is what the Security card prints, and the heartbeat's own
+window, `GET /api/v1/auth/status`, which is what the Security component prints, and the heartbeat's own
 answer. The bounds come from the field's own pydantic constraints, so the form's `min`/`max` and the
 server's validation cannot drift. `data/auth/auth.json` still carries an `idle_seconds` from when it was
 created, and it is only the fallback for an object without the setting.
@@ -303,9 +311,9 @@ no part of it reads or writes `data/trading/trading.json`.
   with the route walk and "the lock never touches the switch" pinned by tests.
 - Stage 2 is complete: `POST /api/v1/auth/setup`, `POST /api/v1/auth/change`,
   `POST /api/v1/auth/sign-out-everywhere`, the lock screen's create and change modes, and the
-  Security card on the Session monitor.
+  Security component (whose card the monitor no longer mounts).
 - Stage 3 is missing one small thing: the CLI has no `idle <minutes>` verb, now the least useful
-  of the set because the setting is on the Session monitor's Security card. The rest is built — the
+  of the set because the setting is in `Account Settings → Security` on the lab. The rest is built — the
   detector, the overlay, the cross-tab channel, the create and change modes, the heartbeat as the
   only thing that slides a session, and a beat whose interval follows the window it has to fit in.
 - Not built, deliberately: a **web reset** (a permanent bypass) and a **"forgot it?" button** on the
@@ -317,7 +325,7 @@ no part of it reads or writes `data/trading/trading.json`.
 | --- | --- | --- |
 | **create** | `GET /login` and no PIN exists. The only way a PIN is ever set from a browser. | `POST /api/v1/auth/setup` (once, after the second entry matches) |
 | **unlock** | Any page with no session, a 401 from anywhere, or the idle window lapsing. | `POST /api/v1/auth/login` |
-| **change** | The card's "Change PIN" link, or the monitor's Security card. | `POST /api/v1/auth/login` for the current PIN, then `POST /api/v1/auth/change` |
+| **change** | The card's "Change PIN" link. | `POST /api/v1/auth/login` for the current PIN, then `POST /api/v1/auth/change` |
 
 The "Enter" key prints **Continue**, **Set PIN** or **Save PIN** depending on where in the flow it
 is, and the dots are the entry in progress — not the PIN as a whole — which is what lets one card
