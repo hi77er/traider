@@ -1,10 +1,12 @@
 # The portal's front door — the PIN design
 
-> **Status.** Stages 1 and 2 are BUILT (`src/web/services/auth_service.py`, `python -m src.web.auth`,
-> `src/web/middleware.py`, `src/web/routes/auth.py`, `src/web/templates/login.html`,
-> `src/web/static/auth.{js,css}`), plus stage 3's browser half and its heartbeat endpoint. The lock
-> is OFF until `set` writes `data/auth.json`, and it takes effect at the next restart of the
-dashboard. What remains is at the foot of each stage below.
+> **Status.** Stages 1, 2 and 3 are BUILT (`src/web/services/auth_service.py`, `python -m
+> src.web.auth`, `src/web/middleware.py`, `src/web/routes/auth.py`, `src/web/templates/login.html`,
+> `src/web/static/auth.{js,css}`), including the three jobs of the lock screen — set the first PIN,
+> enter it, change it — and the Security card on the Session monitor. The lock
+> is OFF until a PIN exists, and from then on the middleware gates every request
+> (it reads the store per request, so no restart is involved). What remains is at the foot of each
+> stage below.
 
 **Why.** The portal is one person's window onto a live account: from it you can place an order,
 flatten a position, move the switch, or change the strategy the bot is running. Today anything
@@ -98,21 +100,57 @@ yet — cheap today, a migration tomorrow:
 - **`kdf` params are stored** so the cost can be raised later without a schema change, and
   **`version`** so a future migration has somewhere to look.
 
-**Changing the PIN — `POST /api/v1/auth/change` (current, new, confirm).** Re-hash with the same
-salt; bump `generation`; rotate `secret`; clear the lockout; return a **fresh cookie** to the
-caller. The effect is the one worth having: **every other device is signed out** — its cookie is
-signed with the old secret and carries the old generation — while the person who made the change
-stays signed in, including their other tabs (one cookie jar, the new cookie on the response).
-Requiring the **current** PIN is what makes a stolen cookie insufficient to change anything, and
-that endpoint feeds the **same failure counter and lockout** as the login, because it is the same
-secret being guessed.
+**Where a PIN is written.** Two doors, and the lock screen is the one anybody can find:
+
+- `GET /login` is reachable by typing the address, always, and the card it serves has **three jobs**:
+  **create** the first PIN (when the store does not exist), **unlock**, or **change** the PIN. That
+  is why it is public and why it never bounces you to the dashboard any more.
+- `python -m src.web.auth set | change | reset | disable | status` on the machine. `reset` — a new
+  PIN WITHOUT the current one — exists only here, and deliberately: a web reset would be a permanent
+  bypass.
+
+**The open door, stated plainly.** `POST /api/v1/auth/setup` refuses the moment a PIN exists (409),
+and that refusal is what makes it safe to serve to anyone who can reach it. It also means that
+**whoever reaches the page first, while no PIN exists, chooses the PIN** — so the window between
+installing this and setting a PIN is a window. The create card says so in as many words. Mitigations,
+if the portal is ever exposed beyond the machine:
+
+- **Gate creation on the connection:** allow it only when the peer is loopback/private AND the
+  request carries **no forwarding headers**. That second half is the part that matters — a local
+  reverse tunnel connects to uvicorn *from* `127.0.0.1`, so `request.client.host` alone would call a
+  remote attacker the person at the keyboard. `X-Forwarded-For` / `CF-Connecting-IP` / `X-Real-IP`
+  being present is what tells them apart.
+- Or a one-time bootstrap code printed at startup, which is more machinery and fights the
+  "the loop is a detached process" shape.
+
+The PIN itself must be **4-12 digits** and not one of the shapes everyone tries first (all the same
+digit; `1234` and friends) — `auth_service.pin_problem` is the rule, mirrored in `auth.js` so a
+mistake is answered without a round trip. It is a nudge, not a policy.
+
+**Changing the PIN — `POST /api/v1/auth/change` (current, new).** `auth_service.change_pin`
+re-hashes, bumps `generation` and rotates `secret`, so **every other device is signed out** — while
+the caller, who has just proved they know both PINs, gets a fresh cookie in the same answer and
+stays exactly where they were. Requiring the **current** PIN is what makes a stolen cookie
+insufficient to change anything, and that endpoint feeds the **same failure counter and lockout** as
+the login, because it is the same secret being guessed. Choosing the PIN you already have is not an
+error: nothing is rotated and no session is signed out over it.
+
+The lock screen **verifies the current PIN at the step where it is typed**, by calling the login
+endpoint, rather than at the end after the new PIN has been typed twice. Two reasons: a wrong one is
+answered where the mistake was, and the final `change` call can then only fail on the NEW PIN.
+
+**Signing out the sessions you are not looking at — `POST /api/v1/auth/sign-out-everywhere`.** A
+secret rotation with the PIN left alone, offered by the Security card. It needs a session of its own
+(the middleware lets the whole `/api/v1/auth/` prefix through, so the route checks), and answers the
+caller with a fresh cookie.
 
 **Forgetting it — `python -m src.web.auth reset`.** For a self-hosted single user the honest
 answer is a CLI on the machine: new PIN twice, no current PIN, no network. It rewrites the store
 and bumps the generation, so every session dies with it. This is not a new exposure — the CLI
 sits beside `data/credentials.json`, which is the same trust level — and it is the only recovery
 path that does not add email, SMS or a second account. `disable` deletes the store and turns the
-lock off.
+lock off. The lock screen shows this as plain text rather than a button, because a "forgot it?"
+button on a public page is the bypass the CLI exists to avoid.
 
 **What a change must NOT do:**
 
@@ -125,12 +163,23 @@ lock off.
 ## Stage 2's build order
 
 4. **`auth_service.change(current, new)` + `reset`,** with the generation/secret rotation and the
-   tests that prove an old cookie is refused while the caller's fresh one works. No route yet.
-5. **`POST /api/v1/auth/change`**, `GET /api/v1/auth/status`, `POST /api/v1/auth/sign-out-everywhere`
-   (which is just a secret rotation), and a small **Security** card on the Session monitor:
-   change PIN, sign out everywhere, and when it was last changed (`updated_at`).
+   tests that prove an old cookie is refused while the caller's fresh one works. **BUILT**
+5. **`POST /api/v1/auth/change`**, `POST /api/v1/auth/setup`, `POST /api/v1/auth/sign-out-everywhere`,
+   `GET /api/v1/auth/status`, and the **Security** card on the Session monitor: change PIN, sign out
+   everywhere, when it was last changed (`updated_at`), and — with no PIN set — that the portal is
+   open, with the button that closes it. **BUILT**
 6. **The CLI verbs** `set | change | reset | disable | status`, wired to the service, so the
-   forgotten-PIN path is testable and documented rather than a paragraph in a README.
+   forgotten-PIN path is testable and documented rather than a paragraph in a README. **BUILT**
+
+**One component, three modes.** The card is `mode: "unlock" | "create" | "change"` over a shared
+step machine (`FLOWS`), so `/login`, the overlay a page raises on 401, and the Security card's
+buttons are all the same DOM with the same behaviour. Adding a fourth job means adding a mode, not a
+second card — which is also why the overlay can offer "Change PIN" without a new screen.
+
+**Inactivity note.** The middleware slides a session's idle clock on **any** authenticated request
+(newer than `SLIDE_AFTER_SECONDS`), not only on `/heartbeat`. The browser is stricter than the
+server: it slides only while it has seen real input. Narrowing the server to `/heartbeat` alone is
+the remaining half of stage 3 — see below.
 
 ## Stage 3 — locking itself when nobody is there (planned)
 
@@ -201,12 +250,27 @@ no part of it reads or writes `data/trading.json`.
 
 - Stage 1 is complete: the service, the CLI (`set | status | change | reset | disable`) and the gate,
   with the route walk and "the lock never touches the switch" pinned by tests.
-- Stage 2 is missing only its surfaces: `POST /api/v1/auth/change`, `sign-out-everywhere` (a secret
-  rotation) and the Security card on the Session monitor. The service calls underneath exist and are
-  tested.
-- Stage 3 is missing two things: the middleware still slides the session on ANY request (permissive,
-  and how stage 1 was described), so it has to be narrowed to the heartbeat alone; and the CLI has no
-  `idle` verb yet. The browser half — the detector, the overlay, the cross-tab channel — is built.
+- Stage 2 is complete: `POST /api/v1/auth/setup`, `POST /api/v1/auth/change`,
+  `POST /api/v1/auth/sign-out-everywhere`, the lock screen's create and change modes, and the
+  Security card on the Session monitor.
+- Stage 3 is missing two things, both small: the middleware still slides the session on ANY request
+  (permissive, and how stage 1 was described), so it has to be narrowed to the heartbeat alone; and
+  the CLI has no `idle` verb yet. The browser half — the detector, the overlay, the cross-tab
+  channel, the create and change modes — is built.
+- Not built, deliberately: a **web reset** (a permanent bypass) and a **"forgot it?" button** on the
+  lock screen. Both stay on the machine.
+
+### The page, as it stands
+
+| Mode | When the card comes up in it | What it sends |
+| --- | --- | --- |
+| **create** | `GET /login` and no PIN exists. The only way a PIN is ever set from a browser. | `POST /api/v1/auth/setup` (once, after the second entry matches) |
+| **unlock** | Any page with no session, a 401 from anywhere, or the idle window lapsing. | `POST /api/v1/auth/login` |
+| **change** | The card's "Change PIN" link, or the monitor's Security card. | `POST /api/v1/auth/login` for the current PIN, then `POST /api/v1/auth/change` |
+
+The "Enter" key prints **Continue**, **Set PIN** or **Save PIN** depending on where in the flow it
+is, and the dots are the entry in progress — not the PIN as a whole — which is what lets one card
+collect two or three values without a second screen.
 
 ## Open decisions
 

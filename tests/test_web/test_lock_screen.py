@@ -399,6 +399,414 @@ def test_a_logout_that_fails_still_leaves(signout):
     assert signout["failedClick"]["went"] == ["/login"]
 
 
+# ---------------------------------------------------------------------------
+# the card's three jobs: set the first PIN, enter it, change it
+# ---------------------------------------------------------------------------
+# A DOM with enough of an element in it to build and repaint the card: children, classes,
+# attributes, listeners, a textContent, and a querySelector that understands the handful of
+# selectors auth.js uses. It exists because the mode logic is only half a behaviour without the
+# repaint — which button says "Set PIN" instead of "Unlock", and whether the card is on screen.
+MODES_HARNESS = r"""
+function fakeEl(tag) {
+  const classes = new Set();
+  const attrs = {};
+  const node = {
+    tagName: String(tag).toUpperCase(), children: [], attrs, listeners: {},
+    className: "", type: "", innerHTML: "", textContent: "", disabled: false, hidden: false,
+    style: {}, offsetWidth: 0,
+    classList: {
+      add: (name) => classes.add(name),
+      remove: (name) => classes.delete(name),
+      contains: (name) => classes.has(name),
+      toggle: (name, force) => {
+        const want = force === undefined ? !classes.has(name) : Boolean(force);
+        if (want) classes.add(name);
+        else classes.delete(name);
+        return want;
+      },
+    },
+    appendChild(child) { node.children.push(child); return child; },
+    replaceChildren() { node.children = Array.prototype.slice.call(arguments); },
+    setAttribute(key, value) { node.attrs[key] = String(value); },
+    addEventListener(name, fn) { (node.listeners[name] = node.listeners[name] || []).push(fn); },
+    querySelector(selector) { return find(node, selector); },
+    querySelectorAll(selector) { return findAll(node, selector); },
+    focus() { node.focused = true; },
+    click() { (node.listeners.click || []).forEach((fn) => fn()); },
+  };
+  // A button's dataset IS its data- attributes in a browser, and auth.js leans on that for the
+  // keypad and for the enter key, so the fake has to lean on it too.
+  node.dataset = new Proxy({}, {
+    set(_, name, value) { attrs["data-" + name] = String(value); return true; },
+    get(_, name) { return attrs["data-" + name]; },
+    has(_, name) { return Object.prototype.hasOwnProperty.call(attrs, "data-" + name); },
+  });
+  return node;
+}
+
+function matches(node, selector) {
+  if (!node || !node.tagName) return false;
+  if (selector === "button") return node.tagName === "BUTTON";
+  if (selector === "header") return node.tagName === "HEADER";
+  const cls = /^\.([a-z-]+)$/.exec(selector);
+  if (cls) return String(node.className).split(/\s+/).indexOf(cls[1]) >= 0;
+  const attr = /^\[([a-z-]+)(?:=["']?([^"'\]]*)["']?)?\]$/.exec(selector);
+  if (attr) {
+    const value = node.attrs[attr[1]];
+    if (value === undefined) return false;
+    return attr[2] === undefined || String(value) === attr[2];
+  }
+  return false;
+}
+
+function findAll(node, selector, found) {
+  const out = found || [];
+  (node.children || []).forEach((child) => {
+    if (matches(child, selector)) out.push(child);
+    findAll(child, selector, out);
+  });
+  return out;
+}
+
+function find(node, selector) {
+  const all = findAll(node, selector);
+  return all.length ? all[0] : null;
+}
+
+const body = fakeEl("body");
+global.document = {
+  body,
+  hidden: false,
+  createElement: fakeEl,
+  querySelector: (selector) => find(body, selector),
+  addEventListener: () => {},
+};
+global.setInterval = () => 1;
+global.clearInterval = () => {};
+global.setTimeout = () => 1;          // the toast's fade; not worth holding the loop open for
+global.clearTimeout = () => {};
+global.addEventListener = () => {};
+global.localStorage = { store: {}, setItem(k, v) { this.store[k] = v; }, getItem(k) { return this.store[k]; } };
+global.location = { assigned: [], assign(url) { this.assigned.push(url); } };
+
+const calls = [];
+let replies = {};
+let status = { enabled: false, signed_in: false };
+global.fetch = (path, options) => {
+  const body_ = options && options.body ? JSON.parse(options.body) : null;
+  calls.push({ path, body: body_ });
+  if (path.indexOf("/status") >= 0) return Promise.resolve({ status: 200, json: () => Promise.resolve(status) });
+  const reply = replies[path] || { status: 200, body: { ok: true } };
+  return Promise.resolve({ status: reply.status, json: () => Promise.resolve(reply.body) });
+};
+
+const enterPin = async (pin) => {
+  String(pin).split("").forEach((digit) => Auth.press(digit));
+  await Auth.submit();
+};
+const enterKey = () => {
+  const keys = find(body, ".lock-keys");
+  return find(keys, "[data-key='enter']");
+};
+const card = () => find(body, ".lock-card");
+const overlay = () => find(body, ".lock-overlay");
+const showed = () => Boolean(overlay()) && overlay().hidden === false;
+const posted = () => calls.filter((call) => call.path.indexOf("/status") < 0);
+const last = () => posted()[posted().length - 1];
+
+const out = {};
+
+// 1. No PIN and the lock page: this is the create form, and it says who else could get there.
+status = { enabled: false, signed_in: false };
+let unlocked = 0;
+await Auth.start({ page: true, onUnlock: () => { unlocked += 1; } });
+out.createMode = {
+  mode: Auth.state.mode, step: Auth.state.step, showing: showed(),
+  sub: find(card(), ".lock-sub").textContent,
+  hint: find(card(), ".lock-hint").textContent,
+  enter: enterKey().textContent,
+  links: find(card(), ".lock-links").children.map((child) => child.textContent),
+};
+
+// 2. Two entries that agree: the first PIN, hashed by the server, and the card stands down.
+calls.length = 0;
+replies["/api/v1/auth/setup"] = { status: 200, body: { ok: true, signed_in: true, created: true } };
+await enterPin("4821");
+out.createAfterFirst = {
+  step: Auth.state.step, enter: enterKey().textContent,
+  sub: find(card(), ".lock-sub").textContent, hint: find(card(), ".lock-hint").textContent,
+};
+await enterPin("4821");
+out.createSent = { calls: calls.map((call) => call.path), body: last().body };
+out.createDone = {
+  showing: showed(), unlocked, toast: find(body, ".lock-toast") ? find(body, ".lock-toast").textContent : null,
+};
+
+// 3. Two entries that do not agree: nothing is sent, and the question is asked again.
+calls.length = 0;
+Auth.open("create");
+await enterPin("4821");
+await enterPin("7788");
+out.createMismatch = {
+  calls: calls.filter((call) => call.path.indexOf("/auth") >= 0).map((call) => call.path),
+  step: Auth.state.step, reason: Auth.state.reason, pin: Auth.state.pin,
+};
+
+// 4. A PIN the server would refuse is refused here first, without a round trip.
+calls.length = 0;
+Auth.open("create");
+await enterPin("1234");
+out.createWeak = { calls: calls.length, step: Auth.state.step, reason: Auth.state.reason };
+
+// 5. A PIN exists and the session is gone: the card is a keypad, and the keypad opens it.
+// A page load starts from an unlocked component, so the harness stands the card down first: a
+// single instance driven through every flow in turn is not the same thing as five page loads.
+status = { enabled: true, signed_in: false, idle_seconds: 900 };
+Auth.unlock();
+await Auth.start({ page: true });
+out.unlockMode = {
+  mode: Auth.state.mode, enter: enterKey().textContent,
+  links: find(card(), ".lock-links").children.map((c) => c.textContent),
+};
+calls.length = 0;
+replies["/api/v1/auth/login"] = { status: 200, body: { ok: true, signed_in: true } };
+await enterPin("4821");
+out.unlocked = {
+  showing: showed(), calls: posted().map((call) => call.path),
+  mode: Auth.state.mode, step: Auth.state.step, locked: Auth.state.locked,
+  busy: Auth.state.busy, pin: Auth.state.pin, reason: Auth.state.reason,
+};
+
+// 6. Change: the current PIN is checked WHERE IT IS TYPED, so a wrong one is answered there.
+Auth.open("change");
+out.changeAsksFirst = { mode: Auth.state.mode, step: Auth.state.step, sub: find(card(), ".lock-sub").textContent };
+calls.length = 0;
+replies["/api/v1/auth/login"] = { status: 401, body: { ok: false, reason: "wrong PIN — 4 attempt(s) left" } };
+await enterPin("0000");
+out.changeWrongCurrent = {
+  step: Auth.state.step, reason: Auth.state.reason,
+  call: last().path, body: last().body,
+};
+
+// 7. Right current PIN, then the new one twice: one request at the end, carrying both.
+calls.length = 0;
+replies["/api/v1/auth/login"] = { status: 200, body: { ok: true, signed_in: true } };
+replies["/api/v1/auth/change"] = { status: 200, body: { ok: true, changed: true } };
+await enterPin("4821");
+out.changeAfterCurrent = { step: Auth.state.step, sub: find(card(), ".lock-sub").textContent };
+await enterPin("7788");
+out.changeAfterNew = { step: Auth.state.step, enter: enterKey().textContent };
+await enterPin("7788");
+out.changeSent = {
+  paths: calls.map((call) => call.path),
+  body: last().body,
+  showing: showed(),
+};
+
+// 8. The Security card, with a PIN: what is set, and the two things you can do about it.
+let security = fakeEl("div");
+security.setAttribute("data-security", "1");
+security.hidden = true;
+security.appendChild((() => { const n = fakeEl("span"); n.setAttribute("data-security-state", "1"); return n; })());
+security.appendChild((() => { const n = fakeEl("p"); n.setAttribute("data-security-note", "1"); return n; })());
+security.appendChild((() => { const n = fakeEl("div"); n.setAttribute("data-security-actions", "1"); return n; })());
+body.appendChild(security);
+
+status = { enabled: true, signed_in: true, idle_seconds: 900, updated_at: "2026-09-25T14:02:11Z", user: "owner" };
+await Auth.start();
+const enabledCard = find(body, "[data-security]");
+out.securityOn = {
+  hidden: enabledCard.hidden,
+  state: find(enabledCard, "[data-security-state]").textContent,
+  note: find(enabledCard, "[data-security-note]").textContent,
+  actions: find(enabledCard, "[data-security-actions]").children.map((c) => c.textContent),
+};
+calls.length = 0;
+replies["/api/v1/auth/change"] = { status: 200, body: { ok: true, changed: true } };
+find(enabledCard, "[data-change-pin]").click();
+out.securityChangeOpens = {
+  mode: Auth.state.mode, step: Auth.state.step, showing: showed(),
+  links: find(card(), ".lock-links").children.map((c) => c.textContent),
+};
+find(card(), ".lock-links").children[0].click();
+out.securityChangeCancels = { showing: showed(), mode: Auth.state.mode };
+Auth.unlock();
+calls.length = 0;
+replies["/api/v1/auth/sign-out-everywhere"] = { status: 200, body: { ok: true, signed_out_others: true } };
+find(enabledCard, "[data-sign-out-everywhere]").click();
+await new Promise((resolve) => setImmediate(resolve));
+out.securitySignOutEverywhere = { calls: calls.map((call) => call.path) };
+
+// 9. And with NO PIN, the card is the warning — plus the way out of it.
+status = { enabled: false, signed_in: true };
+await Auth.start();
+const openCard = find(body, "[data-security]");
+out.securityOff = {
+  state: find(openCard, "[data-security-state]").textContent,
+  note: find(openCard, "[data-security-note]").textContent,
+  actions: find(openCard, "[data-security-actions]").children.map((c) => c.textContent),
+};
+find(openCard, "[data-set-pin]").click();
+out.securitySetPinOpens = {
+  mode: Auth.state.mode, step: Auth.state.step, showing: showed(),
+  links: find(card(), ".lock-links").children.map((c) => c.textContent),
+};
+
+// 10. The automatic boot steps aside for a page that starts the card ITSELF. `/login` does, because
+// it decides which mode applies — and starting it again with no options stands the card back down,
+// which is a blank lock page. This is the one the live check caught.
+const statusCalls = () => calls.filter((call) => call.path.indexOf("/status") >= 0).length;
+status = { enabled: false, signed_in: false };
+Auth.state.started = false;
+await Auth.start({ page: true });
+const before = statusCalls();
+Auth.boot();
+await new Promise((resolve) => setImmediate(resolve));
+out.bootAfterThePageStarted = {
+  askedAgain: statusCalls() - before, mode: Auth.state.mode, page: Auth.state.page,
+  showing: showed(),
+};
+
+// 11. A page that did not start it is booted by it, exactly as before.
+Auth.state.started = false;
+Auth.unlock();
+const beforeOwn = statusCalls();
+Auth.boot();
+await new Promise((resolve) => setImmediate(resolve));
+out.bootOnItsOwn = { asked: statusCalls() - beforeOwn, mode: Auth.state.mode, page: Auth.state.page };
+
+process.stdout.write(JSON.stringify(out));
+"""
+
+
+@pytest.fixture(scope="module")
+def modes(tmp_path_factory) -> dict:
+    script = tmp_path_factory.mktemp("modes") / "modes.mjs"
+    script.write_text(AUTH_JS.read_text(encoding="utf-8") + MODES_HARNESS, encoding="utf-8")
+    proc = subprocess.run(
+        ["node", str(script)], capture_output=True, text=True, timeout=60, check=False
+    )
+    if proc.returncode != 0 or not proc.stdout.strip():
+        raise AssertionError(
+            "lock-screen mode harness failed\n"
+            f"exit={proc.returncode}\nstdout={proc.stdout}\nstderr={proc.stderr}"
+        )
+    return json.loads(proc.stdout)
+
+
+def test_the_lock_page_creates_the_first_pin_rather_than_bouncing_you_away(modes):
+    """No PIN and you typed the address on purpose: that is a job, not an absence of a lock."""
+    assert modes["createMode"]["mode"] == "create"
+    assert modes["createMode"]["showing"] is True
+    assert "choose one" in modes["createMode"]["sub"]
+    assert "whoever reaches this page" in modes["createMode"]["hint"].lower()
+    assert modes["createMode"]["enter"] == "Continue"
+
+
+def test_the_first_pin_is_confirmed_before_it_is_sent(modes):
+    assert modes["createAfterFirst"]["step"] == 1
+    assert modes["createAfterFirst"]["enter"] == "Set PIN"
+    assert "again" in modes["createAfterFirst"]["sub"] + modes["createAfterFirst"]["hint"]
+    assert modes["createSent"]["calls"] == ["/api/v1/auth/setup"]
+    assert modes["createSent"]["body"] == {"pin": "4821"}, "the confirmed one, not the first"
+
+
+def test_setting_the_pin_signs_you_in_and_takes_the_card_away(modes):
+    assert modes["createDone"]["showing"] is False
+    assert modes["createDone"]["unlocked"] == 1
+    assert "PIN is set" in modes["createDone"]["toast"]
+
+
+def test_a_confirmation_that_does_not_match_sends_nothing(modes):
+    assert modes["createMismatch"]["calls"] == []
+    assert modes["createMismatch"]["step"] == 0, "and it asks for the new PIN again"
+    assert "did not match" in modes["createMismatch"]["reason"]
+    assert modes["createMismatch"]["pin"] == ""
+
+
+def test_a_pin_the_server_would_refuse_is_answered_without_a_round_trip(modes):
+    assert modes["createWeak"]["calls"] == 0
+    assert modes["createWeak"]["step"] == 0
+    assert "first PIN anyone tries" in modes["createWeak"]["reason"]
+
+
+def test_unlock_still_asks_for_the_pin_and_offers_the_change(modes):
+    assert modes["unlockMode"]["mode"] == "unlock"
+    assert modes["unlockMode"]["enter"] == "Unlock"
+    assert "Change PIN" in modes["unlockMode"]["links"]
+    assert modes["unlocked"]["showing"] is False
+    assert modes["unlocked"]["calls"] == ["/api/v1/auth/login"]
+
+
+def test_changing_the_pin_asks_for_the_current_one_first(modes):
+    assert modes["changeAsksFirst"]["mode"] == "change"
+    assert modes["changeAsksFirst"]["step"] == 0
+    assert "current PIN" in modes["changeAsksFirst"]["sub"]
+
+
+def test_a_wrong_current_pin_is_answered_where_it_was_typed(modes):
+    """Not at the end, after the new PIN has been typed twice."""
+    assert modes["changeWrongCurrent"]["step"] == 0, "still on the current PIN"
+    assert "4 attempt" in modes["changeWrongCurrent"]["reason"]
+    assert modes["changeWrongCurrent"]["call"] == "/api/v1/auth/login"
+    assert modes["changeWrongCurrent"]["body"] == {"pin": "0000"}
+
+
+def test_the_change_sends_the_current_and_the_new_pin_together(modes):
+    assert modes["changeAfterCurrent"]["step"] == 1
+    assert "new PIN" in modes["changeAfterCurrent"]["sub"]
+    assert modes["changeAfterNew"]["step"] == 2
+    assert modes["changeAfterNew"]["enter"] == "Save PIN"
+    assert modes["changeSent"]["paths"] == ["/api/v1/auth/login", "/api/v1/auth/change"]
+    assert modes["changeSent"]["body"] == {"current": "4821", "pin": "7788"}
+    assert modes["changeSent"]["showing"] is False
+
+
+def test_the_monitor_says_what_the_pin_is_and_offers_the_two_actions(modes):
+    assert modes["securityOn"]["hidden"] is False
+    assert modes["securityOn"]["state"] == "PIN set · changed 2026-09-25 14:02:11 UTC"
+    assert "15 minutes" in modes["securityOn"]["note"]
+    assert "the bot" in modes["securityOn"]["note"], "and it says the loop is unaffected"
+    assert modes["securityOn"]["actions"] == ["Change PIN", "Sign out everywhere"]
+
+
+def test_the_cards_buttons_open_the_flows(modes):
+    assert modes["securityChangeOpens"]["mode"] == "change"
+    assert modes["securityChangeOpens"]["step"] == 0
+    assert modes["securityChangeOpens"]["showing"] is True
+    assert modes["securitySignOutEverywhere"]["calls"] == ["/api/v1/auth/sign-out-everywhere"]
+
+
+def test_a_card_the_page_raised_can_be_dismissed(modes):
+    """Nothing is locked when the Security card opens one, so the overlay must not be a trap."""
+    assert modes["securityChangeOpens"]["links"] == ["Cancel"]
+    assert modes["securitySetPinOpens"]["links"] == ["Cancel"]
+    assert modes["securityChangeCancels"]["showing"] is False
+
+
+def test_with_no_pin_the_card_says_so_and_offers_the_way_out(modes):
+    assert modes["securityOff"]["state"] == "No PIN — the portal is open"
+    assert "anyone who can reach this address" in modes["securityOff"]["note"].lower()
+    assert modes["securityOff"]["actions"] == ["Set a PIN"]
+    assert modes["securitySetPinOpens"]["mode"] == "create"
+    assert modes["securitySetPinOpens"]["showing"] is True
+
+
+def test_the_automatic_boot_stands_aside_for_a_page_that_started_the_card_itself(modes):
+    """`/login` calls ``start({page: true})`` from its own inline script, and the automatic boot on
+    DOMContentLoaded would otherwise call ``start()`` again with no options — which is a page flag of
+    false, an unlock card, and nothing on screen at all."""
+    assert modes["bootAfterThePageStarted"]["askedAgain"] == 0, "no second status call"
+    assert modes["bootAfterThePageStarted"]["mode"] == "create"
+    assert modes["bootAfterThePageStarted"]["page"] is True
+    assert modes["bootAfterThePageStarted"]["showing"] is True, "the card it put up is still up"
+
+
+def test_a_page_that_does_not_start_itself_is_still_booted(modes):
+    assert modes["bootOnItsOwn"]["asked"] == 1
+    assert modes["bootOnItsOwn"]["page"] is False, "no page flag, so the overlay is an overlay"
+
+
 def test_it_is_offered_only_when_there_is_a_lock(signout):
     assert signout["withoutTheLock"] is False, "no PIN, no sign-out, no dead button"
     assert signout["withTheLock"] is True

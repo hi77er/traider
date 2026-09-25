@@ -124,6 +124,15 @@ def install(app: FastAPI) -> None:
     @app.middleware("http")
     async def require_pin(request: Request, call_next):
         settings = get_settings()
+        # EVERY mutating request, including the lock's own public doors. A PIN is set and changed
+        # from pages that cannot have a session yet, so this is the only cross-origin check they
+        # get, and asking for a JSON body is not one.
+        if request.method not in ("GET", "HEAD", "OPTIONS") and not _same_origin(request):
+            logger.warning("Refused a cross-origin %s to %s", request.method, request.url.path)
+            return JSONResponse(
+                {"ok": False, "reason": "this request did not come from the portal"}, status_code=403
+            )
+
         if not auth_service.enabled(settings) or is_public(request.url.path):
             return await call_next(request)
 
@@ -136,12 +145,6 @@ def install(app: FastAPI) -> None:
         payload = auth_service.read(settings, token)
         if payload is None:
             return _refuse(request)
-
-        if request.method not in ("GET", "HEAD", "OPTIONS") and not _same_origin(request):
-            logger.warning("Refused a cross-origin %s to %s", request.method, request.url.path)
-            return JSONResponse(
-                {"ok": False, "reason": "this request did not come from the portal"}, status_code=403
-            )
 
         response = await call_next(request)
         seen = loop_state.parse_stamp(payload.get("seen"))

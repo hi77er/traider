@@ -38,6 +38,8 @@ __all__ = [
     "KDF",
     "LOCKOUT_SECONDS",
     "MAX_ATTEMPTS",
+    "MAX_PIN_DIGITS",
+    "MIN_PIN_DIGITS",
     "change_pin",
     "create",
     "describe",
@@ -46,8 +48,10 @@ __all__ = [
     "issue",
     "load",
     "machine_ok",
+    "pin_problem",
     "read",
     "reset",
+    "sign_out_others",
     "store_path",
     "verify",
 ]
@@ -76,6 +80,17 @@ DEFAULT_ABSOLUTE_SECONDS = 86400
 #: One user for now. The record is a LIST keyed by this id and the session carries ``sub``, which is
 #: the whole of the "more than one account later" seam.
 DEFAULT_USER_ID = "owner"
+
+#: What a PIN may be. Here rather than in the CLI because three callers now write one — the CLI, the
+#: lock screen's create flow and its change flow — and a rule that lives in one of them is a rule
+#: the other two do not have.
+MIN_PIN_DIGITS = 4
+MAX_PIN_DIGITS = 12
+
+#: The shapes everyone types first. Not a policy, a nudge: this door faces whatever can reach the
+#: port, and the length rule alone accepts a PIN whose whole value is that it is easy to guess. The
+#: same-digit case is handled by rule rather than by listing 0000 through 9999.
+WEAK_PINS = ("1234", "123456", "12345678", "87654321")
 
 
 # ---------------------------------------------------------------------------
@@ -122,6 +137,25 @@ def _user(record: Optional[Dict[str, Any]], user_id: Optional[str] = None) -> Op
             continue
         if user_id is None or user.get("id") == user_id:
             return user
+    return None
+
+
+def pin_problem(pin: str) -> Optional[str]:
+    """Why this PIN will not do, or ``None``. Pure, so the CLI, the routes and the page agree.
+
+    The page mirrors these three rules in JavaScript for instant feedback, which is why they are
+    worth keeping few: every one of them exists in two places, and the server's copy is the one
+    that decides.
+    """
+    text = str(pin or "").strip()
+    if not text.isdigit():
+        return "a PIN is digits only"
+    if not MIN_PIN_DIGITS <= len(text) <= MAX_PIN_DIGITS:
+        return f"a PIN is {MIN_PIN_DIGITS}-{MAX_PIN_DIGITS} digits"
+    if len(set(text)) == 1:
+        return "that is one digit repeated — pick something else"
+    if text in WEAK_PINS:
+        return f"{text} is the first PIN anyone tries"
     return None
 
 
@@ -176,10 +210,14 @@ def create(
     """Write a fresh store with one user. Refuses a store that already exists.
 
     Refusing rather than overwriting is the whole safety story of the CLI: ``set`` cannot silently
-    reset somebody's PIN, and ``reset`` is the verb that says out loud that it can.
+    reset somebody's PIN, and ``reset`` is the verb that says out loud that it can. That refusal
+    comes first, so a store that exists is reported as such whatever PIN was offered with it.
     """
     if enabled(settings):
         raise FileExistsError(f"{store_path(settings)} already exists — use 'change' or 'reset'")
+    problem = pin_problem(pin)
+    if problem:
+        return {"ok": False, "enabled": False, "reason": problem}
     moment = at or loop_state.now()
     record = {
         "version": 1,
@@ -254,39 +292,78 @@ def verify(settings, pin: str, *, at: Optional[datetime] = None) -> Dict[str, An
     return result
 
 
-def _rewrite_pin(settings, record: Dict[str, Any], user: Dict[str, Any], pin: str, moment: datetime) -> Dict[str, Any]:
-    """Re-hash in place, and invalidate every session that exists.
+def _rotate_sessions(
+    settings, record: Dict[str, Any], user: Dict[str, Any], moment: datetime, *, why: str
+) -> None:
+    """Invalidate every cookie that exists: a new generation, and a new signing secret.
 
-    Bumping ``generation`` and rotating ``secret`` is what makes a PIN change mean something: every
-    cookie already handed out is signed with the old secret and names the old generation, so all of
-    them stop working the moment this returns.
+    Both, because neither alone is enough — the generation alone would be undone by a restored
+    record, and the secret alone would leave every payload naming a generation that still matches.
     """
-    user["salt"] = secrets.token_hex(16)
-    user["hash"] = _hash(pin, user["salt"], KDF)
-    user["kdf"] = dict(KDF)
     user["generation"] = int(user.get("generation") or 1) + 1
     user["failed_attempts"] = 0
     user["locked_until"] = None
     user["updated_at"] = loop_state.stamp(moment)
     record["secret"] = secrets.token_hex(32)
     save(settings, record)
-    logger.warning("The portal's PIN was changed — every existing session is signed out")
+    logger.warning("%s — every session signed with the old secret is refused", why)
+
+
+def _rewrite_pin(
+    settings, record: Dict[str, Any], user: Dict[str, Any], pin: str, moment: datetime
+) -> Dict[str, Any]:
+    """Re-hash in place, and invalidate every session that exists."""
+    user["salt"] = secrets.token_hex(16)
+    user["hash"] = _hash(pin, user["salt"], KDF)
+    user["kdf"] = dict(KDF)
+    _rotate_sessions(settings, record, user, moment, why="The portal's PIN was changed")
     return describe(settings)
 
 
 def change_pin(
     settings, current: str, new: str, *, at: Optional[datetime] = None
 ) -> Dict[str, Any]:
-    """Change the PIN, given the current one — which is also why a stolen cookie cannot."""
+    """Change the PIN, given the current one — which is also why a stolen cookie cannot.
+
+    A wrong current PIN is answered by the same counter the login form feeds, so this is not a
+    second door to guess one secret through. Choosing the PIN you already have is not an error and
+    rotates nothing: there is nothing to change, and signing every session out over it would be a
+    surprise.
+    """
     moment = at or loop_state.now()
     checked = verify(settings, current, at=moment)
     if not checked.get("ok"):
-        return {"ok": False, "reason": checked.get("reason") or "the current PIN was refused"}
+        return {
+            "ok": False,
+            "locked": bool(checked.get("locked")),
+            "locked_until": checked.get("locked_until"),
+            "reason": checked.get("reason") or "the current PIN was refused",
+        }
     record = load(settings)
     user = _user(record)
     if user is None:
         return {"ok": False, "reason": "no PIN is set for this portal"}
-    return {"ok": True, **(_rewrite_pin(settings, record, user, new, moment))}
+    problem = pin_problem(new)
+    if problem:
+        return {"ok": False, "reason": problem}
+    if hmac.compare_digest(_hash(new, user["salt"], user.get("kdf")), str(user.get("hash") or "")):
+        return {"ok": True, "unchanged": True, **describe(settings)}
+    return {"ok": True, "unchanged": False, **(_rewrite_pin(settings, record, user, new, moment))}
+
+
+def sign_out_others(settings, *, at: Optional[datetime] = None) -> Dict[str, Any]:
+    """Keep the PIN, expire every session; the caller hands itself a fresh cookie afterwards.
+
+    For the session the header's own "Sign out" cannot reach: another browser, another tab, another
+    machine, or one somebody left open.
+    """
+    moment = at or loop_state.now()
+    record = load(settings)
+    user = _user(record)
+    if user is None:
+        return {"ok": False, "reason": "no PIN is set for this portal"}
+    _rotate_sessions(settings, record, user, moment, why="Signed out everywhere")
+    return {"ok": True, **describe(settings)}
 
 
 def reset(settings, pin: str, *, at: Optional[datetime] = None) -> Dict[str, Any]:
@@ -297,6 +374,9 @@ def reset(settings, pin: str, *, at: Optional[datetime] = None) -> Dict[str, Any
     already has the broker keys.
     """
     moment = at or loop_state.now()
+    problem = pin_problem(pin)
+    if problem:
+        return {"ok": False, "reason": problem}
     record = load(settings)
     user = _user(record)
     if user is None:

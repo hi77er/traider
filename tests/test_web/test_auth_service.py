@@ -282,3 +282,69 @@ def test_describe_prints_no_secret(armed):
     raw = _store(armed)
     assert raw["secret"] not in printed and raw["machine_token"] not in printed
     assert raw["users"][0]["hash"] not in printed and raw["users"][0]["salt"] not in printed
+
+
+# ---------------------------------------------------------------------------
+# what a PIN may be, and the three ways one is written
+# ---------------------------------------------------------------------------
+def test_pin_problem_refuses_the_shapes_everyone_tries_first():
+    """A nudge, not a policy — and the same answer the lock screen gives without asking us."""
+    for weak in ("1234", "0000", "7777777", "123456"):
+        assert auth_service.pin_problem(weak), weak
+    for bad in ("", "abc", "12", "4821x", "1234567890123"):
+        assert auth_service.pin_problem(bad), bad
+    for fine in (PIN, "135790", "918273645"):
+        assert auth_service.pin_problem(fine) is None, fine
+
+
+def test_create_refuses_a_weak_first_pin_and_writes_nothing(settings):
+    result = auth_service.create(settings, "1234", at=_at())
+
+    assert result["ok"] is False and "first PIN" in result["reason"]
+    assert auth_service.enabled(settings) is False, "and the portal is not half-locked"
+
+
+def test_reset_refuses_a_weak_pin_too(armed):
+    assert auth_service.reset(armed, "9999", at=_at())["ok"] is False
+    assert auth_service.verify(armed, PIN, at=_at())["ok"] is True
+
+
+def test_change_passes_a_lockout_through_rather_than_calling_it_a_wrong_pin(armed):
+    """The route turns this into 429, so it has to arrive even though the current PIN was right."""
+    for attempt in range(auth_service.MAX_ATTEMPTS):
+        auth_service.verify(armed, "0000", at=_at(attempt))
+
+    refused = auth_service.change_pin(armed, PIN, "7788", at=_at(6))
+
+    assert refused["ok"] is False and refused["locked"] is True
+    assert refused["locked_until"], "and the caller can say how long"
+
+
+def test_change_to_the_pin_you_have_rotates_nothing(armed):
+    before = _store(armed)
+    token = str(auth_service.issue(armed, at=_at()))
+
+    result = auth_service.change_pin(armed, PIN, PIN, at=_at(1))
+
+    assert result["ok"] is True and result["unchanged"] is True
+    after = _store(armed)
+    assert after["secret"] == before["secret"], "no session was invalidated"
+    assert after["users"][0]["generation"] == before["users"][0]["generation"]
+    assert auth_service.read(armed, token, at=_at(2)) is not None, "and that cookie still works"
+
+
+def test_sign_out_others_keeps_the_pin_and_kills_the_cookies(armed):
+    other = str(auth_service.issue(armed, at=_at()))
+    assert auth_service.read(armed, other, at=_at(1)) is not None
+
+    result = auth_service.sign_out_others(armed, at=_at(2))
+
+    assert result["ok"] is True and result["generation"] == 2
+    assert auth_service.read(armed, other, at=_at(3)) is None
+    assert auth_service.verify(armed, PIN, at=_at(3))["ok"] is True, "the PIN is not the session"
+    fresh = auth_service.issue(armed, at=_at(3))
+    assert auth_service.read(armed, fresh, at=_at(4)) is not None, "and a new session works"
+
+
+def test_sign_out_others_needs_a_store(settings):
+    assert auth_service.sign_out_others(settings)["ok"] is False

@@ -31,11 +31,20 @@ COOKIE = middleware.COOKIE_NAME
 
 #: The only paths that may answer without a session. Pinned on purpose: a new prefix means a new
 #: hole, and the way to add one should be to change this list and think about it.
+#:
+#: ``setup`` and ``change`` have to be here and that is the point of the pin: they are the two ways
+#: IN to a portal nobody is signed in to yet. What guards them is not a session — it is the refusal
+#: to overwrite an existing PIN (409) and the current PIN, counted by the same five failures that
+#: lock ``login``. ``sign-out-everywhere`` reads the session itself, in the route, because the
+#: middleware lets this whole prefix through.
 EXPECTED_PUBLIC = {
     "/login",
     "/api/v1/health",
     "/api/v1/auth/status",
+    "/api/v1/auth/setup",
     "/api/v1/auth/login",
+    "/api/v1/auth/change",
+    "/api/v1/auth/sign-out-everywhere",
     "/api/v1/auth/logout",
     "/api/v1/auth/heartbeat",
 }
@@ -267,3 +276,113 @@ def test_the_lock_never_touches_the_trading_switch(client, settings, locked):
     assert switch.read_text(encoding="utf-8") == before, "byte for byte"
     assert json.loads(before)["on"] is True, "and trading is still ON"
     assert trading_state.is_trading_on(settings) is True
+
+
+# ---------------------------------------------------------------------------
+# the first PIN, and the second one — both from the lock screen
+# ---------------------------------------------------------------------------
+def test_setup_writes_the_first_pin_and_signs_you_in(client, settings):
+    """The page's create form: no session to have, so the answer hands one over."""
+    assert auth_service.enabled(settings) is False
+
+    response = client.post("/api/v1/auth/setup", json={"pin": PIN})
+
+    assert response.status_code == 200
+    assert response.json()["signed_in"] is True and response.json()["created"] is True
+    assert auth_service.enabled(settings) is True
+    assert client.get("/log").status_code == 200, "and they are through the door already"
+    assert auth_service.verify(settings, PIN)["ok"] is True, "hashed and usable, not stored raw"
+
+
+def test_setup_refuses_once_a_pin_exists(client, locked):
+    """The refusal is the whole reason this endpoint may be served to anybody who can reach it."""
+    response = client.post("/api/v1/auth/setup", json={"pin": "7788"})
+
+    assert response.status_code == 409
+    assert "already set" in response.json()["reason"]
+    assert auth_service.verify(locked, PIN)["ok"] is True, "and the real PIN is untouched"
+    assert auth_service.verify(locked, "7788")["ok"] is False
+
+
+def test_setup_refuses_a_pin_it_would_not_accept(client, settings):
+    response = client.post("/api/v1/auth/setup", json={"pin": "1234"})
+
+    assert response.status_code == 400
+    assert "first PIN anyone tries" in response.json()["reason"]
+    assert auth_service.enabled(settings) is False, "nothing was written"
+
+
+def test_change_needs_the_current_pin_and_replaces_the_old_one(client, locked):
+    refused = client.post("/api/v1/auth/change", json={"current": "0000", "pin": "7788"})
+    assert refused.status_code == 401
+    assert "attempt" in refused.json()["reason"], "the same counter as the login form"
+    assert auth_service.verify(locked, PIN)["ok"] is True, "and nothing changed"
+
+    changed = client.post("/api/v1/auth/change", json={"current": PIN, "pin": "7788"})
+    assert changed.status_code == 200 and changed.json()["changed"] is True
+    assert auth_service.verify(locked, "7788")["ok"] is True
+    assert auth_service.verify(locked, PIN)["ok"] is False, "the old one is gone"
+
+
+def test_a_change_signs_out_the_other_sessions_and_keeps_this_one(client, locked):
+    """A second client is a second browser: its own jar, so only its own cookie is ever sent."""
+    other = TestClient(app, follow_redirects=False)
+    other.cookies.set(COOKIE, str(auth_service.issue(locked)))
+    assert other.get("/api/v1/loop").status_code == 200, "a second browser, signed in"
+
+    client.post("/api/v1/auth/login", json={"pin": PIN})
+    response = client.post("/api/v1/auth/change", json={"current": PIN, "pin": "7788"})
+
+    assert response.status_code == 200 and response.json()["changed"] is True
+    assert other.get("/api/v1/loop").status_code == 401, "the change signs that one out"
+    assert client.get("/api/v1/loop").status_code == 200, "while the caller keeps working"
+
+
+def test_a_lockout_shuts_the_change_door_as_well(client, locked):
+    """Otherwise this endpoint is an unthrottled way to guess the PIN the login form limits."""
+    for _attempt in range(auth_service.MAX_ATTEMPTS):
+        client.post("/api/v1/auth/change", json={"current": "0000", "pin": "7788"})
+
+    response = client.post("/api/v1/auth/change", json={"current": PIN, "pin": "7788"})
+
+    assert response.status_code == 429
+    assert response.json()["locked"] is True
+
+
+def test_change_refuses_the_pin_you_already_have_without_signing_anyone_out(client, locked):
+    client.post("/api/v1/auth/login", json={"pin": PIN})
+    before = str(auth_service.load(locked)["users"][0]["generation"])
+
+    response = client.post("/api/v1/auth/change", json={"current": PIN, "pin": PIN})
+
+    assert response.status_code == 200 and response.json()["unchanged"] is True
+    assert str(auth_service.load(locked)["users"][0]["generation"]) == before
+    assert client.get("/api/v1/loop").status_code == 200, "nobody was thrown out over a no-op"
+
+
+def test_sign_out_everywhere_needs_a_session_and_keeps_you_in(client, locked):
+    assert client.post("/api/v1/auth/sign-out-everywhere").status_code == 401
+
+    other = TestClient(app, follow_redirects=False)
+    other.cookies.set(COOKIE, str(auth_service.issue(locked)))
+    assert other.get("/api/v1/loop").status_code == 200
+
+    client.post("/api/v1/auth/login", json={"pin": PIN})
+    response = client.post("/api/v1/auth/sign-out-everywhere")
+
+    assert response.status_code == 200 and response.json()["signed_out_others"] is True
+    assert client.get("/api/v1/loop").status_code == 200, "the caller is still signed in"
+    assert other.get("/api/v1/loop").status_code == 401, "the other browser is not"
+    assert auth_service.verify(locked, PIN)["ok"] is True, "the PIN itself is untouched"
+
+
+def test_another_origin_cannot_set_or_change_the_pin(client, settings, locked):
+    """The lock's own doors are public, so this is the only CSRF check they get."""
+    foreign = {"Origin": "http://evil.localhost:3000"}
+
+    assert client.post("/api/v1/auth/setup", json={"pin": "7788"},
+                       headers=foreign).status_code == 403
+    assert client.post("/api/v1/auth/change", json={"current": PIN, "pin": "7788"},
+                       headers=foreign).status_code == 403
+    assert client.post("/api/v1/auth/sign-out-everywhere", headers=foreign).status_code == 403
+    assert auth_service.verify(locked, PIN)["ok"] is True, "and there is a PIN nobody replaced"

@@ -940,6 +940,25 @@ def test_positions_and_working_orders_have_their_own_panel_under_the_loop(api_se
     assert html.index('id="lg-positions"') < html.index('id="lg-working"')
 
 
+def test_the_security_card_is_a_place_for_the_auth_component_to_fill(api_settings):
+    """The page owns the box and where it sits; auth.js owns what goes in it.
+
+    It ships HIDDEN and there is no styling or text of its own, because with no PIN set the card is
+    the one thing on this page that is about the portal rather than the account — and it must not
+    flash "No PIN" at somebody for a frame before the status call comes back.
+    """
+    html = client.get("/log").text
+
+    card = html.index('id="lg-security-card"')
+    assert 'data-security hidden' in html[card - 40 : card + 200], "hidden until it knows"
+    assert 'data-security-state' in html and 'data-security-note' in html
+    assert 'data-security-actions' in html
+    assert html.index('id="lg-accounts"') < card < html.index("The Loop"), (
+        "high up: 'this portal is open' is worth seeing without going looking"
+    )
+    assert "/static/auth.css" in html and "/static/auth.js" in html, "and it must be able to style"
+
+
 def test_every_panel_below_the_account_folds_on_the_same_gesture(api_settings):
     """Four panels, one mechanism, as asked for: the loop showed the pattern first and the three
     tables under it were given the same head rather than a second convention.

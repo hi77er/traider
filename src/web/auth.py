@@ -6,8 +6,9 @@
     .venv/bin/python -m src.web.auth reset     # a new PIN WITHOUT the old one — forgotten it
     .venv/bin/python -m src.web.auth disable   # delete the store; the portal is open again
 
-The lock is OFF until ``set`` is run: there is no store, so nothing is enforced. It takes effect at
-the next restart of the dashboard (the middleware is wired at import).
+The lock is OFF until ``set`` is run: there is no store, so nothing is enforced. It is ON from the
+very next request — the middleware reads the store per request, so no restart is needed. An open
+tab needs no special handling either: its next poll answers 401 and the page raises the lock itself.
 
 Deliberately a local-machine tool. Whoever can run it already has ``data/credentials.json`` beside
 it, so it is not a new way in — and it is the only recovery path there is, because the alternative
@@ -27,8 +28,9 @@ __all__ = ["VERBS", "main"]
 
 VERBS = ("set", "change", "reset", "disable", "status")
 
-MIN_DIGITS = 4
-MAX_DIGITS = 12
+#: What a PIN is, from the service — the lock screen writes them too, and one rule is the point.
+MIN_DIGITS = auth_service.MIN_PIN_DIGITS
+MAX_DIGITS = auth_service.MAX_PIN_DIGITS
 
 USAGE = (
     "usage: python -m src.web.auth <verb>\n\n"
@@ -50,8 +52,9 @@ def _read_secret(prompt: str) -> str:
 def _offer(prompt: str) -> Optional[str]:
     """Read a new PIN twice and check it. ``None`` means the operator's answer was not usable."""
     pin = str(_read_secret(prompt)).strip()
-    if not pin.isdigit() or not MIN_DIGITS <= len(pin) <= MAX_DIGITS:
-        print(f"a PIN is {MIN_DIGITS}-{MAX_DIGITS} digits", file=sys.stderr)
+    problem = auth_service.pin_problem(pin)
+    if problem:
+        print(problem, file=sys.stderr)
         return None
     if pin != str(_read_secret("Repeat it: ")).strip():
         print("the two did not match — nothing was changed", file=sys.stderr)
@@ -112,7 +115,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         if pin is None:
             return 1
         result = auth_service.create(settings, pin, label=settings.instrument or "")
-        print("the lock is ON from the next restart of the dashboard.")
+        print("the lock is ON — the next request from a browser is sent to /login.")
         return _report(result)
 
     if verb == "change":
