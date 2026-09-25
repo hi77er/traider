@@ -155,6 +155,40 @@ tick();
 out.shortWindowLocked = Auth.isLocked();
 out.shortWindowBeatsWhileIdle = calls.filter((path) => path.indexOf("heartbeat") >= 0).length;
 
+// 11. The window FOLLOWS the setting. Reported by the operator: the setting was moved to three
+//     minutes and the screen still locked after one — because this tab had read the window when the
+//     page loaded and never asked again, so it was enforcing a setting that no longer existed.
+Auth.unlock();
+Auth.beginIdleWatch(60);
+reply = { status: 200, body: { ok: true, enabled: true, signed_in: true, idle_seconds: 180 } };
+await Auth.refreshWindow();
+out.windowAfterRefresh = Auth.state.idleSeconds;
+advance(2);
+tick();
+out.openTwoMinutesIn = Auth.isLocked();
+advance(1.2);
+tick();
+out.lockedPastThree = Auth.isLocked();
+out.threeMinuteReason = Auth.state.reason;
+
+// 12. A tab that did NOT change the setting hears about it from its own beat — the only traffic a
+//     page sends of its own accord.
+Auth.unlock();
+Auth.beginIdleWatch(60);
+reply = { status: 200, body: { ok: true, signed_in: true, idle_seconds: 240 } };
+Auth.state.lastHeartbeatAt = 0;
+fire("keydown");
+advance(0.2);
+tick();
+for (let step = 0; step < 8; step += 1) await Promise.resolve();
+out.windowAfterBeat = Auth.state.idleSeconds;
+
+// 13. The answer that signs you in carries the window as well, so unlocking catches a tab up.
+reply = { status: 200, body: { ok: true, enabled: true, signed_in: true, idle_seconds: 300 } };
+Auth.state.pin = "4821";
+await Auth.submit();
+out.windowAfterUnlock = Auth.state.idleSeconds;
+
 process.stdout.write(JSON.stringify(out));
 """
 
@@ -236,6 +270,23 @@ def test_a_quiet_page_in_a_short_window_still_goes_quiet(lock):
     """Deriving the beat from the window must not turn it into a timer that keeps itself alive."""
     assert lock["shortWindowBeatsWhileIdle"] == 0
     assert lock["shortWindowLocked"] is True
+
+
+def test_the_window_follows_the_setting_without_a_reload(lock):
+    """The operator's report: the window was moved to three minutes and the screen still locked
+    after one, because the tab was still enforcing the window it had read at page load."""
+    assert lock["windowAfterRefresh"] == 180
+    assert lock["openTwoMinutesIn"] is False, "two quiet minutes are inside a three-minute window"
+    assert lock["lockedPastThree"] is True
+    assert "3 minutes" in lock["threeMinuteReason"]
+
+
+def test_a_tab_that_did_not_change_the_setting_hears_it_from_its_own_beat(lock):
+    assert lock["windowAfterBeat"] == 240
+
+
+def test_the_answer_that_signs_you_in_carries_the_window(lock):
+    assert lock["windowAfterUnlock"] == 300
 
 
 # ---------------------------------------------------------------------------

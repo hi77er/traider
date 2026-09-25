@@ -315,6 +315,21 @@ def test_the_inactivity_setting_saves_and_is_what_the_portal_obeys(tmp_path, mon
         assert answer["ok"] is False and answer["errors"], refused
 
 
+def test_the_save_tells_the_lock_screen_to_re_read_the_window():
+    """The other half of the same requirement, and the one the operator actually hit: saving a
+    setting is a BROWSER action and the browser is what locks itself. It reads the window when the
+    page loads and never again, so without this the tab that saved went on locking at the old one —
+    the setting said three minutes and the card came up after one, over a session that was alive.
+    """
+    js = (ROOT / "src" / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    save = js[js.index("async function saveAccount()"):]
+    body = save[: save.index("\n}") + 1]
+
+    assert "Auth.refreshWindow()" in body, "the tab that saved has to obey the new window"
+    # ...and after the save was accepted, not before or in a branch that a refusal returns from.
+    assert body.index("ok === false") < body.index("Auth.refreshWindow()")
+
+
 def test_account_api_roundtrip(tmp_path, monkeypatch):
     monkeypatch.setattr(config_service.account_mod, "account_file_path",
                         lambda settings: tmp_path / "account.json")

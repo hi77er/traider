@@ -205,11 +205,21 @@ def heartbeat(request: Request) -> JSONResponse:
 
     This is the ONLY thing that moves a session's idle clock, which is what stops the dashboard's
     own polling from holding the door open for a screen nobody is sitting at.
+
+    The answer carries the window in force as well, because this is the only traffic a busy page
+    sends of its own accord: it is how a tab that did NOT change the setting hears about it.
     """
     settings = get_settings()
     token = auth_service.touch(settings, request.cookies.get(middleware.COOKIE_NAME))
     if token is None:
         return JSONResponse({"ok": False, "signed_in": False}, status_code=401)
-    response = JSONResponse({"ok": True, "signed_in": True}, status_code=200)
+    response = JSONResponse(
+        {
+            "ok": True,
+            "signed_in": True,
+            "idle_seconds": auth_service.idle_seconds(settings),
+        },
+        status_code=200,
+    )
     middleware.set_cookie(response, token, request)
     return response

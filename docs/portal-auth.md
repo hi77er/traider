@@ -228,13 +228,23 @@ key.
 
 **The idle window is a SETTING.** `Account Settings → Security → Sign Out User Inactivity
 Minutes`, 1-30 whole minutes, default 15. It lives in `data/account/account.json` as
-`AUTH_IDLE_MINUTES` and is read per request, so a change takes effect on the next page load
-rather than at the next login. One reader — `auth_service.idle_seconds` — serves the three
+`AUTH_IDLE_MINUTES` and is read per request. One reader — `auth_service.idle_seconds` — serves the
 places that care: the middleware refusing a stale session, the login that tells the browser the
-window, and `GET /api/v1/auth/status`, which is what the Security card prints. The bounds come
-from the field's own pydantic constraints, so the form's `min`/`max` and the server's validation
-cannot drift. `data/auth.json` still carries an `idle_seconds` from when it was created, and it
-is only the fallback for an object without the setting.
+window, `GET /api/v1/auth/status`, which is what the Security card prints, and the heartbeat's own
+answer. The bounds come from the field's own pydantic constraints, so the form's `min`/`max` and the
+server's validation cannot drift. `data/auth.json` still carries an `idle_seconds` from when it was
+created, and it is only the fallback for an object without the setting.
+
+**A change reaches the browser, not just the server.** The browser is the half that raises the card,
+so a window it read once and kept would be a setting that only *looks* obeyed — and that is exactly
+what the operator hit: the setting was moved to three minutes and the screen still locked after one,
+over a session the server considered perfectly alive. So the tab adopts the window from **every**
+answer that carries one — `beginIdleWatch` at page load, the answer that signs you in (login, setup,
+change), the heartbeat, and an explicit `Auth.refreshWindow()` that `saveAccount()` calls right after
+an account save. The saved tab therefore obeys the new value at once; a tab somebody is *working* in
+hears within one beat; a tab nobody is touching keeps the window it loaded with, which can only ever
+lock it **earlier** than the setting says, never later — the server still enforces the real one, and
+the next unlock hands the page the true value.
 
 **The poll must not hold the session open.** This is the whole problem: the page reads the log every
 twenty seconds, so if the server slid its idle window on *any* authenticated request, the session

@@ -387,7 +387,7 @@
     state.busy = false;
     if (answer.payload && answer.payload.ok) {
       state.pin = "";
-      unlock();
+      unlock(answer.payload.idle_seconds);
       return;
     }
     refuse(refusalText(answer, "that PIN was refused"));
@@ -417,7 +417,7 @@
     }
     const unchanged = Boolean(answer.payload.unchanged);
     state.pin = "";
-    unlock();
+    unlock(answer.payload.idle_seconds);
     if (created) say("The PIN is set — the portal will ask for it from now on.");
     else if (unchanged) say("That is already your PIN — nothing changed.");
     else say("PIN changed. Every other session is now signed out.");
@@ -492,7 +492,7 @@
     remember(true);
   }
 
-  function unlock() {
+  function unlock(seconds) {
     state.locked = false;
     state.reason = "";
     setMode("unlock");
@@ -500,6 +500,9 @@
     remember(false);
     state.lastActivityAt = Date.now();
     state.lastHeartbeatAt = Date.now();
+    // The answer that just signed us in carries the window, so an unlock is where a tab holding an
+    // older one catches up — the sentence the Security card prints included.
+    if (adoptWindow(seconds)) mountSecurity();
     if (typeof state.onUnlock === "function") state.onUnlock();
   }
 
@@ -532,8 +535,37 @@
     state.lastActivityAt = Date.now();
   }
 
+  /* The window the tab is holding has to FOLLOW the setting while the page is open.
+   *
+   * It used to be read once, in ``start()``, and never again — so a change did nothing to the tab
+   * that made it: a page loaded while the window was one minute went on locking after one minute of
+   * quiet, and said so, however the setting read. The server had already moved on, which is why the
+   * card could come up over a session that was still perfectly alive. */
+  function adoptWindow(seconds) {
+    const next = Math.floor(Number(seconds));
+    if (!Number.isFinite(next) || next <= 0 || next === state.idleSeconds) return false;
+    state.idleSeconds = next;
+    // So the Security card's own sentence, which is printed from the status, is not stale either.
+    if (state.status) state.status.idle_seconds = next;
+    return true;
+  }
+
+  /* Ask the server for the window in force and obey it. For the tab that just changed the setting:
+   * nothing else would tell it, because the heartbeat only goes out while somebody is active, and
+   * the reader who has just saved a setting is about to sit still. */
+  async function refreshWindow() {
+    let status = null;
+    try {
+      status = await (await fetch("/api/v1/auth/status")).json();
+    } catch (err) {
+      return state.idleSeconds; // keep the window already in force rather than guess one
+    }
+    if (adoptWindow(status && status.idle_seconds)) mountSecurity();
+    return state.idleSeconds;
+  }
+
   function beginIdleWatch(seconds) {
-    state.idleSeconds = Number(seconds) || state.idleSeconds;
+    adoptWindow(seconds);
     noteActivity();
     ACTIVITY_EVENTS.forEach((name) => {
       const handler = noteActivity;
@@ -596,7 +628,14 @@
     if (now - state.lastHeartbeatAt < interval) return;
     if (now - state.lastActivityAt > interval) return;
     state.lastHeartbeatAt = now;
-    post("/api/v1/auth/heartbeat").catch(() => { /* the next request will settle it */ });
+    post("/api/v1/auth/heartbeat")
+      // The beat is the only traffic a page sends of its own accord, so it is where a changed
+      // window reaches a tab that did not make the change. Nothing here unlocks anything: the whole
+      // block only runs while the detector can see a human.
+      .then((answer) => {
+        if (answer && answer.payload && adoptWindow(answer.payload.idle_seconds)) mountSecurity();
+      })
+      .catch(() => { /* the next request will settle it */ });
   }
 
   /* ---------- what the pages call ---------- */
@@ -810,6 +849,7 @@
     mountSecurity,
     open: show,
     press,
+    refreshWindow,
     setMode,
     start,
     state,

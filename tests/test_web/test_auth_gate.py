@@ -253,6 +253,9 @@ def test_only_the_heartbeat_moves_the_session_clock(client, locked):
     beat = client.post("/api/v1/auth/heartbeat")
     assert beat.status_code == 200
     assert COOKIE in beat.headers.get("set-cookie", ""), "the heartbeat must move it"
+    # And its answer carries the window the server will wait, which is how a tab that did not change
+    # the setting hears about a change: the beat is the only traffic a busy page sends by itself.
+    assert beat.json()["idle_seconds"] == client.get("/api/v1/auth/status").json()["idle_seconds"]
 
 
 # ---------------------------------------------------------------------------

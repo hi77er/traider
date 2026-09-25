@@ -1346,6 +1346,13 @@ async function saveAccount() {
       return;
     }
     $("account-msg").textContent = r.message || "Saved";
+    // The portal's inactivity window is one of these settings, and this popup is the only way to
+    // change it. The tab that saved has to obey the new value at once: it read the window when the
+    // page loaded, so without this it goes on locking at the OLD one — which is exactly how "I set
+    // three minutes and it still signs me out after one" happened.
+    if (window.Auth && typeof window.Auth.refreshWindow === "function") {
+      await window.Auth.refreshWindow();
+    }
     // A save can be partial: a credential pair the broker rejects is held back, and
     // the rest of the form still lands. So the feedback names what was left behind
     // instead of dressing the whole save as a failure — and a pair that merely could
