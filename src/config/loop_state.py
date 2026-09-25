@@ -40,6 +40,12 @@ The consequence worth stating plainly: **on one machine a crashed loop is taken 
 once, and a live one is never taken over at all.** Expiry exists for the cases where the
 pid cannot answer.
 
+Alive is not the same as WORKING, and only one of the two is this file's job to enforce. A
+holder that declared a wake and is past its grace with the process still there keeps its
+lease — nothing here will take a claim from a running process — but it is not a healthy
+loop, and :func:`is_stalled` is what says so, so that everything reporting on the loop can
+say it too instead of relaying a pid as health.
+
 The record's shape is the loop's to define (``acquire`` writes it); this module reads it:
 
     pid · host · started · heartbeat · next_wake · expires_at · strategy
@@ -69,6 +75,8 @@ __all__ = [
     "describe",
     "holder",
     "is_expired",
+    "is_stalled",
+    "late_by_seconds",
     "lease_path",
     "parse_stamp",
     "read",
@@ -243,6 +251,36 @@ def holder(settings, at: Optional[datetime] = None) -> Optional[Dict[str, Any]]:
         )
         return None
     return None if is_expired(record, moment) else record
+
+
+def late_by_seconds(record: Dict[str, Any], at: Optional[datetime] = None) -> Optional[float]:
+    """How long past its declared wake the holder is. ``None`` when it declared none.
+
+    Zero before the wake: this is the age of a COMMITMENT rather than of a process, and it is
+    the number to show when a loop that is plainly alive has plainly stopped doing anything.
+    """
+    wake = parse_stamp((record or {}).get("next_wake"))
+    if wake is None:
+        return None
+    return max(0.0, ((at or now()) - wake).total_seconds())
+
+
+def is_stalled(record: Dict[str, Any], at: Optional[datetime] = None) -> bool:
+    """Is this LIVE holder no longer doing anything? — the question a pid cannot answer.
+
+    :func:`holder` treats a live pid as the holder whatever the timestamps say, and that is
+    right: on one machine a pid outranks a clock, and taking a claim from a process that is
+    still running is how two loops come to place two sets of orders. But "alive" was also
+    being read as "working", and on 2026-09-25 that hid a wedged loop for a whole session:
+    the process woke for its bar, blocked on one open socket, and held the lease — so the
+    dashboard said ``running``, the countdown counted down to a boundary nothing would reach,
+    and no bar was traded. A live claim past the grace on the wake it declared is NOT a
+    healthy loop, and everything that reports on one should say so.
+    """
+    if parse_stamp((record or {}).get("next_wake")) is None:
+        # Nothing committed to yet: a loop that is starting, not one that is stuck.
+        return False
+    return is_expired(record, at)
 
 
 def describe(record: Optional[Dict[str, Any]]) -> str:

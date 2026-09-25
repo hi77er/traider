@@ -19,6 +19,11 @@ between a loop that stopped and one that died:
     otherwise, and nothing will tick again until someone restarts it.
 ``running``
     A live holder. The heartbeat age is then just information.
+``stalled``
+    A live holder that has gone quiet: it declared a wake, and the grace past that wake has
+    run out with the process still there. Alive but not working — a loop wedged inside a tick
+    holds its lease exactly like a healthy one, and that is the one question a pid cannot
+    answer, so it is answered from the wake the loop committed to.
 
 An age on its own cannot tell those apart, which is why the state is computed rather than the
 timestamp being handed over for each caller to interpret slightly differently.
@@ -37,8 +42,8 @@ from src.model import rules as rules_mod
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["NEVER", "OVERDUE", "PROTECTED", "RUNNING", "STOPPED", "UNPROTECTED",
-           "ensure_running", "monitored_strategy", "protection", "status"]
+__all__ = ["NEVER", "OVERDUE", "PROTECTED", "RUNNING", "STALLED", "STOPPED",
+           "UNPROTECTED", "ensure_running", "monitored_strategy", "protection", "status"]
 
 #: How often a read of the loop's state may try to put a crashed loop back. The state is polled
 #: every few seconds by an open page, and a start attempt per poll would be a fork storm.
@@ -52,6 +57,7 @@ NEVER = "never"
 STOPPED = "stopped"
 OVERDUE = "overdue"
 RUNNING = "running"
+STALLED = "stalled"
 
 #: The verdicts on an open position. ``naked`` is NOT a failure: a strategy configured with
 #: no stop gets no bracket, deliberately, and warning about it would be crying wolf — which
@@ -108,7 +114,8 @@ def status(settings, at: Optional[datetime] = None) -> Dict[str, Any]:
     latest = store.load_latest(settings, name)
 
     if live is not None:
-        state = RUNNING
+        # Alive is not the same as working: this is the case the countdown used to hide.
+        state = STALLED if loop_state.is_stalled(claim, moment) else RUNNING
     elif claim is not None:
         state = OVERDUE
     elif latest is not None:
@@ -129,6 +136,7 @@ def status(settings, at: Optional[datetime] = None) -> Dict[str, Any]:
         "holder_text": loop_state.describe(claim),
         "next_wake": (claim or {}).get("next_wake"),
         "expires_at": (claim or {}).get("expires_at"),
+        "late_by_seconds": loop_state.late_by_seconds(claim, moment),
         "started": (claim or {}).get("started"),
         "has_run": latest is not None,
         "last_tick": latest,
@@ -196,6 +204,15 @@ def ensure_running(
     if state_now == RUNNING:
         return {"ensured": False, "started": False, "state": state_now,
                 "reason": "the loop is already running", "message": ""}
+    if state_now == STALLED:
+        # Deliberately not a restart. The lease is held by a process that IS running, so a
+        # second loop is exactly the double-order this project refuses to risk — and a restart
+        # is not what the pid is evidence for either: it says something is there, not what it
+        # is doing. So the one caller that reads this every few seconds says the truth instead.
+        return {"ensured": False, "started": False, "state": state_now,
+                "reason": "the loop is alive but past the wake it committed to",
+                "message": "The loop is running but has not ticked since the boundary it "
+                           "declared — it is stuck inside a tick, and it has to be restarted."}
 
     now_ts = moment.timestamp()
     if now_ts - _last_ensure < interval:

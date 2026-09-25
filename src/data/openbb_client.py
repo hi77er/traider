@@ -24,6 +24,7 @@ import pandas as pd
 
 from src.config import history
 from src.config.settings import Settings
+from src.data.deadline import bounded
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,12 @@ _PANDAS_RULE = {
     "2h": "2h", "4h": "4h", "8h": "8h", "12h": "12h",
     "3d": "3D", "2W": "2W", "2M": "2M",
 }
+
+# How long ONE provider call may take before the caller gives up waiting on it. Sized on the
+# provider's own behaviour: Yahoo times its queries out well inside a minute, so an answer that
+# has not arrived in 90s is a dead socket rather than a slow one — and the loop is at most one
+# bar late instead of losing the session.
+PROVIDER_DEADLINE_SECONDS = 90.0
 
 
 class OpenBBError(RuntimeError):
@@ -91,9 +98,15 @@ def _no_bars_message(symbol: str, interval: str, start: str, end: Optional[str])
 class OpenBBClient:
     """Thin wrapper around ``openbb.obb`` with normalization, caching, failover."""
 
-    def __init__(self, settings: Settings, cache_dir: Optional[Path] = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        cache_dir: Optional[Path] = None,
+        deadline_seconds: float = PROVIDER_DEADLINE_SECONDS,
+    ) -> None:
         self.settings = settings
         self.cache_dir = Path(cache_dir) if cache_dir is not None else Path(settings.cache_dir)
+        self.deadline_seconds = float(deadline_seconds)
         self._obb = None
 
     # -- OpenBB access (lazy import so the module is testable without it) ---
@@ -154,12 +167,19 @@ class OpenBBClient:
     def fetch_quote(self, symbol: str) -> pd.DataFrame:
         """Fetch a live quote (raw provider output, one row)."""
         try:
-            result = self.obb.equity.price.quote(symbol, provider=history.DATA_PROVIDER)
+            quote = bounded(
+                lambda: self.obb.equity.price.quote(
+                    symbol, provider=history.DATA_PROVIDER
+                ).to_df(),
+                self.deadline_seconds,
+                what=f"the {history.DATA_PROVIDER} quote for {symbol}",
+                error=OpenBBError,
+            )
         except Exception as exc:
             # No failover for quotes, and no wrapper either: the provider's own
             # message is what the operator needs to see.
             raise OpenBBError(f"{type(exc).__name__}: {str(exc).strip()}") from exc
-        return result.to_df()
+        return quote
 
     # -- interval handling ---------------------------------------------------
     @staticmethod
@@ -204,14 +224,18 @@ class OpenBBClient:
         """
         logger.info("Fetching %s %s from %s via %s", symbol, interval, start or "?", history.DATA_PROVIDER)
         try:
-            result = self.obb.equity.price.historical(
-                symbol,
-                start_date=start,
-                end_date=end,
-                interval=interval,
-                provider=history.DATA_PROVIDER,
+            frame = bounded(
+                lambda: self.obb.equity.price.historical(
+                    symbol,
+                    start_date=start,
+                    end_date=end,
+                    interval=interval,
+                    provider=history.DATA_PROVIDER,
+                ).to_df(),
+                self.deadline_seconds,
+                what=f"the {history.DATA_PROVIDER} fetch for {symbol} {interval}",
+                error=OpenBBError,
             )
-            frame = result.to_df()
         except Exception as exc:
             if _is_no_data(exc):
                 # The provider answered: nothing there. Not a failure.
@@ -299,13 +323,18 @@ class OpenBBClient:
         logger.info("Retrying %s for %s (trailing bar has no price)", day.date(), symbol)
         try:
             retry = self._canonical(
-                self.obb.equity.price.historical(
-                    symbol,
-                    start_date=day.date().isoformat(),
-                    end_date=day.date().isoformat(),
-                    interval=interval,
-                    provider=history.DATA_PROVIDER,
-                ).to_df()
+                bounded(
+                    lambda: self.obb.equity.price.historical(
+                        symbol,
+                        start_date=day.date().isoformat(),
+                        end_date=day.date().isoformat(),
+                        interval=interval,
+                        provider=history.DATA_PROVIDER,
+                    ).to_df(),
+                    self.deadline_seconds,
+                    what=f"the {history.DATA_PROVIDER} retry for {symbol} {day.date()}",
+                    error=OpenBBError,
+                )
             )
         except Exception as exc:  # noqa: BLE001 - recovery is best-effort
             logger.warning("Could not recover the trailing bar for %s: %s", symbol, exc)

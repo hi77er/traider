@@ -113,6 +113,33 @@ def test_a_running_loop_is_left_alone(settings, starts, monkeypatch):
     assert starts == []
 
 
+def test_a_stalled_loop_is_reported_and_never_restarted(settings, starts, monkeypatch):
+    """Alive is not the same as working, and the watchdog may not act on the difference.
+
+    The lease belongs to a process that IS running, so a second loop is exactly the double order
+    this project refuses to risk — and a restart is not what a pid is evidence for anyway: it
+    says something is there, not what it is doing. So the state is reported instead, on every
+    poll, in the loop's own words.
+    """
+    _arm(settings)
+    monkeypatch.setattr(
+        loop_service, "status",
+        lambda settings, at=None: {"state": loop_service.STALLED, "late_by_seconds": 38 * 60,
+                                   "holder": {"pid": 1}, "claim": {"pid": 1}},
+    )
+
+    result = loop_service.ensure_running(settings)
+
+    assert result["ensured"] is False and result["started"] is False
+    assert result["state"] == loop_service.STALLED
+    assert "past the wake" in result["reason"]
+    assert "stuck" in result["message"]
+    assert starts == [], "a stalled loop still HOLDS the lease — a second one would double orders"
+
+    again = loop_service.ensure_running(settings)
+    assert again["reason"] == result["reason"], "the throttle must not silence the diagnosis"
+
+
 def test_a_poll_cannot_storm_the_fork(settings, starts):
     """Called from a page that reads the loop's state every twenty seconds."""
     _arm(settings)

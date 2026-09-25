@@ -30,6 +30,7 @@ from src.execution import (
     resolve_execution_target,
     shares_for,
 )
+from src.execution import alpaca_client
 from src.execution.alpaca_broker import broker_position
 from src.strategy.broker import FILLED, NO_FILL, REJECTED, Fill, SimulatedBroker
 from src.strategy.engine import CLOSE, OPEN, Intent
@@ -63,6 +64,7 @@ class StubSession:
         self.routes = {key: list(value) for key, value in (routes or {}).items()}
         self.requests = []
         self.headers_seen = []
+        self.timeouts = []
 
     def queue(self, method, path, *responses):
         self.routes.setdefault((method, path), []).extend(responses)
@@ -73,6 +75,7 @@ class StubSession:
             {"method": method, "path": path, "url": url, "params": params, "json": json}
         )
         self.headers_seen.append(dict(headers or {}))
+        self.timeouts.append(timeout)
         key = (method, path)
         if key not in self.routes:
             raise AssertionError(f"the code called an unexpected endpoint: {key}")
@@ -380,6 +383,34 @@ def test_a_timeout_is_reported_and_never_retried():
     assert len([r for r in executor.client.calls if r["method"] == "POST"]) == 1, (
         "an order that may be live must never be re-sent"
     )
+
+
+def test_every_call_to_the_broker_carries_a_timeout():
+    """The client's timeout is the only bound on a stalled read inside the broker call.
+
+    A read that never came back is what parked a loop for the rest of a session
+    (2026-09-25), so the value has to reach the session's request — holding it on the client
+    is not enough.
+    """
+    executor = _executor()
+    session = executor.client._session
+    session.queue("GET", "/v2/account", StubResponse(200, {"equity": "1000"}))
+
+    executor.client.account()
+
+    assert session.timeouts == [1], "the timeout the client was built with"
+
+
+def test_the_brokers_own_timeout_is_used_when_none_is_named():
+    """Every request the portal makes gets a real bound, including the clock the tick needs."""
+    session = StubSession()
+    session.queue("GET", "/v2/clocks", StubResponse(200, {"is_open": True}))
+    client = AlpacaClient(resolve_execution_target(_settings()), session=session)
+
+    client.request("GET", "/v2/clocks")
+
+    assert session.timeouts == [alpaca_client.DEFAULT_TIMEOUT_SECONDS]
+    assert alpaca_client.DEFAULT_TIMEOUT_SECONDS > 0
 
 
 def test_a_partial_fill_is_reported_as_it_happens():

@@ -33,6 +33,8 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
+from src.data.deadline import bounded
+
 logger = logging.getLogger(__name__)
 
 # ── Yahoo screener constants ────────────────────────────────────────────
@@ -92,6 +94,14 @@ class ScreenerError(RuntimeError):
 
 
 # ── session ─────────────────────────────────────────────────────────────
+# (connect, read) seconds for the screener's own session — same reason as the OpenBB shim:
+# curl_cffi reads on with no deadline at all unless one is given.
+SCREENER_TIMEOUT_SECONDS = (10.0, 30.0)
+
+# One Yahoo screener request. It answers in a second or two when it answers at all, so this is a
+# bound on a dead connection rather than on a slow server.
+SCREEN_DEADLINE_SECONDS = 30.0
+
 _SESSION_PATCHED = False
 
 
@@ -113,7 +123,7 @@ def apply_yfinance_session() -> bool:
         logger.warning("curl_cffi unavailable; screener calls may be rate-limited: %s", exc)
         return False
 
-    session = curl_requests.Session(impersonate="chrome")
+    session = curl_requests.Session(impersonate="chrome", timeout=SCREENER_TIMEOUT_SECONDS)
     data = YfData()
     setter = getattr(data, "_set_session", None)
     if callable(setter):
@@ -242,12 +252,17 @@ def _raw_quotes(query: Any, sort_field: str, sort_asc: bool, size: int, offset: 
     apply_yfinance_session()
     size = max(1, min(int(size), MAX_PAGE_SIZE))
     try:
-        result = yf.screen(
-            query,
-            sortField=sort_field,
-            sortAsc=bool(sort_asc),
-            size=size,
-            offset=max(0, int(offset)),
+        result = bounded(
+            lambda: yf.screen(
+                query,
+                sortField=sort_field,
+                sortAsc=bool(sort_asc),
+                size=size,
+                offset=max(0, int(offset)),
+            ),
+            SCREEN_DEADLINE_SECONDS,
+            what="the Yahoo screener",
+            error=ScreenerError,
         )
     except Exception as exc:
         raise ScreenerError(f"Yahoo screener request failed: {exc}") from exc
@@ -356,7 +371,12 @@ def run_preset(spec: ScreenSpec, size: int = 25, offset: int = 0) -> pd.DataFram
         raise ScreenerError("yfinance is not installed.") from exc
     apply_yfinance_session()
     try:
-        result = yf.screen(spec.preset)
+        result = bounded(
+            lambda: yf.screen(spec.preset),
+            SCREEN_DEADLINE_SECONDS,
+            what=f"the Yahoo preset screener “{spec.preset}”",
+            error=ScreenerError,
+        )
     except Exception as exc:
         raise ScreenerError(f"Yahoo preset screener “{spec.preset}” failed: {exc}") from exc
     quotes = list((result or {}).get("quotes") or [])

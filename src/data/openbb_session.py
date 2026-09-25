@@ -18,6 +18,12 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# What the provider's session waits for when nothing else says: (connect, read) seconds, which
+# curl_cffi turns into a connect timeout plus a total one. It treats ``timeout=None`` as "wait
+# indefinitely", and neither OpenBB nor yfinance passes a value down, so this is the only bound
+# on a read that stalls.
+PROVIDER_TIMEOUT_SECONDS = (10.0, 60.0)
+
 _PATCHED = False
 
 
@@ -45,7 +51,9 @@ def apply_openbb_session_patch() -> bool:
             return original(**kwargs)
         # Build OpenBB's session to inherit its headers/proxy/verify settings.
         base = original(**kwargs)
-        session = curl_requests.Session(impersonate="chrome")
+        session = curl_requests.Session(
+            impersonate="chrome", timeout=PROVIDER_TIMEOUT_SECONDS
+        )
         session.headers.update(base.headers)
         if getattr(base, "verify", None) is not None:
             session.verify = base.verify

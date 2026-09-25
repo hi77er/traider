@@ -395,6 +395,17 @@ whatever is held, fraction included.
 - **The provider is out of the tick path.** The loop reads the already-synced dataset,
   so the chart, the backtest and the live decision see identical bars. The delta sync
   is the only provider caller and it is already throttled.
+- **A provider call cannot park the tick.** It did once — 2026-09-25: the loop woke for its
+  bar, blocked on one open socket inside the fetch, and wrote no tick for the rest of the
+  session: no order, no error, and a pid that kept the dashboard saying `running`. Nothing
+  above the provider could cut it off because nothing below it will stop on its own — OpenBB
+  builds the request, yfinance decides how often to re-ask, and **curl_cffi waits for ever when
+  no timeout is handed to it**. So the bound is set twice: explicitly on the sessions the shims
+  build (`PROVIDER_TIMEOUT_SECONDS` in `src/data/openbb_session.py`, `SCREENER_TIMEOUT_SECONDS`
+  in `src/data/screener.py`), and around the call itself in `src/data/deadline.py`, which stops
+  WAITING at `PROVIDER_DEADLINE_SECONDS` (90s) — a caller that gives up is not the same as a
+  socket that closed, and the caller is the one with a bar to decide. The tick then reports the
+  failed fetch and the next bar is still traded.
 - **The sync target is the newest CLOSED bar, not the newest day.** This was wrong and
   cost a trading day: `eligible_until_date` answered with *yesterday's* date whenever the
   session had not yet ended, so an hourly dataset could never receive today's bars — at
@@ -550,6 +561,8 @@ tests that already existed:
 | 5.4 | Startup: lease → a reported reconcile → sleep | ✅ |
 | 5.5 | `src/main.py` runs the orchestrator, keeping the host guard already built | ✅ |
 | 5.6 | `--once` for the suite and for a cron deployment | ✅ |
+| 5.7 | Every provider call is bounded — a deadline per call plus an explicit timeout on the sessions handed to the provider — so a stalled read fails the tick instead of freezing the loop | ✅ |
+| 5.8 | A LIVE holder past the wake it declared is reported as `stalled`, not as `running` | ✅ |
 
 **The lease declares the wake, it does not heartbeat.** The holder writes the boundary it
 is about to sleep until, and `expires_at` is that moment plus a five-minute grace. A
@@ -560,6 +573,13 @@ and a live one is never taken over at all**: a pid that is alive outranks the ti
 and only another host (or a pid that cannot be read) falls back to the expiry. Pid reuse
 errs the same safe way — a recycled pid looks alive, so the lease is respected. An
 unreadable lock counts as nobody's, because the alternative is manual cleanup at 09:30.
+
+**Alive is not the same as WORKING**, and the pid cannot tell the two apart: a loop wedged
+inside a tick holds the lease exactly like a healthy one. So the wake the holder declared is
+read as a lateness too (`loop_state.is_stalled` / `late_by_seconds`), `loop_service.status()`
+reports such a holder as `stalled`, and the monitor counts UP past the boundary instead of
+down to it. The lease is still never taken from a live process — that is the double-order
+rule — so a stalled loop is REPORTED and not restarted: restarting it is the operator's call.
 
 **The startup report never refuses to start.** It retires the pre-Phase-3 state file,
 then — only with trading ON, so a process needs no credentials to run on the many days
@@ -605,10 +625,12 @@ strategy and a bar with no local log, which is the one thing a deleted log canno
 is a question about `trading.json`, and both processes need the answer.
 
 **One verdict, three screens.** `loop_service.status()` returns `never` / `stopped` /
-`overdue` / `running`, and that distinction is the whole point: a timestamp cannot tell a
-clean shutdown from a crash, and a quiet market from a dead loop. It reports the last refusal
-from the tick LOG rather than from `latest.json`, because the last tick may well have been a
-success — "why did nothing happen at 14:30" wants the last thing that went wrong.
+`overdue` / `running` / `stalled`, and that distinction is the whole point: a timestamp cannot
+tell a clean shutdown from a crash, a quiet market from a dead loop, or — the one a pid hides —
+a loop that is working from one that is alive and wedged past the wake it declared. It reports
+the last refusal from the tick LOG rather than from `latest.json`, because the last tick may
+well have been a success — "why did nothing happen at 14:30" wants the last thing that went
+wrong.
 
 **Protection is judged from the position, not from the configuration.** The stop and target
 recorded ON THE POSITION when it opened are compared with the exit legs the broker is actually
