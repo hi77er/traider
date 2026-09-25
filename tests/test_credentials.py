@@ -46,7 +46,23 @@ def _s(tmp_path, **kwargs) -> Settings:
 def store_in_tmp(tmp_path, monkeypatch):
     """No test may write into the repo's real data directory."""
     monkeypatch.setattr(state_files, "state_path", lambda s, name, folder="": tmp_path / folder / name)
+    # The real writer makes its own folder (``state_files.write_json``); a test that writes a
+    # verdict by hand needs it there already.
+    (tmp_path / "account").mkdir(parents=True, exist_ok=True)
     return tmp_path
+
+
+def test_the_verdicts_live_beside_the_account_file(tmp_path):
+    """In the account folder, as a file of its own.
+
+    Beside ``account.json`` is where the operator looks for anything to do with credentials; a
+    separate file is what keeps the verdicts out of the document the trading lock freezes, so they
+    can still be refreshed while trading is on.
+    """
+    path = credentials.state_path(_s(tmp_path))
+
+    assert path.name == "credential_checks.json"
+    assert path.parent == tmp_path / "account"
 
 
 class FakeResponse:

@@ -341,8 +341,7 @@ data/live_results/<strategy-slug>/
   that.
 - **The loop writes this tree; the dashboard only reads it.** A second writer is how the two
   processes end up disagreeing about what happened, with nobody able to say which was right.
-- `trading.json` and `credential_checks.json` stay where they are — account/global, not
-  per-strategy.
+- `trading.json` and `credential_checks.json` are account/global, not per-strategy.
 
 ## 5. The broker is the source of truth
 

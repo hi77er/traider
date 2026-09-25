@@ -3,7 +3,7 @@
 Two things in this project are *runtime state* rather than configuration:
 
 * whether trading is ON (``data/trading/trading.json``), and
-* which Alpaca credential pairs have been verified (``data/credential_checks.json``).
+* which Alpaca credential pairs have been verified (``data/account/credential_checks.json``).
 
 Both must sit outside ``settings/*.json`` on purpose — the configuration files are
 exactly what the trading lock freezes. Both are also written while a request is in

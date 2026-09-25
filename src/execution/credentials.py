@@ -16,9 +16,10 @@ Three rules shape it:
   state the operator has to clear by hand. So a failed check is retried the next
   time it is asked for — and re-checking is always available explicitly.
 * **This is not the configuration layer.** The verdict lives in
-  ``data/credential_checks.json`` beside the datasets, because it is runtime state:
-  the account file is exactly what the trading lock freezes, so a verdict stored
-  there could not even be refreshed while trading is on.
+  ``data/account/credential_checks.json`` — the account folder, but a file of its own,
+  because it is runtime state: ``account.json`` is exactly what the trading lock
+  freezes, so a verdict stored inside it could not even be refreshed while trading is
+  on. This module reads and writes its sibling directly, never through a config route.
 
 The point of all of it: ``trading_service.turn_on`` RE-CHECKS the credentials of the
 environment in play, every time it is pressed, in both environments. The stored
@@ -40,6 +41,10 @@ from src.execution.config import ENVIRONMENTS, LIVE_BASE_URL, PAPER_BASE_URL
 logger = logging.getLogger(__name__)
 
 STATE_FILENAME = "credential_checks.json"
+#: Beside ``account.json`` — the account's own folder, which is where the operator looks for
+#: anything to do with credentials. A file of its own, so the lock that freezes the settings
+#: document cannot freeze the verdicts beside it.
+STATE_FOLDER = "account"
 
 # Long enough to notice, short enough that a hung broker cannot pin a request
 # thread open indefinitely. Verifying is an interactive action.
@@ -75,8 +80,8 @@ def fingerprint(env: str, key_id: str) -> str:
 
 
 def state_path(settings):
-    """``<data root>/credential_checks.json`` — beside ``trading.json``."""
-    return state_files.state_path(settings, STATE_FILENAME)
+    """``<data root>/account/credential_checks.json`` — beside ``account.json``."""
+    return state_files.state_path(settings, STATE_FILENAME, STATE_FOLDER)
 
 
 def _read(settings) -> Dict[str, Any]:

@@ -344,7 +344,7 @@ remembers the answer:
   a key revoked between two clicks is caught here, and a failed re-check leaves
   trading OFF and says why.
 
-The verdicts live in `data/credential_checks.json`, beside `trading.json` — runtime
+The verdicts live in `data/account/credential_checks.json`, beside `account.json` — runtime
 state, not configuration, and it stores a hash of the key id rather than the key.
 Credentials themselves are never written to it and never appear in a message.
 
