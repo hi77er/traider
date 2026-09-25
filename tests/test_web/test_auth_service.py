@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from src.config.settings import Settings
+from src.config import account as account_mod
 from src.config.trading_state import write_state
 from src.web.services import auth_service
 
@@ -353,38 +354,63 @@ def test_sign_out_others_needs_a_store(settings):
 # ---------------------------------------------------------------------------
 # the idle window: a SETTING an operator changes, not a constant
 # ---------------------------------------------------------------------------
-def _with_idle(settings, minutes: int) -> Settings:
-    return settings.model_copy(update={"auth_idle_minutes": minutes})
+def _set_idle_minutes(settings, minutes) -> None:
+    """Write ``AUTH_IDLE_MINUTES`` the way the popup does — into the ACCOUNT file.
+
+    Through the file rather than onto the Settings object on purpose: the auth paths are handed
+    ``get_settings()``, which is the bare, cached ``.env`` settings and knows nothing of the
+    account layer, so a test that set the attribute would pass while the real portal ignored the
+    setting. That is the bug this writes around.
+
+    The assert is the tripwire: ``account_file_path`` is fixed and CWD-relative, so without the
+    suite's ``_no_account_file`` guard this would write to the operator's real account file.
+    """
+    path = account_mod.account_file_path(settings)
+    assert "account-guard" in str(path), (
+        f"refusing to write account settings to {path} — the suite's guard is not in place"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"settings": {"AUTH_IDLE_MINUTES": str(minutes)}}),
+                    encoding="utf-8")
 
 
-def test_the_idle_window_comes_from_the_setting(armed):
-    """Account Settings owns it, so changing it takes effect without a new login."""
+def test_the_idle_window_is_the_setting_even_though_the_settings_object_lacks_it(armed):
+    """The regression, in one line: the window the operator set is the window enforced."""
     token = str(auth_service.issue(armed, at=_at()))
+    assert not hasattr(armed, "auth_idle_minutes") or armed.auth_idle_minutes == 15, (
+        "the fixture's Settings is the BARE one, exactly like the auth paths get"
+    )
 
-    short = _with_idle(armed, 1)
-    assert auth_service.idle_seconds(short) == 60
-    assert auth_service.read(short, token, at=_at(1.5)) is None, "90s is past a 1-minute window"
+    _set_idle_minutes(armed, 1)
+    assert auth_service.idle_seconds(armed) == 60
+    assert auth_service.read(armed, token, at=_at(1.5)) is None, "90s is past a 1-minute window"
 
-    long = _with_idle(armed, 30)
-    assert auth_service.idle_seconds(long) == 1800
-    assert auth_service.read(long, token, at=_at(1.5)) is not None, "and inside a 30-minute one"
-    assert auth_service.read(long, token, at=_at(31)) is None, "but not past it"
+    _set_idle_minutes(armed, 30)
+    assert auth_service.idle_seconds(armed) == 1800
+    assert auth_service.read(armed, token, at=_at(1.5)) is not None, "inside a 30-minute one"
+    assert auth_service.read(armed, token, at=_at(31)) is None, "but not past it"
 
 
 def test_the_setting_is_what_the_login_and_the_status_report(armed):
     """The browser locks on the number the server tells it, so both answers must be this one."""
-    five = _with_idle(armed, 5)
+    _set_idle_minutes(armed, 5)
 
-    assert auth_service.verify(five, PIN, at=_at())["idle_seconds"] == 300
-    assert auth_service.describe(five)["idle_seconds"] == 300
+    assert auth_service.verify(armed, PIN, at=_at())["idle_seconds"] == 300
+    assert auth_service.describe(armed)["idle_seconds"] == 300
 
 
 def test_a_store_written_before_the_setting_existed_still_has_its_window(armed):
-    """``auth.json`` carries the window it was created with; only an object without the field
-    falls back to it, which is the deployment that never opens Account Settings."""
-    class Bare:
-        """A settings object from before the field existed — no ``auth_idle_minutes``."""
+    """No account file, no setting: the window the store was created with is the one in force."""
+    assert account_mod.account_values(armed) == {}, "no account file in the tmp data dir"
 
-    assert auth_service.idle_seconds(Bare(), auth_service.load(armed)) == (
+    assert auth_service.idle_seconds(armed, auth_service.load(armed)) == (
         auth_service.DEFAULT_IDLE_SECONDS
     )
+
+
+def test_a_setting_outside_the_range_is_ignored_rather_than_obeyed(armed):
+    """The form refuses these, and a hand-edited file must not be able to leave the portal open
+    for a day or lock it between two page loads."""
+    for nonsense in ("0", "31", "999", "-5", "soon", ""):
+        _set_idle_minutes(armed, nonsense)
+        assert auth_service.idle_seconds(armed) == auth_service.DEFAULT_IDLE_SECONDS, nonsense

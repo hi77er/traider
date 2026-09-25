@@ -20,6 +20,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.config.settings import Settings
+from src.config import account as account_mod
 from src.config import trading_state
 from src.web import middleware
 from src.web.app import app
@@ -144,6 +145,24 @@ def test_a_page_is_sent_to_the_lock_screen_and_an_api_call_is_told_why(client, l
 
     health = client.get("/api/v1/health")
     assert health.status_code == 200 and health.json() == {"status": "ok"}
+
+
+def test_the_portal_answers_with_the_window_the_account_file_sets(client, settings, locked):
+    """The bug this came from: the setting was saved, and the running portal still said 900.
+
+    The auth paths are handed ``get_settings()`` — the bare, cached ``.env`` settings — so reading
+    ``settings.auth_idle_minutes`` saw nothing the operator had set: the account layer never
+    reached the lock. The window is read from the account file instead, which is the file the
+    popup writes.
+    """
+    path = account_mod.account_file_path(settings)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"settings": {"AUTH_IDLE_MINUTES": "2"}}), encoding="utf-8")
+
+    assert client.get("/api/v1/auth/status").json()["idle_seconds"] == 120
+
+    signed_in = client.post("/api/v1/auth/login", json={"pin": PIN})
+    assert signed_in.json()["idle_seconds"] == 120, "and the browser locks on the same window"
 
 
 def test_the_login_page_itself_is_reachable(client, locked):

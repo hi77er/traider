@@ -127,20 +127,51 @@ def idle_seconds(settings, record: Optional[Dict[str, Any]] = None) -> int:
     stale session, the login that reports the window to the browser, and ``status`` which is
     what the security card prints. ``record`` is passed in where the caller already has it.
 
-    The setting is the operator's control — Account Settings, 1-30 whole minutes — and it is
-    read from the SETTINGS rather than copied into the store, so changing it takes effect on
-    the next request instead of at the next login. The store's own value is kept for a
-    deployment that has never touched the setting, which keeps the window it always had.
+    ``AUTH_IDLE_MINUTES`` is read from the ACCOUNT file, and that is deliberate rather than
+    taking ``settings.auth_idle_minutes``. The object the auth paths are handed is
+    ``get_settings()`` — the bare, cached ``.env`` settings, which know nothing of the account
+    layer — and the effective ones are resolved PER STRATEGY, which this module must not touch:
+    the lock belongs to the machine, and a PIN must not depend on which strategy is active.
+    Reading the file the popup writes is the one way to get the operator's number.
     """
-    try:
-        minutes = int(getattr(settings, "auth_idle_minutes", 0) or 0)
-    except (TypeError, ValueError):
-        minutes = 0
-    if minutes > 0:
+    minutes = _configured_minutes(settings)
+    if minutes:
         return minutes * 60
     if record is None:
         record = load(settings)
     return int((record or {}).get("idle_seconds") or DEFAULT_IDLE_SECONDS)
+
+
+def _configured_minutes(settings) -> int:
+    """``AUTH_IDLE_MINUTES`` as a usable number of minutes, or ``0`` when there is none.
+
+    Bounded here as well as in the model: the form refuses anything outside the range, but a
+    hand-edited ``account.json`` should not be able to leave the portal open for a day either.
+    A file that cannot be read is not a reason to fail a request — the lock falls back to the
+    window it has always had.
+    """
+    from src.config import account as account_mod  # noqa: PLC0415 - one small read, only here
+    from src.config.settings import (  # noqa: PLC0415
+        AUTH_IDLE_MINUTES_MAX,
+        AUTH_IDLE_MINUTES_MIN,
+    )
+
+    try:
+        stored = account_mod.account_values(settings).get("AUTH_IDLE_MINUTES")
+    except Exception:  # noqa: BLE001 - a broken account file must not break the lock
+        logger.warning("Could not read AUTH_IDLE_MINUTES — keeping the window already in force")
+        return 0
+    try:
+        minutes = int(str(stored).strip())
+    except (TypeError, ValueError):
+        return 0
+    if not AUTH_IDLE_MINUTES_MIN <= minutes <= AUTH_IDLE_MINUTES_MAX:
+        logger.warning(
+            "AUTH_IDLE_MINUTES is %s, outside %s-%s — ignoring it",
+            minutes, AUTH_IDLE_MINUTES_MIN, AUTH_IDLE_MINUTES_MAX,
+        )
+        return 0
+    return minutes
 
 
 def disable(settings) -> bool:

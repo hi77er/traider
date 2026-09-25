@@ -76,3 +76,24 @@ def _no_pin(monkeypatch, tmp_path_factory):
     )
     monkeypatch.setattr(middleware, "get_settings", lambda: settings)
     yield
+
+
+@pytest.fixture(autouse=True)
+def _no_account_file(monkeypatch, tmp_path_factory):
+    """No test may read or WRITE the real ``data/account/account.json``.
+
+    That file is a BOOTSTRAP document: its path is fixed and CWD-relative (it holds ``DATA_DIR``,
+    so it cannot live inside it) and it ignores the settings object a test passes in. A test that
+    writes account settings therefore overwrites the operator's real file — which is where the
+    Alpaca key pairs live. Autouse because the mistake is silent and destructive: it does not
+    fail a test, it empties the credentials the bot trades with, and nothing notices until the
+    next order.
+
+    A test that needs account values writes them to this throwaway file, which is the same code
+    path with the same callers — the redirection is the only difference.
+    """
+    from src.config import account as account_mod
+
+    store = tmp_path_factory.mktemp("account-guard") / "account.json"
+    monkeypatch.setattr(account_mod, "account_file_path", lambda settings: store)
+    yield

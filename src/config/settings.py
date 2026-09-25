@@ -28,6 +28,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from src.config import history
 
+#: The portal's idle window, in whole minutes. Defined here because TWO things need the bounds
+#: and they must not drift: the model field below, which validates what the form submits, and
+#: ``auth_service``, which reads the stored value directly (the lock is machine state, so it must
+#: not go through the per-strategy effective settings) and refuses anything outside them.
+AUTH_IDLE_MINUTES_DEFAULT = 15
+AUTH_IDLE_MINUTES_MIN = 1
+AUTH_IDLE_MINUTES_MAX = 30
+
 
 class Settings(BaseSettings):
     """One source of truth for every tunable in the bot."""
@@ -294,7 +302,7 @@ class Settings(BaseSettings):
     # portal between two page loads, and an hour would leave a screen nobody is
     # watching open on a live account.
     auth_idle_minutes: int = Field(
-        default=15, ge=1, le=30,
+        default=AUTH_IDLE_MINUTES_DEFAULT, ge=AUTH_IDLE_MINUTES_MIN, le=AUTH_IDLE_MINUTES_MAX,
         description="Minutes a signed-in browser may sit idle before the portal signs it out.",
     )
 
