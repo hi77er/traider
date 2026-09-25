@@ -134,6 +134,27 @@ for (let minute = 0; minute < 10; minute += 1) {
 }
 out.heartbeatsWhileActive = calls.filter((path) => path.indexOf("heartbeat") >= 0).length;
 
+// 9. A SHORT window: the beat has to fall inside it, or the server refuses a session somebody is
+//    using. Five busy minutes inside a three-minute window, in half-minute steps.
+Auth.unlock();
+Auth.beginIdleWatch(180);
+calls.length = 0;
+for (let step = 0; step < 10; step += 1) {
+  fire("pointerdown");
+  advance(0.5);
+  tick();
+}
+out.shortWindowBeats = calls.filter((path) => path.indexOf("heartbeat") >= 0).length;
+
+// 10. …and the same window with nobody there: not one beat, and the card up exactly on time.
+Auth.unlock();
+Auth.beginIdleWatch(180);
+calls.length = 0;
+advance(3);
+tick();
+out.shortWindowLocked = Auth.isLocked();
+out.shortWindowBeatsWhileIdle = calls.filter((path) => path.indexOf("heartbeat") >= 0).length;
+
 process.stdout.write(JSON.stringify(out));
 """
 
@@ -203,6 +224,18 @@ def test_the_right_pin_lifts_it(lock):
 def test_a_busy_page_does_slide_the_session(lock):
     """The other half: while somebody is there, the session is kept alive on purpose."""
     assert lock["heartbeatsWhileActive"] >= 2, lock["heartbeatsWhileActive"]
+
+
+def test_a_short_window_is_beaten_from_inside_it(lock):
+    """A three-minute window with a fixed four-minute beat is a session refused mid-keystroke."""
+    beats = lock["shortWindowBeats"]
+    assert beats >= 4, f"5 busy minutes inside a 3-minute window produced {beats} beats"
+
+
+def test_a_quiet_page_in_a_short_window_still_goes_quiet(lock):
+    """Deriving the beat from the window must not turn it into a timer that keeps itself alive."""
+    assert lock["shortWindowBeatsWhileIdle"] == 0
+    assert lock["shortWindowLocked"] is True
 
 
 # ---------------------------------------------------------------------------

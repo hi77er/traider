@@ -191,10 +191,14 @@ step machine (`FLOWS`), so `/login`, the overlay a page raises on 401, and the S
 buttons are all the same DOM with the same behaviour. Adding a fourth job means adding a mode, not a
 second card — which is also why the overlay can offer "Change PIN" without a new screen.
 
-**Inactivity note.** The middleware slides a session's idle clock on **any** authenticated request
-(newer than `SLIDE_AFTER_SECONDS`), not only on `/heartbeat`. The browser is stricter than the
-server: it slides only while it has seen real input. Narrowing the server to `/heartbeat` alone is
-the remaining half of stage 3 — see below.
+**Inactivity note.** The heartbeat is the only thing that slides a session's idle clock. It used to
+slide on **any** authenticated request as well (`SLIDE_AFTER_SECONDS` in the middleware) — that was
+the permissive half of stage 3, and it defeated the point of it: the monitor polls every twenty
+seconds, so a tab nobody was sitting at kept its own session alive for ever. Worse, it broke short
+windows outright: the slide waited five minutes before it would move a clock that a one- or
+three-minute window had already run out, so the server refused a session between two beats *while
+the operator was typing*. Now `POST /api/v1/auth/heartbeat` is the whole of it, and the browser
+beats a third of the window (see below).
 
 ## Stage 3 — locking itself when nobody is there (planned)
 
@@ -202,10 +206,14 @@ the remaining half of stage 3 — see below.
 does counts — not the twenty-second poll, not the countdown redrawing every second, not a chart
 refresh, not the loop writing ticks (which the browser cannot see anyway).
 
-**What counts as a human.** `keydown`, `pointerdown`, `wheel`/`scroll`, `touchstart`, and
-`visibilitychange → visible` — coming back to the tab is an action somebody took. The listeners are
-capture-phase and passive, so a handler that stops propagation cannot stop the clock. `mousemove`
-counts as well, but only as a timestamp written to a variable: never a request, never storage.
+**What counts as a human.** Exactly the five events `auth.js` binds: `keydown`, `pointerdown`,
+`mousedown`, `wheel`, `touchstart` — plus `visibilitychange → visible`, because coming back to the
+tab is an action somebody took. The listeners are capture-phase and passive, so a handler that
+stops propagation cannot stop the clock. Every one of them does one thing: writes `Date.now()` to
+`state.lastActivityAt`. Nothing else counts — not the twenty-second poll, not the one-second
+redraw, not a chart refresh, and not the heartbeat the page sends on its own. A keystroke in *any*
+of the portal's tabs counts for all of them, since they share the session and the `traider.lock`
+key.
 
 **Two clocks, two layers — and the browser's is not the enforcement.**
 
@@ -232,10 +240,17 @@ is only the fallback for an object without the setting.
 twenty seconds, so if the server slid its idle window on *any* authenticated request, the session
 would never expire while a tab was open — the dashboard's own traffic would prop the door open. So
 the window slides on an explicit signal only: the page posts `POST /api/v1/auth/heartbeat`
-(authenticated, CSRF-checked) at most once every few minutes *while its detector says a human is
-present*, and nothing else extends it. A hidden tab's poll therefore cannot keep it alive, and the
-client's detector is the only thing deciding whether anybody is there — which is exactly what was
-asked for.
+(authenticated, CSRF-checked) *while its detector says a human is present*, and nothing else extends
+it. A hidden tab's poll therefore cannot keep it alive, and the client's detector is the only thing
+deciding whether anybody is there — which is exactly what was asked for.
+
+**How often the beat goes out follows the window, and must.** The interval is
+`max(30s, min(4 min, window / 3))` — 60 seconds for a three-minute window, the old flat 4 minutes
+for the 15-minute default. A *fixed* beat is a session that expires between two beats: the server
+deadline runs from the last heartbeat it saw, so with a four-minute beat inside a three-minute
+window the next request after the third minute is refused while somebody is at the keyboard. A
+third of the window is always comfortably inside it; the 30-second floor keeps a one-minute window
+usable; the 4-minute ceiling keeps the long windows' traffic exactly as it was.
 
 **Hidden tabs are throttled, so lock on return.** A background tab's timers are throttled to about
 one tick a minute and may be frozen outright, so the check is a *comparison of timestamps*, never a
@@ -266,9 +281,10 @@ no part of it reads or writes `data/trading.json`.
 
 7. `Auth.beginIdleWatch({ windowSeconds, onIdle })` in `src/web/static/auth.js` + the shared lock
    overlay both pages include + the cross-tab `storage` channel, with the node harness above.
-8. `POST /api/v1/auth/heartbeat`, the middleware's slide-on-heartbeat and idle refusal, and
-   `idle_seconds` reported by `GET /api/v1/auth/status` so the window has one source of truth
-   rather than a 15 hard-coded in the browser.
+8. `POST /api/v1/auth/heartbeat`, the idle refusal in the middleware, and `idle_seconds` reported by
+   `GET /api/v1/auth/status` so the window has one source of truth rather than a 15 hard-coded in
+   the browser. **The heartbeat is the only slide** — the middleware's slide-on-any-request is gone,
+   and the browser's interval is derived from the window.
 9. The CLI's `idle <minutes>` verb (stored beside the KDF params in `auth.json`) and the docs.
 
 ### What remains, exactly
@@ -278,10 +294,10 @@ no part of it reads or writes `data/trading.json`.
 - Stage 2 is complete: `POST /api/v1/auth/setup`, `POST /api/v1/auth/change`,
   `POST /api/v1/auth/sign-out-everywhere`, the lock screen's create and change modes, and the
   Security card on the Session monitor.
-- Stage 3 is missing two things, both small: the middleware still slides the session on ANY request
-  (permissive, and how stage 1 was described), so it has to be narrowed to the heartbeat alone; and
-  the CLI has no `idle` verb yet. The browser half — the detector, the overlay, the cross-tab
-  channel, the create and change modes — is built.
+- Stage 3 is missing one small thing: the CLI has no `idle <minutes>` verb, now the least useful
+  of the set because the setting is on the Session monitor's Security card. The rest is built — the
+  detector, the overlay, the cross-tab channel, the create and change modes, the heartbeat as the
+  only thing that slides a session, and a beat whose interval follows the window it has to fit in.
 - Not built, deliberately: a **web reset** (a permanent bypass) and a **"forgot it?" button** on the
   lock screen. Both stay on the machine.
 

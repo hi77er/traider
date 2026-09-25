@@ -153,7 +153,12 @@ def test_a_session_round_trips_and_is_refused_when_it_is_tampered_with(armed):
 
     body, _, mac = token.partition(".")
     assert auth_service.read(armed, f"{body}x.{mac}", at=_at(1)) is None, "body changed"
-    assert auth_service.read(armed, f"{body}.{mac[:-1]}x", at=_at(1)) is None, "signature changed"
+    # Tamper with the FIRST character of the MAC, not the last. A 32-byte digest is 43 base64
+    # characters, so the final one carries four bits of signature and two bits of padding — some
+    # replacements of it decode to the very same digest, which makes "forced the last character to
+    # x" a tamper that changes nothing about one signature in eighteen.
+    first = "A" if mac[0] != "A" else "B"
+    assert auth_service.read(armed, f"{body}.{first}{mac[1:]}", at=_at(1)) is None, "MAC changed"
     assert auth_service.read(armed, "nonsense", at=_at(1)) is None
     assert auth_service.read(armed, None, at=_at(1)) is None
 

@@ -19,7 +19,9 @@
   // How long the pages wait between activity checks. A comparison of timestamps rather than a
   // countdown of ticks, because a background tab's timers are throttled and may stop entirely.
   const CHECK_MS = 1000;
-  // How often a session's idle clock is slid while somebody is actually there.
+  // The longest a session may go between two proofs that somebody is there. The real interval is
+  // a third of the idle window (see ``heartbeatMs``); this is the ceiling, so a long window keeps
+  // the traffic it has always had.
   const HEARTBEAT_MS = 240000;
   // A tab that has been hidden this long is checked on the way back rather than trusted.
   const STORAGE_KEY = "traider.lock";
@@ -571,6 +573,18 @@
     maybeHeartbeat();
   }
 
+  /* How often to prove to the server that somebody is still here.
+   *
+   * Derived from the idle window, never fixed: the window is the deadline the SERVER enforces on
+   * the last heartbeat it saw, so a beat that is not comfortably inside it is a session that
+   * expires between two beats — the page would be refused mid-keystroke. A third of the window,
+   * floored at 30s so a one-minute window stays usable, capped at HEARTBEAT_MS so the long
+   * windows see exactly the traffic they always did. */
+  function heartbeatMs() {
+    const window = Math.max(Number(state.idleSeconds) || 900, 1) * 1000;
+    return Math.max(30000, Math.min(HEARTBEAT_MS, window / 3));
+  }
+
   /* Only a page that has just seen a human tells the server so. Nothing else slides the session.
    *
    * The activity gate is the whole point: a heartbeat on a timer would keep the server's idle
@@ -578,8 +592,9 @@
    * only lock — which is exactly the half that can be walked away from. */
   function maybeHeartbeat() {
     const now = Date.now();
-    if (now - state.lastHeartbeatAt < HEARTBEAT_MS) return;
-    if (now - state.lastActivityAt > HEARTBEAT_MS) return;
+    const interval = heartbeatMs();
+    if (now - state.lastHeartbeatAt < interval) return;
+    if (now - state.lastActivityAt > interval) return;
     state.lastHeartbeatAt = now;
     post("/api/v1/auth/heartbeat").catch(() => { /* the next request will settle it */ });
   }

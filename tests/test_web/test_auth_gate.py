@@ -236,6 +236,25 @@ def test_the_status_endpoint_says_whether_a_session_is_alive(client, locked):
     assert signed_in["signed_in"] is True and signed_in["user"] == "owner"
 
 
+def test_only_the_heartbeat_moves_the_session_clock(client, locked):
+    """A poll is not a person.
+
+    The pages poll every twenty seconds. If an ordinary request slid the session, a tab nobody is
+    sitting at would hold the door open for ever and the browser's own lock would be the only lock —
+    the half that can be walked away from. The one request allowed to move the clock is the one a
+    page sends only after it has seen a human.
+    """
+    client.post("/api/v1/auth/login", json={"pin": PIN})
+
+    busy = client.get("/api/v1/loop")
+    assert busy.status_code == 200
+    assert "set-cookie" not in {name.lower() for name in busy.headers}, "a poll moved the clock"
+
+    beat = client.post("/api/v1/auth/heartbeat")
+    assert beat.status_code == 200
+    assert COOKIE in beat.headers.get("set-cookie", ""), "the heartbeat must move it"
+
+
 # ---------------------------------------------------------------------------
 # the machine token, and the one thing none of this may touch
 # ---------------------------------------------------------------------------

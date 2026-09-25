@@ -16,14 +16,12 @@ Two things this deliberately never does:
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import quote
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
-from src.config import loop_state
 from src.config.settings import get_settings
 from src.web.services import auth_service
 
@@ -32,7 +30,6 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "COOKIE_NAME",
     "MACHINE_PATHS",
-    "SLIDE_AFTER_SECONDS",
     "TOKEN_HEADER",
     "install",
     "is_public",
@@ -47,10 +44,6 @@ COOKIE_NAME = "traider_session"
 #: endpoint that restores a crashed loop accepts it.
 TOKEN_HEADER = "X-Traider-Token"
 MACHINE_PATHS = ("/api/v1/loop/ensure",)
-
-#: Re-issue the cookie at most this often. The monitor polls every twenty seconds, and a Set-Cookie
-#: on every poll is traffic nobody asked for; five minutes is far inside any sane idle window.
-SLIDE_AFTER_SECONDS = 300
 
 #: Paths that need no session. Everything else does.
 _PUBLIC_PREFIXES = ("/static/", "/api/v1/auth/")
@@ -146,13 +139,11 @@ def install(app: FastAPI) -> None:
         if payload is None:
             return _refuse(request)
 
-        response = await call_next(request)
-        seen = loop_state.parse_stamp(payload.get("seen"))
-        stale = seen is None or (
-            datetime.now(timezone.utc) - seen
-        ).total_seconds() > SLIDE_AFTER_SECONDS
-        if stale:
-            slid = auth_service.touch(settings, token)
-            if slid:
-                set_cookie(response, slid, request)
-        return response
+        # The session's idle clock is slid by the HEARTBEAT alone — the one request a page sends
+        # only when it has seen a human. Sliding on every authenticated request was the permissive
+        # half of this design and it undid the point of it: the monitor polls every twenty seconds,
+        # so a page nobody is touching kept its own session alive for ever. It also broke SHORT
+        # windows outright, because the slide waited five minutes before it would move a clock
+        # that a one- or three-minute window had already run out — see
+        # ``routes/auth.py::heartbeat``, which is now the only thing that may.
+        return await call_next(request)
