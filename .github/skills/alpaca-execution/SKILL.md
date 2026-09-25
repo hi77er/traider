@@ -136,7 +136,7 @@ code fresh and the server does not. That is how a live switch once armed trading
 credentials the broker had already revoked. When you change the gate, restart uvicorn
 and check `freshness.stale` is false.
 
-**The trading lock.** While `data/trading.json` says `on`, the server refuses
+**The trading lock.** While `data/trading/trading.json` says `on`, the server refuses
 every configuration write with HTTP 409 (`require_trading_off`): settings,
 account, rules, strategy create/rename/delete/select, `/backtest/run`,
 `/dataset/backfill`, `/dataset/rebuild`, `/delta/sync`, and `/execution/env`.

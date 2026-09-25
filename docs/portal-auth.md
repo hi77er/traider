@@ -26,7 +26,7 @@ concept of a session, a cookie or a token anywhere in `src/main.py`, `src/schedu
 That is not merely convention: `tests/test_architecture.py` fails if anything outside `src.web`
 imports `src.web`, and if the web layer reaches for the loop. So the lock lives **entirely inside
 `src/web`** — middleware, routes, a login page — and **no auth code may touch
-`data/trading.json`**. A lockout, a lockout's expiry, a sign-out or a PIN change must never stop,
+`data/trading/trading.json`**. A lockout, a lockout's expiry, a sign-out or a PIN change must never stop,
 start or alter a run. A locked portal is a locked *browser*; the bot keeps ticking.
 
 ## Stage 1 — the lock (three commits)
@@ -169,7 +169,7 @@ button on a public page is the bypass the CLI exists to avoid.
 
 **What a change must NOT do:**
 
-- touch **`data/trading.json`** — the switch is the loop's only authority over itself;
+- touch **`data/trading/trading.json`** — the switch is the loop's only authority over itself;
 - touch the **machine token** — rotating it would silently break the watchdog cron;
 - touch the strategy store, the broker credentials or the dataset;
 - invalidate a run. A loop that is ticking keeps ticking through a PIN change, a lockout, or a
@@ -285,7 +285,7 @@ locks immediately. Server side: a cookie whose idle window has lapsed is refused
 slides it, a poll-shaped request does **not**, and the machine token is unaffected.
 
 **The loop still does not know.** Same invariant as stage 1: this is browser and web-app code, and
-no part of it reads or writes `data/trading.json`.
+no part of it reads or writes `data/trading/trading.json`.
 
 ### Stage 3's build order
 

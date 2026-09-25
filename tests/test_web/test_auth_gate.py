@@ -7,7 +7,7 @@ prefix cannot appear without a test changing.
 
 And one property that outranks the rest: **the trading switch is not this module's business.** A
 locked portal is a locked browser. The loop is a separate process reading files, so a lockout, a
-refused request or a sign-out must leave ``data/trading.json`` byte-identical — that is what makes
+refused request or a sign-out must leave ``data/trading/trading.json`` byte-identical — that is what makes
 locking the screen safe to do at all.
 """
 

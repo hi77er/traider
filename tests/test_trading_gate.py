@@ -14,7 +14,7 @@ Two rules are pinned down here:
    reconfigure a strategy mid-flight. Turning trading off is the only action that
    releases the lock, and it is always available.
 
-The state is runtime, not configuration: it lives in ``data/trading.json`` beside
+The state is runtime, not configuration: it lives in ``data/trading/trading.json``, a folder
 the datasets, because the configuration files it freezes cannot be where the
 freeze switch is stored.
 """
@@ -90,7 +90,10 @@ def state_file(tmp_path, monkeypatch):
     credential verdicts — no test may touch the repo's real data directory.
     """
     monkeypatch.setattr(state_files, "state_path", lambda s, name, folder="": tmp_path / folder / name)
-    return tmp_path / "trading.json"
+    # The real writer makes its own folder (``state_files.write_json``); a test that writes the
+    # switch by hand needs it there already.
+    (tmp_path / "trading").mkdir(parents=True, exist_ok=True)
+    return tmp_path / "trading" / "trading.json"
 
 
 @pytest.fixture

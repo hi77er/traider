@@ -1,6 +1,6 @@
 """The trading switch — its *state*, owned by nobody's layer.
 
-``data/trading.json`` is the single fact "is the bot allowed to trade, and in
+``data/trading/trading.json`` is the single fact "is the bot allowed to trade, and in
 which environment". It is read by **two processes**:
 
 * the dashboard (``src/web``), which renders the switch and refuses
@@ -21,8 +21,8 @@ live-money confirmation, the configuration lock — stays in
 module must keep importing nothing but ``src.config.state_files``.
 
 The state is runtime, not configuration: it does not live in the strategy store
-(which the lock itself would otherwise freeze), it lives beside the datasets and
-is gitignored with them.
+(which the lock itself would otherwise freeze), it lives in a folder of its own
+under the data root and is gitignored with the datasets.
 """
 
 from __future__ import annotations
@@ -35,6 +35,9 @@ from src.config import state_files
 from src.config.effective import active_strategy_name
 
 STATE_FILENAME = "trading.json"
+#: A folder of its own: the loop reads this file every tick, so its path is a contract between two
+#: processes and the data root stays a list of folders rather than a pile of loose files.
+TRADING_FOLDER = "trading"
 
 # The shape of "never written yet": OFF. A missing file must mean OFF, never
 # anything else — the default is the safe answer.
@@ -47,8 +50,8 @@ def now_iso() -> str:
 
 
 def state_path(settings) -> Path:
-    """``<data root>/trading.json`` — beside ``historical/`` and ``backtest_results/``."""
-    return state_files.state_path(settings, STATE_FILENAME)
+    """``<data root>/trading/trading.json`` — the file the loop reads every tick."""
+    return state_files.state_path(settings, STATE_FILENAME, TRADING_FOLDER)
 
 
 def get_state(settings) -> Dict[str, Any]:

@@ -238,7 +238,7 @@ fails if a web module ever gains a path to the loop.
 - **Backtest gates:** `GATE_MIN_SHARPE`, `GATE_MAX_DRAWDOWN_PERCENT`, `GATE_MIN_WIN_RATE_PERCENT`, `GATE_MAX_WEEKLY_LOSS_PERCENT`, `BACKTEST_SLIPPAGE_PERCENT`, `BACKTEST_COMMISSION_PER_TRADE`
 - **Execution — account-wide (Alpaca):** `ALPACA_PAPER_API_KEY`, `ALPACA_PAPER_API_SECRET`, `ALPACA_LIVE_API_KEY`, `ALPACA_LIVE_API_SECRET`, `EXECUTION_MAX_RETRIES`, `EXECUTION_RETRY_BASE_DELAY_SECONDS`, `EXECUTION_ORDER_TIMEOUT_SECONDS`
 - **Execution — per strategy:** `EXECUTION_ENV` (paper | live) — stored per strategy but edited from the Mode control on the Session monitor, not a settings panel
-- **Execution — runtime (NOT config):** `data/trading.json` holds the trading ON/OFF switch. It is deliberately outside the configuration files, because those are exactly what the switch freezes.
+- **Execution — runtime (NOT config):** `data/trading/trading.json` holds the trading ON/OFF switch. It is deliberately outside the configuration files, because those are exactly what the switch freezes.
 - **Scheduler:** no settings. `SCHEDULER_ENABLED` and `SCHEDULER_TIMEZONE` are RETIRED
   (nothing read either; the trading switch says whether a tick acts, and the schedule
   comes from the exchange clock)

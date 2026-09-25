@@ -109,9 +109,10 @@ def test_the_panel_can_be_turned_OFF_while_trading_is_ON(client, _tmp_data_root)
     automation could only be disarmed while the thing it drives was stopped.
     """
     from src.config import state_files
+    from src.config import trading_state
 
     state_files.write_json(
-        automation_mod.locate(_tmp_data_root, "any").parent / "trading.json",
+        trading_state.state_path(_tmp_data_root),
         {"on": True, "strategy": "Alpha", "env": "paper"},
     )
 

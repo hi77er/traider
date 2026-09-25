@@ -291,7 +291,7 @@ Track your progress through all 42 tasks across 9 phases.
   - [x] Data for decisions comes from OpenBB, not Alpaca
 
 - [x] **trading-switch** — Trading ON/OFF + the configuration lock (done)
-  - [x] `data/trading.json` (runtime state, gitignored), always starts OFF
+  - [x] `data/trading/trading.json` (runtime state, gitignored), always starts OFF
   - [x] Turning it on is refused while the selected account could not place an order
   - [x] A LIVE strategy needs a per-action confirmation, every time
   - [x] HTTP 409 on every configuration write while trading is on: settings,

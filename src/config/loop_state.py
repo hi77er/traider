@@ -82,8 +82,8 @@ __all__ = [
     "read",
 ]
 
-#: Beside ``trading.json`` and ``credential_checks.json`` — runtime state, never in git.
-#: The root-anchored ``/data/`` ignore rule covers it.
+#: In the data root itself, beside ``trading/`` and ``credential_checks.json`` — runtime state,
+#: never in git. The root-anchored ``/data/`` ignore rule covers it.
 LEASE_FILENAME = "loop.lock"
 
 #: How long past its declared wake the holder may go before another host may take over.

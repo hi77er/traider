@@ -2,7 +2,7 @@
 
 Two things in this project are *runtime state* rather than configuration:
 
-* whether trading is ON (``data/trading.json``), and
+* whether trading is ON (``data/trading/trading.json``), and
 * which Alpaca credential pairs have been verified (``data/credential_checks.json``).
 
 Both must sit outside ``settings/*.json`` on purpose — the configuration files are

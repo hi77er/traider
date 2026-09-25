@@ -6,7 +6,7 @@ session — and ``tests/test_web/test_auth_gate.py`` walks the app's own route t
 
 Two things this deliberately never does:
 
-* **it does not touch ``data/trading.json``.** A locked portal is a locked BROWSER. The trading
+* **it does not touch ``data/trading/trading.json``.** A locked portal is a locked BROWSER. The trading
   loop is a separate, detached process that reads files and does not know this module exists, so a
   lockout, a sign-out or a PIN change cannot stop, start or alter a run.
 * **it does not resolve per-strategy settings.** The lock belongs to the machine, not to whichever

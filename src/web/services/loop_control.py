@@ -52,7 +52,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def log_path(settings) -> Path:
-    """``<data root>/loop.log`` — beside ``trading.json``, so a dashboard knows where to look."""
+    """``<data root>/loop.log`` — in the data root, so a dashboard knows where to look."""
     return state_files.state_path(settings, LOG_FILENAME)
 
 

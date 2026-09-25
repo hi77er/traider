@@ -265,7 +265,7 @@ configuration — each edited from its own place:
 | Global | your text editor | `.env` | data provider + API keys. **Not in the Strategy lab**: the settings form was removed, so these are edited in the file directly |
 | Account | **🏦 Account Settings** (header) | `data/account/account.json` | the Alpaca paper + live key pairs, the data folder, backtest costs, and how long the portal may sit idle before it signs itself out |
 | Strategy | **Strategy Configuration** / **Rules** / **Risk Management** panels | `data/strategies/store.json` | instrument, bar size + history period, trading hours + exchange, features, gates, schedule, risk limits, rules, paper/live |
-| Runtime | **master switch** + mode (Session monitor) | `data/trading.json` | trading ON/OFF. Deliberately NOT configuration: it lives beside the datasets, because the configuration files it freezes cannot hold the switch that freezes them. |
+| Runtime | **master switch** + mode (Session monitor) | `data/trading/trading.json` | trading ON/OFF. Deliberately NOT configuration: it lives in a folder of its own under the data root, because the configuration files it freezes cannot hold the switch that freezes them. |
 | Runtime | **Instrument Automation** panel (Strategy lab) | `data/automation-<strategy>.json` · `data/automation-list-<strategy>.json` | the automation's criteria, and the cached Top-10 they screen. Not configuration either: the panel must stay editable while trading is ON, and the loop writes the list too |
 
 Precedence: **strategy > account > .env**. Booleans render as on/off switches and
@@ -497,7 +497,7 @@ MAX_CONSECUTIVE_LOSSES=3
 # Execution — Alpaca credentials (account-wide). Which environment an order goes
 # to (paper or live) is chosen PER STRATEGY from the Mode control on the
 # Session monitor — it is not a field in any settings panel. Orders are only ever sent
-# while trading is ON (the master switch, stored in data/trading.json).
+# while trading is ON (the master switch, stored in data/trading/trading.json).
 ALPACA_PAPER_API_KEY=YOUR_PAPER_KEY_ID
 ALPACA_PAPER_API_SECRET=YOUR_PAPER_SECRET  # ← AWS Secrets Manager in prod
 ALPACA_LIVE_API_KEY=

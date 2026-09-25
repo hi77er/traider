@@ -83,7 +83,7 @@ flowchart LR
     subgraph dash["process 2 — python -m src.web.app"]
         W[FastAPI + web portal]
     end
-    loop -.-> F[("data/ · trading.json")]
+    loop -.-> F[("data/trading/trading.json")]
     dash -.-> F
 ```
 
@@ -422,7 +422,7 @@ data/strategies/store.json                     the strategy store (all strategie
 data/backtest_results/<strategy>/latest.json   trimmed view the panel reads
 data/backtest_results/<strategy>/runs/<id>.json full, self-describing run
 data/backtest_results/<strategy>/index.json    run-menu index
-data/trading.json                              trading ON/OFF (runtime, not config)
+data/trading/trading.json                    trading ON/OFF (runtime, not config)
 data/automation-<strategy>.json                instrument automation criteria (runtime,
                                                written by its panel only)
 data/automation-list-<strategy>.json           the cached Top-10 it screens (written by the
