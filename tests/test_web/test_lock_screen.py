@@ -572,6 +572,35 @@ out.createStaleDashboard = {
 };
 delete replies["/api/v1/auth/setup"];
 
+// 4c. A create card left over from before a PIN existed, on a portal that has one now: the form can
+// never work, so the same PIN is submitted as an unlock instead of asking for it a second time.
+calls.length = 0;
+Auth.open("create");
+replies["/api/v1/auth/setup"] = { status: 409, body: { ok: false, reason: "a PIN is already set — use Change PIN" } };
+replies["/api/v1/auth/login"] = { status: 200, body: { ok: true, signed_in: true } };
+await enterPin("482482");
+await enterPin("482482");
+out.createOnALockedPortal = {
+  posted: calls.map((call) => call.path),
+  lastBody: last().body,
+  mode: Auth.state.mode,
+  showing: showed(),
+};
+
+// 4d. And when that PIN is not the one, the card is at least asking the right question.
+calls.length = 0;
+Auth.open("create");
+replies["/api/v1/auth/login"] = { status: 401, body: { ok: false, reason: "wrong PIN — 4 attempt(s) left" } };
+await enterPin("482482");
+await enterPin("482482");
+out.createOnALockedPortalWrongPin = {
+  mode: Auth.state.mode,
+  reason: Auth.state.reason,
+  showing: showed(),
+};
+replies["/api/v1/auth/login"] = { status: 200, body: { ok: true, signed_in: true } };
+Auth.unlock();
+
 // 5. A PIN exists and the session is gone: the card is a keypad, and the keypad opens it.
 // A page load starts from an unlocked component, so the harness stands the card down first: a
 // single instance driven through every flow in turn is not the same thing as five page loads.
@@ -582,6 +611,8 @@ out.unlockMode = {
   mode: Auth.state.mode, enter: enterKey().textContent,
   links: find(card(), ".lock-links").children.map((c) => c.textContent),
   note: find(card(), ".lock-note").textContent,
+  message: find(card(), ".lock-message").textContent,
+  sub: find(card(), ".lock-sub").textContent,
 };
 calls.length = 0;
 replies["/api/v1/auth/login"] = { status: 200, body: { ok: true, signed_in: true } };
@@ -785,6 +816,32 @@ def test_unlock_still_asks_for_the_pin_and_offers_the_change(modes):
     assert "Change PIN" in modes["unlockMode"]["links"]
     assert modes["unlocked"]["showing"] is False
     assert modes["unlocked"]["calls"] == ["/api/v1/auth/login"]
+
+
+def test_the_unlock_card_asks_once_and_does_not_repeat_itself(modes):
+    """Reported as "it asks me to enter it a second time": that was the CREATE card, which asks
+    twice on purpose. The unlock card asks once — and says so once, not in two paragraphs."""
+    assert modes["unlockMode"]["enter"] == "Unlock"
+    assert modes["unlockMode"]["message"] == "", "the sentence above is the instruction"
+    assert "Enter your PIN" in modes["unlockMode"]["sub"]
+    assert modes["unlocked"]["calls"] == ["/api/v1/auth/login"], "one entry, one request"
+
+
+def test_a_create_card_on_a_portal_that_already_has_a_pin_unlocks_with_it(modes):
+    """The leftover form cannot work, so the PIN just typed is tried as the real thing rather than
+    the operator being sent round the create flow — twice — and then refused."""
+    assert modes["createOnALockedPortal"]["posted"] == [
+        "/api/v1/auth/setup", "/api/v1/auth/login",
+    ]
+    assert modes["createOnALockedPortal"]["lastBody"] == {"pin": "482482"}
+    assert modes["createOnALockedPortal"]["mode"] == "unlock"
+    assert modes["createOnALockedPortal"]["showing"] is False, "and it worked: they are in"
+
+
+def test_and_when_that_pin_is_wrong_the_card_asks_the_right_question(modes):
+    assert modes["createOnALockedPortalWrongPin"]["mode"] == "unlock", "not the create form"
+    assert "4 attempt" in modes["createOnALockedPortalWrongPin"]["reason"]
+    assert modes["createOnALockedPortalWrongPin"]["showing"] is True
 
 
 def test_changing_the_pin_asks_for_the_current_one_first(modes):

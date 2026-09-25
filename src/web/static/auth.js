@@ -406,6 +406,11 @@
     }
     state.busy = false;
     if (!answer.payload || !answer.payload.ok) {
+      // A card drawn when there was no PIN, on a portal that has one now: the operator is holding a
+      // PIN they believe in, and this form can never work. So ask the real question with the PIN
+      // they just typed rather than leaving them on it — twice, as it happens, which is how this
+      // was reported.
+      if (created && answer.status === 409) return unlockWith(state.pin);
       return refuse(refusalText(answer, "that was refused"));
     }
     const unchanged = Boolean(answer.payload.unchanged);
@@ -414,6 +419,16 @@
     if (created) say("The PIN is set — the portal will ask for it from now on.");
     else if (unchanged) say("That is already your PIN — nothing changed.");
     else say("PIN changed. Every other session is now signed out.");
+  }
+
+  /* "There is already a PIN" means the question being asked was the wrong one. Submit what was just
+   * typed as an unlock instead — a real attempt, counted like any other, because it is one. */
+  async function unlockWith(pin) {
+    state.hasPin = true;
+    show("unlock", { reason: "This portal already has a PIN — checking the one you just typed." });
+    state.pin = pin;
+    paint();
+    return sendUnlock();
   }
 
   async function submit() {
@@ -716,9 +731,12 @@
     const signedIn = Boolean(status && status.signed_in);
     const lockedUntil = status && status.locked_until;
     if (!signedIn || lockedUntil) {
-      lock(lockedUntil
-        ? "Too many wrong PINs. Try again in a few minutes."
-        : "Enter your PIN to unlock the portal.");
+      // No reason line unless there is one worth giving: the card's own sentence already says to
+      // enter the PIN, and printing the same words twice reads like two different instructions.
+      show("unlock", {
+        reason: lockedUntil ? "Too many wrong PINs. Try again in a few minutes." : "",
+      });
+      remember(true);
       return state.status;
     }
 
