@@ -652,7 +652,10 @@ out.changeSent = {
   showing: showed(),
 };
 
-// 8. The Security card, with a PIN: what is set, and the two things you can do about it.
+// 8. A FRESH page load with a live session — an empty body, nothing built yet — which is the case
+// that was broken: the overlay was built visible, so every page came up wearing a lock screen.
+// Then the Security card: what is set, and the two things you can do about it.
+body.children = [];
 let security = fakeEl("div");
 security.setAttribute("data-security", "1");
 security.hidden = true;
@@ -662,6 +665,8 @@ security.appendChild((() => { const n = fakeEl("div"); n.setAttribute("data-secu
 body.appendChild(security);
 
 status = { enabled: true, signed_in: true, idle_seconds: 900, updated_at: "2026-09-25T14:02:11Z", user: "owner" };
+Auth.state.overlay = null;
+Auth.state.locked = false;
 await Auth.start();
 const enabledCard = find(body, "[data-security]");
 out.securityOn = {
@@ -669,6 +674,8 @@ out.securityOn = {
   state: find(enabledCard, "[data-security-state]").textContent,
   note: find(enabledCard, "[data-security-note]").textContent,
   actions: find(enabledCard, "[data-security-actions]").children.map((c) => c.textContent),
+  cardHidden: overlay().hidden,
+  cardShown: showed(),
 };
 calls.length = 0;
 replies["/api/v1/auth/change"] = { status: 200, body: { ok: true, changed: true } };
@@ -870,10 +877,20 @@ def test_the_change_sends_the_current_and_the_new_pin_together(modes):
 
 def test_the_monitor_says_what_the_pin_is_and_offers_the_two_actions(modes):
     assert modes["securityOn"]["hidden"] is False
-    assert modes["securityOn"]["state"] == "PIN set · changed 2026-09-25 14:02:11 UTC"
+    assert modes["securityOn"]["state"] == "PIN set · changed 2026-09-25 14:02 UTC", (
+        "the minute is enough; microseconds are noise"
+    )
     assert "15 minutes" in modes["securityOn"]["note"]
     assert "the bot" in modes["securityOn"]["note"], "and it says the loop is unaffected"
     assert modes["securityOn"]["actions"] == ["Change PIN", "Sign out everywhere"]
+
+
+def test_a_signed_in_page_never_shows_the_lock_card(modes):
+    """The card is built on every page so a 401 has somewhere to go. If it is built VISIBLE, a
+    working page comes up with a lock screen over it, which is indistinguishable from being signed
+    out — and that is what navigating between pages did once a PIN existed."""
+    assert modes["securityOn"]["cardShown"] is False
+    assert modes["securityOn"]["cardHidden"] is True
 
 
 def test_the_cards_buttons_open_the_flows(modes):

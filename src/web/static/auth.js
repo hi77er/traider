@@ -448,6 +448,10 @@
     // Every reader below — paint, shake, the focus on lock — reaches the parts through the OVERLAY,
     // so this is the one line that makes the card findable once it is on the page.
     overlay._parts = card._parts;
+    // Built HIDDEN. It is created on every page so a 401 has somewhere to go, and a page with a
+    // live session must never show it: leaving it visible is a lock screen over a working page,
+    // which reads exactly like being signed out. Only show() and lock() reveal it.
+    overlay.hidden = true;
     state.overlay = overlay;
     if (root.document.body) root.document.body.appendChild(overlay);
     return overlay;
@@ -642,7 +646,8 @@
     const note = card.querySelector("[data-security-note]");
     const actions = card.querySelector("[data-security-actions]");
     const changed = typeof status.updated_at === "string" && status.updated_at
-      ? " · changed " + status.updated_at.replace("T", " ").replace("Z", " UTC")
+      // The stamp comes as ISO, with or without a zone suffix: keep the minute and say which zone.
+      ? " · changed " + status.updated_at.slice(0, 16).replace("T", " ") + " UTC"
       : "";
 
     if (line) line.textContent = enabled ? "PIN set" + changed : "No PIN — the portal is open";
