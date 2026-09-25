@@ -24,7 +24,7 @@ replay of it.
 | Live order execution — order building, retries, brackets, cancel/flatten | done |
 | Portfolio state (DynamoDB) | **not implemented** |
 | The execution loop — `src/main.py`, a separate process | done |
-| The dashboard's view of it — positions, orders, the trading log (`/log`) | done |
+| The Session monitor's view of it — positions, orders, the day's log (`/log`) | done |
 
 The current strategy **does not pass its own Gate yet** (see
 [CHECKLIST.md](CHECKLIST.md) for the metrics). Treat every stored result as
@@ -81,7 +81,7 @@ flowchart LR
         A[wait for the bar boundary] --> T[one tick] --> B[Alpaca]
     end
     subgraph dash["process 2 — python -m src.web.app"]
-        W[FastAPI + dashboard]
+        W[FastAPI + web portal]
     end
     loop -.-> F[("data/ · trading.json")]
     dash -.-> F
@@ -90,7 +90,7 @@ flowchart LR
 |  | **The loop** — `src/main.py` | **The dashboard** — `src/web` |
 | --- | --- | --- |
 | Started by | `scripts/run-bot.sh` | `scripts/run-dashboard.sh` |
-| Owns | the bar clock, the shared strategy machine, **every order** | HTTP: the UI, configuration, backtests, reports, and the read-only view of the loop (`Live` panel, `/log`) |
+| Owns | the bar clock, the shared strategy machine, **every order** | HTTP: the UI, configuration, backtests, reports, and the read-only view of the loop (the Session monitor, `/log`) |
 | Must never | serve HTTP | place an order, or start the loop |
 | Reaches the other by | reading and writing files | reading files |
 
@@ -158,14 +158,14 @@ The portal is the whole interface:
 
 - **Strategy bar** - switch, create, rename or delete a strategy (each one has
   its own instrument, bar size, rules and risk settings)
-- **Trading switch** (header, left, beside the account) - the master ON/OFF for the
+- **Trading switch** (Session monitor, in the Account card) - the master ON/OFF for the
   active strategy, and the only place trading is started. Starting it always asks
   first, on paper as well as live: starting the bot is a deliberate act either way,
   and a confirmation that only appears sometimes is one you stop reading. The
   wording is what differs - on the live account it is about real money, on paper it
   is about the strategy acting on the next signal. Stopping never asks, so it is
   always one click.
-- **Environment dropdown** (header, left, beside the logo) - which Alpaca account the
+- **Environment dropdown** (Session monitor, in the Account card) - which Alpaca account the
   active strategy's orders go to. It both selects and displays the mode, and the
   labels spell out the consequence rather than tinting the control: `Paper —
   simulated, no real money` / `LIVE — REAL ORDERS`. When the selected account has no
@@ -180,13 +180,11 @@ The portal is the whole interface:
   untouched, because the status dots live in the option TEXT and rewriting a
   `<select>` under its open popup cancels the menu (macOS renders it natively). The
   dots pause for that moment; the click lands.
-- **Trading panel** — in the **strategy bar**, in the slot beside the signals and the rules it
-  acts on, collapsed to a state chip, a reload and a link to the log. It moved up from the left
-  column: the bar is what the dashboard is about, and the panel reports the switch, the loop, the
-  account and the exchange — none of which need a stored dataset, so it must not live in the column
-  that hides with the chart. While trading is ON every configuration surface is locked and the
-  backtest buttons are disabled: nothing that would change what the bot is running may be edited
-  mid-flight.
+- **Trading panel** — on the **Session monitor**, whole: the master switch, the mode, the
+  account's boxes and the working orders. The Strategy lab carries **no trading controls at
+  all**: it reads only whether trading is ON, because that is what freezes it — while trading
+  is ON every configuration surface is locked and the backtest buttons are disabled: nothing
+  that would change what the bot is running may be edited mid-flight.
 - **Price chart** - candles, indicators, BUY/SELL markers, the held-period
   bands (green when the round trip made money, red when it lost) and the
   stop/take exits
@@ -214,6 +212,14 @@ The portal is the whole interface:
   fetch). There is no **Model** group: rule-based is the only model implemented
   (the backtester and the signal service both refuse to run under any other), so
   `MODEL_TYPE` and its thresholds are set in `.env` and are no longer per-strategy.
+- **Instrument Automation** - the one panel that may change *what* the strategy trades
+  without anyone editing it by hand. It reads top to bottom the way it decides: the
+  switch that arms it, what may **enter** the list (US small caps, a price floor, a
+  volume floor, the list size), the screened Top-10 with each name's two ranks and an
+  ↻ that screens it again now, then when the tick may **act** on it. A switch writes
+  the new instrument into the strategy and ends that tick, so the next bar trades the
+  new symbol. It is also the **only** panel on the page that stays editable while
+  trading is ON, because turning it off is how it is stopped.
 - **Account Settings** (🏦 header popup) - the Alpaca key pairs, the single data
   folder and the backtest costs; shared by all strategies. Three sections and nothing
   else — what belongs to a *trading account*. The history window, the backtest window
@@ -240,7 +246,7 @@ The portal is the whole interface:
   as news. A pair that already passed is not re-checked on every save. A bad pair
   fails itself rather than the save: a pair the broker **rejects** is left out of the
   write (see Safety) while the rest of the form is saved as normal.
-- **Global settings** - not in the dashboard any more: the data provider, its keys
+- **Global settings** - not in the Strategy lab any more: the data provider, its keys
   and the rest of the infrastructure settings are edited in `.env` directly
 - **Backtest panel** - run the engine, read the Gate and the metrics
 - **Historical Delta** - gap-check the dataset against the provider and refill
@@ -252,7 +258,7 @@ The portal is the whole interface:
   Yahoo Finance: a preset screener, the whole US market, top gainers, highest
   volume, top losers and the small-cap gainers/volume lists. The two long tables
   are collapsible and start collapsed so the page opens as an overview
-- **Trading panel** (left column, directly under Backtest; click the header to expand) - whether
+- **Trading panel** (Session monitor; click the header to expand) - whether
   a loop is running the active strategy, what it last did and when, whether anything open is
   actually **protected** by a resting exit, and whether the **exchange is open** —
   with the time it next changes. That last line is read from Alpaca's clock rather
@@ -261,16 +267,18 @@ The portal is the whole interface:
   so instead of guessing, because "closed" and "we could not look" are different
   answers. Its numbers are laid out as **the same stat boxes the backtest panel and the
   report page use** — account, equity, the day's change, cash, buying power, position,
-  working orders, resting exit legs, trades closed — because a dashboard is read by
+  working orders, resting exit legs, trades closed — because the Session monitor is read by
   glancing at boxes. Anything that is not a measurement stays a sentence: an account that
   could not be read shows its REASON under the boxes rather than `$0.00` in them, since a
   balance and an absence of one are different answers.
-- **The log page is scoped to ONE account — the one in play** — and that is a rule about the whole
+- **The Session monitor is scoped to ONE account — the one in play** — and that is a rule about the whole
   page, not about a panel. WHICH account is the scope: the **account being traded**, the one the
-  switch routes orders to, shown as the same `.bt-stat` **boxes** the dashboard's trading panel and
-  the report page use, tagged **in play**. Every panel below it obeys the same helper — the figures,
+  switch routes orders to, shown as the same `.bt-stat` **boxes** the trading panel and
+  the report page use. Every panel below it obeys the same helper — the figures,
   the positions, the day's ticks, the submitted orders, the closed trades, the gates and the last
-  tick's age. The idle environment's data is **not shown at all**: a balance sitting beside the
+  tick's age. (The boxes used to carry a name line above them — `paper ****R9V`, tagged
+  **in play**. It is gone: the Mode box already says which account this is, and the masked
+  number was a label to read twice for nothing.) The idle environment's data is **not shown at all**: a balance sitting beside the
   traded one's is a number waiting to be read as the wrong account's, which is exactly what happened
   on switching paper → live with no live keys configured — the only figures on the page were the
   paper account's, under a header that said `live`. This is not a cosmetic filter either: the loop
@@ -285,16 +293,26 @@ The portal is the whole interface:
   (`latest.json` is per strategy, written on every tick whatever account it ran for), so the gates
   panel refuses to draw the other account's tick and says which one it was — nothing is silently
   presented as the account in play.
-- **The log page's Trading status block**, last in that card, carries the loop's state,
-  the strategy and last tick, the **same master switch the dashboard's top bar has** and
-  the ↻ that re-reads the page. The switch is the same file on both pages
-  (`static/trading_switch.js`) and not a copy: the confirmation that stands between a
+- **The Session monitor's session chart** carries two read-outs, both ON by default, because they
+  answer the two questions a live session is read with: what the strategy was LOOKING at, and what
+  it DECIDED. The chips over the price pane are one per indicator the strategy's own RULES test —
+  an indicator nothing tests is a picture without a question — and each draws itself where its kind
+  belongs: the price-scaled ones as series on the candles, the rest in a pane of their own
+  underneath (not `volume_abs`: this chart's own volume pane is that series). `signals` marks the
+  signals the loop generated that were not a hold, read from the day's own tick records: filled
+  ones take the trade's colour (green buy, red sell), the ones that never became an order are grey. Both are drawn for the day on screen and
+  clipped to its bars, since the bundle the lab serves covers sixty days and this chart is of one
+  session.
+- **The Session monitor's Trading status block**, last in that card, carries the loop's state,
+  the strategy and last tick, the **master switch** and
+  the ↻ that re-reads the page. The switch is one implementation
+  (`static/trading_switch.js`), not a copy: the confirmation that stands between a
   click and real orders on a LIVE account is one thing to get right, not two. Anything
   wrong leaves it clickable — stopping has to stay possible. The way back to the
-  dashboard sits at the top of the day menu, as it does on the report page, and an
+  Strategy lab sits at the top of the day menu, as it does on the report page, and an
   armed switch with no loop running is **said out loud** rather than left to read as
   "stopped" beside a button that says "Turn trading off".
-- **The log page's "The Loop" panel** answers what the account and the broker cannot:
+- **The Session monitor's "The Loop" panel** answers what the account and the broker cannot:
   *when is it going to do anything, and if not, what is it stuck behind?* A **digital clock** sits
   in the panel's top-right corner — `TICK IN 38:47:09` in a fixed-width font on a lit green face,
   with a muted 12px caption under it saying what it is counting to (`The bar closes Mon 04:35 PM ·
@@ -307,7 +325,10 @@ The portal is the whole interface:
   the gates it passed, the one that ended it with the loop's own words, and the ones it never
   reached. The tick stamps the gate on its record (`tick_record(... stage=...)`),
   so the pipeline is rendered from the loop's own account of itself — `refused` alone covers six
-  gates, and "which one" is the question every quiet bar raises. The page's gate list, the
+  gates, and "which one" is the question every quiet bar raises. A tick can also end well before
+  `decided`: one that switches the strategy's instrument stops at the `instrument` gate with the
+  action `switched`, because every step below it was computed for the instrument it just
+  replaced. The page's gate list, the
   constant ordering it, and the `stage=` literals in `orchestrator.tick` are checked against
   each other by a test, because a pipeline that drifts is worse than none. The day's own ticks
   are a section of that panel (under the gates) rather than a card of their own: when it next
@@ -315,22 +336,25 @@ The portal is the whole interface:
   The panel folds away, and the head keeps the COUNTDOWN while it is folded — collapsing hides
   the tables, not the one number the panel exists for.
 
-**The dashboard does not reload itself, and what it does refresh is deliberate.**
+**The Session monitor does not reload itself, and what it does refresh is deliberate.**
 The Trading panel polls only while it is expanded *and* the tab is in the foreground:
 the loop's own records every 5 s (local files) and the account plus the exchange
 clock every 60 s (broker calls). Opening it, or coming back to the tab, refreshes at
 once. A poll that changes nothing rewrites nothing, so the panel does not churn
 while you read it. Collapse it, or leave the tab, and the polling stops — a
 background tab asking Alpaca every minute is a recurring cost with no reader. The
-trading log page refreshes itself only while **today** is showing, since a past day
+Session monitor refreshes itself only while **today** is showing, since a past day
 cannot gain rows — but even on a past day it keeps re-reading the **loop's own state**
 (the chip, the switch, the countdown's target) every 20 s while a loop is running or the
 switch is armed, because that half moves whatever day is on screen. Its ↻ button re-reads
 the day you are looking at, and its countdown ticks every second in the browser without
-asking anything. Both timers follow the tab: hide it and they stop, come back and the page
-re-reads at once.
-
-The two header controls are **one pill in every state** - same border, radius,
+asking anything. The four panels under it carry an ↻ each — the Loop, Positions and working
+orders, Orders the bot submitted, and Trades closed — and each one re-reads **its own panel
+only**, now rather than on the next poll: the ticks panel does not make the page ask the
+broker about positions to answer, and the positions panel does not re-read the day's records.
+A failed read is reported in the page's error strip and leaves the panel's rows on screen,
+because a table emptied by a failure would say "nothing happened". Both timers follow the tab: hide it and they stop, come back and the page
+The mode and the switch are **one pill in every state** - same border, radius,
 padding, height, font, tint, background and text colour, whichever account is
 selected and whether or not trading is on. Nothing is styled per state, and the
 class list is constant, so the pair cannot drift apart; the state is carried by the
@@ -354,7 +378,7 @@ dot stays red and simply stops flashing.
 ```
 
 The suite is offline: OpenBB, the broker and the clock are all stubbed, so it
-runs without credentials or market data. The dashboard's and report page's
+runs without credentials or market data. The Strategy lab's and report page's
 crosshair-sync logic is exercised by running the real `app.js` / `report.js`
 blocks under `node` against fake charts that reproduce lightweight-charts'
 actual event semantics (see `tests/test_web/test_crosshair_sync.py`), so it needs
@@ -384,7 +408,7 @@ data/          generated at runtime (gitignored): the two JSON stores (account,
 
 `src/config/` also holds the runtime state **both processes read**: the switch
 (`trading_state`) and the loop's lease (`loop_state`). They live below `src/web` and
-`src/scheduler` on purpose, so the dashboard can answer "is the bot running?" without
+`src/scheduler` on purpose, so the web process can answer "is the bot running?" without
 importing the loop — the invariant `tests/test_architecture.py` enforces.
 
 Runtime data is not in the repository:
@@ -399,11 +423,17 @@ data/backtest_results/<strategy>/latest.json   trimmed view the panel reads
 data/backtest_results/<strategy>/runs/<id>.json full, self-describing run
 data/backtest_results/<strategy>/index.json    run-menu index
 data/trading.json                              trading ON/OFF (runtime, not config)
+data/automation-<strategy>.json                instrument automation criteria (runtime,
+                                               written by its panel only)
+data/automation-list-<strategy>.json           the cached Top-10 it screens (written by the
+                                               panel's ↻, or by the loop when it has aged)
 ```
 
 The trading state is deliberately **not** configuration: it lives beside the
 datasets because the configuration files it freezes cannot hold the switch that
-freezes them.
+freezes them. The instrument automation's two files sit there for the same reason:
+its criteria have to be editable while a loop is trading — turning it off is how it
+is stopped — and the loop writes the cached list as well as the panel.
 
 A run file is deliberately complete: every equity point, every trade with its
 exit reason, and an `inputs` block (settings, rules + fingerprint, window,
@@ -411,13 +441,13 @@ costs, risk config) that makes a result reproducible and attributable.
 
 ## Configuration
 
-Three layers, two editors in the dashboard:
+Three layers, two editors in the Strategy lab:
 
 | Layer | File | Edited from | Holds |
 |-------|------|-------------|-------|
 | **Global** | `.env` | by hand | data provider + keys, the paths of the two JSON stores, cloud storage (read by the dataset sync, off by default) and state persistence (unbuilt) |
 | **Account** | `data/account/account.json` | 🏦 Account Settings | the Alpaca key pairs (paper + live), the data folder, backtest costs |
-| **Strategy** | `data/strategies/store.json` | Strategy Configuration / Rules / Risk panels, plus the header dropdown for `EXECUTION_ENV` | instrument, bar size + history period, trading hours + exchange, features, gates, schedule, risk limits, rules, paper/live |
+| **Strategy** | `data/strategies/store.json` | Strategy Configuration / Rules / Risk panels, plus the Mode control on the Session monitor for `EXECUTION_ENV` | instrument, bar size + history period, trading hours + exchange, features, gates, schedule, risk limits, rules, paper/live |
 
 Precedence is **strategy > account > .env**, and the process environment still
 wins over `.env` (which is why a stray exported variable can silently override
@@ -426,7 +456,7 @@ sit under `data/` (one rule ignores the whole runtime tree), so a new strategy o
 account file is never staged by accident.
 
 One key is stored per strategy but edited outside the panels: `EXECUTION_ENV`
-comes from the header dropdown. Saving a panel preserves it (the panel never
+comes from the Session monitor. Saving a panel preserves it (the panel never
 renders it, so a plain Save would otherwise reset a live strategy to paper).
 
 A fresh clone has **no strategy store**: the app starts with an empty one and
@@ -576,11 +606,15 @@ Five decisions worth knowing about:
   for display and saves - editing an unrelated setting does not re-ask Alpaca - while
   a failure is not, since it may just be the network.
 - **A process older than its own source says so.** Python loads a module once, so a
-  server started before an edit keeps enforcing the previous gate — the dashboard,
+  server started before an edit keeps enforcing the previous gate — the portal,
   the popup and the tests all look current while the thing deciding whether orders
   may start is not. The gate modules are watched by mtime and the trading payload
-  carries the verdict: the switch's tooltip says so, and the dashboard warns once per
+  carries the verdict: the switch's tooltip says so, and the Strategy lab warns once per
   page load, naming the files that moved on without it. Restart uvicorn to clear it.
+  The instrument automation is that case twice over: a loop started before the feature
+  existed never walks its gate, refuses to open anything new (the watch list includes
+  `src/scheduler/orchestrator.py`), and needs a restart to pick it up — and the web
+  server has to be restarted too, before the panel's API answers at all.
 - **A key pair the broker rejects is never written down.** Saving the account form
   checks the pairs it is about to add or change, and a pair Alpaca answers 401/403
   for is left out of the account file: a stored credential that cannot work would
@@ -592,7 +626,7 @@ Five decisions worth knowing about:
   not evidence about a credential.
 - **Paper is always the default.** Credentials for a live account do not move the
   switch, and neither does re-using an existing strategy: routing orders to a real
-  account is an explicit choice, made in the header dropdown, per strategy.
+  account is an explicit choice, made on the Session monitor, per strategy.
 - **No reconfiguration while trading is on.** With trading on, the server refuses
   every configuration write with HTTP 409 - settings, account, rules, strategy
   create/rename/delete/select, the backtest runner, the dataset rebuild/backfill

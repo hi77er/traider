@@ -74,8 +74,8 @@ Phase 6: Integration (Days 16-17, 3 tasks) — DONE
     a boundary sleep, no catch-up, a record per tick
   ✓ main-entry: src/main.py hosts it under a lease (data/loop.lock); exit codes
     2 = wrong host, 4 = another live loop already runs, 0 = the tick ran
-  ✓ the dashboard's view of it: GET /api/v1/loop|positions|orders|trades|log, a
-    "N open" pill, the Trading panel with the protection verdict, and the /log page
+  ✓ the Session monitor's view of it: GET /api/v1/loop|positions|orders|trades|log, a
+    "N open" pill, the Trading panel with the protection verdict, and the day's log
 
 Phase 7: Testing (Days 18-21, 4 tasks) — IN PROGRESS
   ✓ Unit + integration tests (883 passing, incl. backtest⇄live parity, the order path

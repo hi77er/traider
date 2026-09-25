@@ -1,9 +1,9 @@
 /* TRAIDER — the master switch, in ONE place.
  *
- * Two pages carry it: the dashboard's top bar and the trading log's Trading status block. That
- * is why this is not written twice — the confirmation is the only thing standing between a
- * click and real orders on a LIVE account, and a second copy of the wording is a second chance
- * to get it wrong.
+ * The Session monitor carries it, and this module is what does the carrying: the confirmation is
+ * the only thing standing between a click and real orders on a LIVE account, so the wording, the
+ * endpoint and the acknowledgement are not written a second time anywhere. The Strategy lab does
+ * not trade at all — it reads ONE fact from here (``tile``, for its boxes) and nothing else.
  *
  * The page hands over the plumbing it already has (its own `api`, dialog and toast) and this
  * file owns the DECISION: ask or not, which endpoint, and what the acknowledgement means.
@@ -111,13 +111,13 @@ const TraiderSwitch = (function () {
     return { wrote: true, ok: !(r && r.ok === false), payload: r };
   }
 
-/* ---------- the state boxes, shared by both pages ----------
+/* ---------- the state boxes ----------
  *
- * The dashboard's Trading panel and the trading log's Account card show the SAME boxes — the mode,
- * the switch, and what is open — so they are built here, once, for the reason the switch itself
- * lives here: two copies of "which account is this", or of a confirmation standing between a click
- * and real money, is two chances to get it wrong. Each page places them in its own grid and hands
- * over the name of its own handler; nothing else about them is per-page.
+ * The Session monitor's Account card shows three: the mode, the switch, and what is open. They are
+ * built here for the reason the switch itself lives here — two copies of "which account is this",
+ * or of a confirmation standing between a click and real money, is two chances to get it wrong.
+ * The Strategy lab uses `tile` alone, for the signal counts and the risk boxes, so a box on either
+ * page is the same box.
  *
  * `tile` is the box itself — the same `.bt-stat` the backtest KPIs and the report page use. `click`
  * makes it a real `<button>`, and `disabled` renders it unpressable with no handler left on it, so

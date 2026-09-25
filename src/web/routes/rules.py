@@ -1,7 +1,7 @@
 """Strategy Rules + selection API endpoints for the Web Portal.
 
 The rules file stores MANY named strategies (``{active, strategies}``). The
-whole dashboard is strategy-scoped, so all reads use the *effective* settings
+whole page is strategy-scoped, so all reads use the *effective* settings
 (the active strategy's config overlaid on .env). Creating / selecting /
 deleting / saving a strategy updates the JSON, after which the page reloads
 and every panel renders in the new strategy's context.
@@ -11,9 +11,10 @@ from __future__ import annotations
 
 from typing import Dict
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
+from src.config import effective
 from src.config.effective import get_effective_settings_dep
 from src.config.settings import Settings
 from src.web.services import rules_service
@@ -71,23 +72,35 @@ def create_strategy(body: StrategyCreate, settings: Settings = Depends(get_effec
     "/select",
     dependencies=[
         Depends(require_trading_off),
-        # Selecting a DIFFERENT strategy while a position is open is refused because the
-        # flatten that follows would run against the NEW strategy's instrument and
-        # environment, and miss the position entirely. Blocking the switch is what keeps
-        # "flatten first" reachable from the screen where the position is actually visible.
+        # Selecting a DIFFERENT strategy while a position is open used to be refused outright,
+        # because the flatten that follows would run against the NEW strategy's instrument and
+        # environment and miss the position entirely.
         #
-        # ``unreadable_blocks=False``: a 401 is a verdict about a KEY, not about a
-        # position, and a switch places no order anywhere. A dead key must never freeze
-        # the picker — it cannot be the reason an order lands somewhere unreadable, its
-        # remedy is elsewhere, and arming is already refused while an account is blind.
-        Depends(trading_service.require_flat(
-            "The active strategy cannot be changed while a position is open",
-            unreadable_blocks=False,
-        )),
+        # The check now lives in the handler instead, because the answer depends on WHICH
+        # strategy is being selected: handing the run to the position's OWNER — the strategy
+        # whose instrument the open position is in, in the account this run trades — is the one
+        # way through that keeps the position, and it has to be reachable. Without it the
+        # operator could neither arm the strategy holding the position nor select it, so their
+        # only options were to close the position by hand or to leave it open with nothing
+        # managing it. Selecting anything else still refuses; the position's owner takes it over
+        # and can then only close it (see ``LiveDriver.adopt_broker_position``).
     ],
 )
 def select_strategy(body: StrategyCreate, settings: Settings = Depends(get_effective_settings_dep)) -> dict:
     """Switch the active strategy to an existing one (same as create-if-exists)."""
+    # The strategy being selected, resolved to the instrument IT trades: that is what decides
+    # whether the open position is one it could take over.
+    environment = str(getattr(settings, "execution_env", "paper") or "paper").lower()
+    blocker = trading_service.flat_blocker(
+        settings,
+        action="The active strategy cannot be changed while a position is open",
+        unreadable_blocks=False,
+        trade_env=environment,
+        held_ok_in_account=environment,
+        held_ok_symbol=trading_service.instrument_of(settings, body.name),
+    )
+    if blocker:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=blocker)
     return rules_service.create_strategy(settings, body.name)
 
 

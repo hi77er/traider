@@ -4,19 +4,35 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>TRAIDER — Market</title>
+  <!-- The page title's own face. Everything else stays on the system stack, and the CSS
+       falls back to what macOS and Windows already ship if this cannot be fetched. -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@600;700&display=swap" />
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
   <header>
-    <h1>🌎 Market</h1>
+    <!-- The same identity group as the other two pages: the product's logo, then the name of the
+         page you are on, centred over it. Three screens, one header — a page that put its own
+         name where the logo goes was the odd one out, and its title could not be styled with the
+         others'. -->
+    <div class="header-left">
+      <h1>TRAIDER</h1>
+      <span class="page-name">Market</span>
+    </div>
     <div class="header-actions">
-      <span id="mkt-updated" class="chip">loading…</span>
       <button id="mkt-refresh" class="ghost small" onclick="refreshAll()" title="Refetch every panel now (bypasses the short cache)">🔄 Refresh</button>
-      <a class="btn-link" href="/" title="Strategy dashboard — charts, rules, backtest">📈 Dashboard</a>
+      <a class="btn-link" href="/" title="Strategy lab — charts, rules, backtest">📈 Strategy lab</a>
     </div>
   </header>
 
   <main class="page">
+    <!-- When the screens were last read, and whether the answer came from the cache. It sat in the
+         header until the centred title overlapped it: the nav holds NAVIGATION on all three
+         pages now, and a status line belongs beside the data it describes. -->
+    <p class="mkt-status"><span id="mkt-updated" class="chip">loading…</span></p>
     <p class="muted note" id="mkt-source">
       Whole-market screens from Yahoo Finance. <b>Volume here is raw share volume, not relative
       volume</b> — a small cap trading 100M shares has moved, but that is not by itself an

@@ -1,4 +1,4 @@
-"""Daily Delta dashboard service (sits between HTTP routes and data logic)."""
+"""Daily Delta service (sits between HTTP routes and data logic)."""
 
 from __future__ import annotations
 

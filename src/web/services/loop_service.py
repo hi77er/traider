@@ -31,12 +31,22 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from src.config import loop_state
-from src.config.trading_state import armed_strategy
+from src.config.trading_state import armed_strategy, is_trading_on
 from src.execution import store
+from src.model import rules as rules_mod
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["NEVER", "OVERDUE", "PROTECTED", "RUNNING", "STOPPED", "UNPROTECTED", "protection", "status"]
+__all__ = ["NEVER", "OVERDUE", "PROTECTED", "RUNNING", "STOPPED", "UNPROTECTED",
+           "ensure_running", "monitored_strategy", "protection", "status"]
+
+#: How often a read of the loop's state may try to put a crashed loop back. The state is polled
+#: every few seconds by an open page, and a start attempt per poll would be a fork storm.
+ENSURE_MIN_INTERVAL_SECONDS = 30
+
+#: When the last attempt was made, in epoch seconds. In-process on purpose: a throttle on an
+#: operation a poll asks for, not state anything else has to agree with.
+_last_ensure = 0.0
 
 NEVER = "never"
 STOPPED = "stopped"
@@ -62,10 +72,37 @@ LEVEL_TOLERANCE = 0.003
 REFUSAL_SCAN = 200
 
 
+def monitored_strategy(settings) -> str:
+    """Which strategy's SESSIONS the monitor is showing.
+
+    Trading ON: the ARMED one — the log belongs to the run, and the strategy picker is locked
+    while it is on, so this can only differ if the store was edited outside the UI.
+
+    Trading OFF: the ACTIVE strategy — the one the lab is showing, and the one a switch would arm
+    next. The stamp in the switch is deliberately NOT used here. It records which strategy the
+    LAST run belonged to, so reading it left the monitor showing the previous strategy's day —
+    its ticks, its orders, its closed trades, its roadmap — after the operator had moved on to
+    another strategy. Worse, it was showing it beside the NEW strategy's charts and account,
+    which is a page that cannot be read at all: half of it belongs to something else.
+    """
+    if is_trading_on(settings):
+        return armed_strategy(settings)
+    try:
+        store_model = rules_mod.load_store(settings)
+    except Exception as exc:  # noqa: BLE001 - a broken store must not 500 the monitor
+        logger.warning("Could not read the strategy store for the monitor: %s", exc)
+        return armed_strategy(settings)
+    name = store_model.active
+    strategy = store_model.strategies.get(name) if name else None
+    if strategy is None or strategy.deleted:
+        return armed_strategy(settings)
+    return str(name)
+
+
 def status(settings, at: Optional[datetime] = None) -> Dict[str, Any]:
     """Everything the dashboard needs to say whether a bot is running, in one read."""
     moment = at or datetime.now(timezone.utc)
-    name = armed_strategy(settings)
+    name = monitored_strategy(settings)
     claim = loop_state.read(settings)
     live = loop_state.holder(settings, moment)
     latest = store.load_latest(settings, name)
@@ -127,6 +164,68 @@ def _last_refusal(settings, name: str) -> Optional[Dict[str, Any]]:
 # ---------------------------------------------------------------------------
 # is the open position protected?
 # ---------------------------------------------------------------------------
+def ensure_running(
+    settings,
+    *,
+    at: Optional[datetime] = None,
+    interval: float = ENSURE_MIN_INTERVAL_SECONDS,
+) -> Dict[str, Any]:
+    """Put the loop back when trading is ON and nothing is running it.
+
+    ``overdue`` is this module's name for the crash case — a claim on disk that no live process is
+    honouring — and until now nothing acted on it: "nothing will tick again until someone restarts
+    it" was the entire answer, which is the wrong answer while an armed account waits for a bar.
+
+    Restoring the RUNNER is not the same decision as arming. Trading was switched on by the
+    operator, the loop reads that switch itself on every tick and every slice of its sleep, and a
+    loop that comes back does nothing a surviving one would not have done. So this is a restart,
+    never an arming — and it is throttled, because the caller is a poll.
+
+    Returns ``{ensured, started, state, reason, message}``. ``ensured`` is False whenever nothing
+    was needed; ``reason`` says which of the three ways that happened.
+    """
+    global _last_ensure
+
+    moment = at or datetime.now(timezone.utc)
+    view = status(settings, moment)
+    state_now = view.get("state")
+
+    if not is_trading_on(settings):
+        return {"ensured": False, "started": False, "state": state_now,
+                "reason": "trading is off", "message": ""}
+    if state_now == RUNNING:
+        return {"ensured": False, "started": False, "state": state_now,
+                "reason": "the loop is already running", "message": ""}
+
+    now_ts = moment.timestamp()
+    if now_ts - _last_ensure < interval:
+        return {"ensured": False, "started": False, "state": state_now,
+                "reason": "asked again too soon", "message": ""}
+    _last_ensure = now_ts
+
+    # Imported here, not at module scope: the two are neighbours, and a local import keeps the
+    # dependency one-way even if ``loop_control`` ever needs to read this module's state.
+    from src.web.services import loop_control
+
+    result = loop_control.start(settings)
+    started = bool(result.get("started"))
+    if started:
+        logger.warning(
+            "Trading is ON but no loop was running (state=%s) — started pid=%s",
+            state_now, result.get("pid"),
+        )
+    else:
+        logger.error("Trading is ON and no loop is running, and one could not be started: %s",
+                     result.get("message") or result.get("reason") or "no reason given")
+    return {
+        "ensured": True,
+        "started": started,
+        "state": state_now,
+        "reason": result.get("reason") or "",
+        "message": result.get("message") or "",
+    }
+
+
 def protection(settings, *, env: Optional[str] = None, legs: Optional[list] = None) -> Dict[str, Any]:
     """Is what is held protected, by the levels the machine opened it with?
 

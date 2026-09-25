@@ -1,4 +1,10 @@
-/* TRAIDER dashboard — drives the two UI states from the dataset status API. */
+/* TRAIDER Strategy lab — drives the two UI states from the dataset status API.
+ *
+ * The lab BUILDS a strategy: the instrument and its history, the rules, the risk they are traded
+ * under, the signals those rules produce, and the backtest that measures them. It does not trade
+ * and it does not watch: the switch, the mode, the account and the loop live on the Session
+ * monitor, which is where they are acted on. The one fact borrowed from there is whether trading
+ * is ON, because that is what freezes the configuration. */
 "use strict";
 
 const PAGE_SIZE = 100;
@@ -27,7 +33,7 @@ const state = {
   // the provider cannot fill. Keying the chart refresh on `synced` left the chart
   // showing the old window in exactly that case.
   deltaRows: null,
-  // Whether the dashboard hides the intervals nobody traded (the "Hide all bars missing
+  // Whether the page hides the intervals nobody traded (the "Hide all bars missing
   // due to no liquidity" toggle in the Historical Delta panel). ON by default: those bars
   // are listed for accounting, not as a to-do, and on a thin symbol they bury the handful
   // that can actually be fetched. Untick to see them again — the state survives
@@ -52,11 +58,9 @@ const state = {
   showOnlyExecuted: true, // hide BUY/SELL markers that never opened/closed a position (on by default)
   priceSeries: null, // candlestick series (markers live here)
   overlaySeries: [], // overlay/volume series added on top of the candles
+  // The volume read-out over the ABSOLUTE volume bars, or null when they are not drawn.
+  volumeReadout: null,
   shadeSeries: null, // "position held" band series (painted behind the candles)
-  // The broker half of the Trading panel, kept between the fast polls (which fetch none of it)
-  // and across a FAILED read: the boxes show the last figures that were actually read.
-  liveOrders: null,
-  liveAccounts: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -64,13 +68,13 @@ const $ = (id) => document.getElementById(id);
 async function api(path, options) {
   const res = await fetch(path, options);
   if (!res.ok) {
-    // A dashboard process started before an endpoint existed still serves the CURRENT
+    // A server process started before an endpoint existed still serves the CURRENT
     // app.js from disk, so the page is new and its routes are old. "404: Not Found" reads
     // like a typo in the URL; this says what actually happened — and it happens every time
-    // the dashboard is left running across a change.
+    // the server is left running across a change.
     if (res.status === 404) {
-      throw new Error(`${path} is missing (404) — the dashboard is running older code than "
-        + "this page, so restart it`);
+      throw new Error(`${path} is missing (404) — the server is running older code than `
+        + "this page, so restart it");
     }
     let detail = res.statusText;
     try {
@@ -93,7 +97,7 @@ async function refresh() {
 // Drop the chart's cached copy of the bars.
 //
 // `state.datasetRows` is fetched ONCE and kept (see loadChart) so that redrawing the
-// dashboard costs no request. A cached copy of a dataset that has since GROWN is worse
+// chart costs no request. A cached copy of a dataset that has since GROWN is worse
 // than no cache at all: `buildMainChart` would redraw the old window while every other
 // panel — all of which refetch — moved on, so a fetch appeared to add bars to the
 // table, the summary and the delta column but not to the chart.
@@ -104,6 +108,56 @@ async function refresh() {
 function forgetDatasetRows() {
   state.datasetRows = null;
   state.chartRows = null;
+}
+
+// Has the FILE moved on since that copy was taken?
+//
+// A comparison of the row COUNT, which is the same test `render` makes and the reason this is a
+// function rather than a second rule: no matter who wrote the bars — a fetch from this page, the
+// initial download, or the loop, which syncs the dataset on every tick it runs — the question is
+// the same one. `null` means there is no copy to be stale, which is never "it grew".
+function datasetGrew(rows) {
+  return typeof rows === "number" && state.chartRows !== null && state.chartRows !== rows;
+}
+
+/* Notice that the bars on screen are no longer the bars in the file, and redraw them.
+ *
+ * This page takes its copy of the dataset ONCE, when it loads, and the chart, the table, the
+ * summary, the signals and the delta panel are all drawn from that snapshot. That is fine until
+ * something writes bars while the page is open — and during a session the LOOP does exactly
+ * that, every tick, because syncing the dataset to now is one of the steps of a tick. So a
+ * page left open across the open sat on Friday's chart for the whole of Monday morning
+ * while the tick table next door showed the loop pulling today's bars in, and the delta panel
+ * beside the chart said "nothing to fetch": three panels, every one of them correct, answering
+ * about three different times.
+ *
+ * ONE reload per move of the file, because the two reads that decide this — the status and the
+ * bars — are taken moments apart: a write landing between them would reload twice, and a file
+ * being written continuously would reload for as long as it is written. A count that is still
+ * behind after the guard has run out is picked up by the next call.
+ */
+const DATASET_RELOAD_MIN_MS = 15000;
+let _datasetReloadedAt = 0;
+
+async function reloadForDatasetGrew(rows) {
+  if (!datasetGrew(rows)) return false;
+  if (Date.now() - _datasetReloadedAt < DATASET_RELOAD_MIN_MS) return false;
+  _datasetReloadedAt = Date.now();
+  await refresh();
+  return true;
+}
+
+/* The look itself, on the cadence that already asks the broker: a local file read
+ * (``/dataset/status``), never a provider call, because fetching stays the loop's job and its
+ * throttle. */
+async function watchDatasetRows() {
+  let s = null;
+  try {
+    s = await api("/api/v1/dataset/status");
+  } catch (err) {
+    return false;  // a failed read says nothing about the file, so nothing to reload for
+  }
+  return reloadForDatasetGrew(s.rows);
 }
 
 function render(s) {
@@ -330,6 +384,7 @@ function buildMainChart() {
     handleScroll: { mouseWheel: true }, // horizontal wheel/drag still pans
     handleScale: {
       mouseWheel: false,
+      pinch: false, // the library's own pinch is a second, unbounded zoomer (see chart_zoom.js)
       axisPressedMouseMove: { time: false, price: true },
     },
   });
@@ -412,6 +467,12 @@ function buildMainChart() {
 // the candles) — not in a separate chart — like a classic volume sub-pane.
 // Returns true when volume bars were drawn (caller may rely on the margins).
 function drawVolumeBars(chart) {
+  // Whatever the volume read-out was reading is about to be rebuilt, so it goes first — and stays
+  // gone unless an absolute-volume series is drawn again below.
+  if (state.volumeReadout) {
+    state.volumeReadout.hide();
+    state.volumeReadout = null;
+  }
   const hist = (state.indicators?.overlays || []).filter(
     (o) => o.kind === "histogram" && state.selected[o.key]
   );
@@ -432,6 +493,7 @@ function drawVolumeBars(chart) {
   // the bottom band empty for the volume bars underneath them.
   chart.priceScale("right").applyOptions({ scaleMargins: { top: 0.04, bottom: 0.28 } });
 
+  let volumeAbs = null; // the ABSOLUTE volume series, the only one worth a value read-out
   hist.forEach((o) => {
     const vs = chart.addHistogramSeries({
       priceScaleId: "volume",
@@ -446,9 +508,21 @@ function drawVolumeBars(chart) {
     }));
     vs.setData(pts);
     state.overlaySeries.push(vs);
+    if (o.key === "volume_abs") volumeAbs = vs;
   });
   // Volume fills exactly the reserved bottom band.
   chart.priceScale("volume").applyOptions({ scaleMargins: { top: 0.72, bottom: 0.0 } });
+
+  // The amount over the bar under the crosshair — for the absolute volume only. A relative-volume
+  // bar is a ratio, and the label would print it as if it were an amount (see chart_volume.js).
+  if (volumeAbs && typeof ChartVolume !== "undefined") {
+    state.volumeReadout = ChartVolume.attach({
+      chart: chart,
+      series: volumeAbs,
+      host: $("chart-canvas"),
+      label: $("chart-volume-label"),
+    });
+  }
   return true;
 }
 
@@ -555,9 +629,9 @@ function renderSignals(d) {
 function signalTiles(d) {
   const counts = d.counts || {};
   const tiles = [
-    liveTile("Buy", String(counts.BUY ?? 0)),
-    liveTile("Sell", String(counts.SELL ?? 0)),
-    liveTile("Hold", String(counts.HOLD ?? 0)),
+    statTile("Buy", String(counts.BUY ?? 0)),
+    statTile("Sell", String(counts.SELL ?? 0)),
+    statTile("Hold", String(counts.HOLD ?? 0)),
   ];
   return `<div class="signal-metrics">${tiles.join("")}</div>`;
 }
@@ -589,7 +663,7 @@ function strategyRiskTiles() {
       // current default it would fall back to. One source, so the box and the field cannot
       // disagree.
       const value = stored[f.key] != null ? stored[f.key] : f.default_value;
-      tiles.push(liveTile(f.label, riskValue(f, value), "", (f.hints || []).join(" ")));
+      tiles.push(statTile(f.label, riskValue(f, value), "", (f.hints || []).join(" ")));
     }
   }
   return tiles;
@@ -1054,8 +1128,8 @@ function switchDataset(symbol) {
   if (toggles) toggles.innerHTML = "";
 
   // Re-query dataset status for the new instrument: if a Parquet file exists
-  // for it we render the full dashboard; otherwise the portal falls back to
-  // the "Download Historical Data" state.
+  // for it we render the whole page; otherwise it falls back to the "Download
+  // Historical Data" state.
   refresh();
 }
 
@@ -1153,16 +1227,17 @@ function closeAccountSettings() {
   if (backdrop) backdrop.hidden = true;
 }
 
-/* ---------- Execution: the switch, the mode, and the config lock ----------
-   Which account orders would go to, whether any are being sent, and what is open are the Mode,
-   Trading and Open boxes in the Trading panel — the panel is the only place any of the three is
-   reported or changed. A paper and a live account are indistinguishable everywhere else, which is
-   exactly how live orders get sent by accident.
+/* ---------- Execution: the configuration lock ----------
+   The switch, the mode and the account used to be read here for the Trading panel this page no
+   longer has: all of it moved whole to the Session monitor, which is where the loop's day is read
+   and where arming anything belongs. What is left is the one fact this page still needs from
+   there — whether trading is ON, because that is what freezes the configuration. Nothing on this
+   page can spend money, and a paper and a live account are indistinguishable here.
 
    Trading ON freezes every configuration surface. The server enforces that with a
    409; applyConfigLock() only mirrors it so nothing is clickable that would be
-   rejected. Everything here is non-throwing: a panel problem must not take the
-   dashboard down, and it must never silently UNlock. */
+   rejected. Everything here is non-throwing: a failed read must not take the
+   page down, and it must never silently UNlock. */
 async function loadTrading() {
   let d = null;
   try {
@@ -1170,24 +1245,12 @@ async function loadTrading() {
   } catch (_) {
     return; // keep the last known state rather than unlocking by accident
   }
-  state.tradingPayload = d;
-  state.tradingState = d.trading || {};
-  state.executionStatus = d.execution || {};
   state.tradingLocked = !!d.locked;
-  renderTradingPanel(d);
-  // Local files only — see the Live section for why the broker half waits for the panel
-  // to be opened.
-  loadLive(false);
-  // ...and ARM the poll. Without this the panel read the loop's files once and then sat still
-  // until something else moved it — the ↻ button, folding the row, a tab switch — so the
-  // account boxes, which come from the broker half on the slow cadence, never arrived at all
-  // and simply looked missing. The first poll IS the slow half (`lastSlow` starts at 0), so
-  // they land seconds after the page does.
-  scheduleLivePoll();
+  state.trading = d;
   applyConfigLock();
-  // Said once per page load, not on every poll: a server that is older than the files
-  // it was started from will keep answering with the gate it loaded, and only a
-  // restart fixes that. Silence would make the switch look trustworthy.
+  renderLabState();
+  // Said once per page load, not on every read: a server that is older than the files it was
+  // started from will keep answering with the gate it loaded, and only a restart fixes that.
   const fresh = d.freshness || {};
   if (fresh.stale && !state.staleGateWarned) {
     state.staleGateWarned = true;
@@ -1195,130 +1258,44 @@ async function loadTrading() {
   }
 }
 
-/* The one way into the mode: a click on the Mode box. The mode it moves FROM is the one the box
- * is showing, so the box and the account it is about can never disagree about which way "the
- * other one" is. The write itself is the shared module's, because the log page's box moves the
- * same mode — one confirmation, one endpoint, one wording. */
-function onModeBoxClick() {
-  const from = inPlayEnv() || "paper";
-  return TraiderSwitch.flipEnv({
-    api,
-    confirmDialog,
-    flashToast,
-    env: from === "live" ? "paper" : "live",
-    from: from,
-    reload: async () => {
-      await loadTrading();
-      // ...and then read the OTHER ACCOUNT's figures at once, not on the next slow poll. The panel
-      // has just changed which account it is about, while every box on screen still holds the one
-      // we left: waiting up to a minute would show the paper account's equity under a live label,
-      // which is the exact confusion this panel exists to prevent. `loadTrading` cannot do it — it
-      // reads the switch, and deliberately takes only the files half of the live panel.
-      await refreshLiveNow();
-    },
-  });
-}
-
-// The switch itself lives in ``trading_switch.js``: the trading log page carries the same
-// control, and the confirmation that stands between a click and real orders is not something to
-// keep two copies of. What is left here is the dashboard's own half — hand over the page's
-// helpers, then re-read the state that was just changed.
-async function toggleTrading() {
-  const result = await TraiderSwitch.flip({
-    api,
-    confirmDialog,
-    flashToast,
-    trading: state.tradingState,
-    execution: state.executionStatus,
-  });
-  if (!result.wrote) return;
-  await loadTrading();
-  // A lock change alters what is available, so let the panels that own specific
-  // buttons recompute them (they re-enable only what is genuinely possible).
-  if (state.rulesPayload && typeof renderStrategyBar === "function") renderStrategyBar();
-}
-
-async function stopAndFlatten() {
-  const exec = state.executionStatus || {};
-  const open = Number((state.tradingPayload || {}).open_count || 0);
-  const ok = await confirmDialog({
-    title: exec.live ? "Stop trading and close the position?" : "Stop trading and close the position?",
-    messageHtml:
-      (open ? `${open} position(s) will be closed at market, ` : "Trading will stop, ") +
-      (exec.live
-        ? "and the orders go to your <b>LIVE</b> account — this is real money."
-        : "and the orders go to the paper account.") +
-      " Trading goes off first, so a failed close still leaves the bot stopped.",
-    confirmText: "Stop &amp; flatten",
-  });
-  if (!ok) return;
-  let r = null;
-  try {
-    r = await api("/api/v1/trading/off-flatten", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      // The acknowledgement is required for the LIVE flatten, and only for it: closing a
-      // real position costs real money, while stopping must never need anything.
-      body: JSON.stringify({ confirm_live: !!exec.live }),
-    });
-  } catch (err) {
-    flashToast(`Stop & flatten failed: ${err.message}`, "warn");
-    return;
+/* What the bot is POINTED AT, as two read-only chips beside the way to the monitor: the account
+ * in play and whether the master switch is on.
+ *
+ * They are informational because this page cannot act on either — the switch and the mode are
+ * worked on the Session monitor, which is where the loop's day is read — but the PAIR is exactly
+ * what a person glancing at the builder needs: "live" with "on" is real money moving, and until
+ * now the account a strategy would trade was only visible by opening the other page.
+ *
+ * The chips are colourless and only the dot is a signal: red and BLINKING when the account is live,
+ * and again when the switch is on. A colour per state made the safe setting as loud as the one that
+ * spends money, and "paper + on" is not the same warning as "live + on".
+ *
+ * No state is invented for a failed read: ``loadTrading`` keeps the last known answer, and an
+ * empty host stays empty rather than claiming "off". */
+function renderLabState() {
+  const host = $("lab-state");
+  if (!host) return;
+  const payload = state.trading || {};
+  const execution = payload.execution || {};
+  const trading = payload.trading || {};
+  // `execution.env` — the resolved target, where orders would go NOW — comes first. `trading.env`
+  // is only the account the switch was last ARMED on, and turning trading off keeps it on purpose
+  // as the record of what ran, so it still reads "paper" after the mode is flipped to live.
+  const env = String(execution.env || trading.env || "").toLowerCase();
+  const on = !!trading.on;
+  const chips = [];
+  if (env) {
+    const live = execution.live === true || env === "live";
+    chips.push(`<span class="chip-info ${live ? "live alarm" : "paper"}" title="${live
+      ? "The bot is pointed at the LIVE account — real money. The dot blinks while it is"
+      : "The bot is pointed at the PAPER account — simulated fills"}">`
+      + `<span class="dot"></span>${escapeHtml(env)}</span>`);
   }
-  if (r && r.ok === false) flashToast(r.message || "Stop & flatten did not finish", "warn");
-  else flashToast(r && r.message ? r.message : "Trading is OFF", "ok");
-  await loadTrading();
-  if (state.rulesPayload && typeof renderStrategyBar === "function") renderStrategyBar();
-}
-
-function renderTradingPanel(d) {
-  const tr = d.trading || {};
-  const exec = d.execution || {};
-  const open = Number(d.open_count || 0);
-  // The card is ALWAYS on screen — it is the one place trading is described, and it replaced
-  // a separate switch card that duplicated half of it — so nothing here hides it.
-  //
-  // The flatten button STAYS: it is not the switch (it closes what is open as well), and it is the
-  // only place to reach that while trading is off. It follows what is OPEN rather than what is
-  // armed, because a position held with trading OFF is exactly the state that needs it.
-  const flatBtn = $("trading-flatten-btn");
-  if (flatBtn) flatBtn.hidden = !open;
-
-  const facts = $("trading-facts");
-  if (!facts) return;
-  const rows = [];
-  // The strategy, the instrument, the bar size and the endpoint are NOT listed here. Every one
-  // of them is on screen already — the strategy bar names the strategy, the header summary
-  // carries the instrument and the bar size, and the endpoint is the mode in the Mode box — so
-  // the four rows were the panel restating its own context instead of reporting anything.
-  // What is held, per account. Every account is LISTED, because something open in the account
-  // this run is not pointed at is real and actionable whatever mode we are in, and it is what
-  // stops the bot being armed on top of it — but only the traded account's FAULTS are reported:
-  // a 401 on an account this run never touches is noise that reads like a fault, and its verdict
-  // is already on the credential badge and in the Account popup.
-  //
-  // What each account is WORTH is a different question with a different answer: that panel, like
-  // the log page's, shows the account being traded and no other, so an idle account's balance can
-  // never be read as the one in play.
-  const traded = String((exec && exec.env) || tr.env || "").toLowerCase();
-  for (const account of d.positions || []) {
-    const env = String(account.env || "").toLowerCase();
-    for (const p of account.positions || []) {
-      const qty = p.qty === undefined || p.qty === null ? "" : `${p.qty} `;
-      rows.push(execRow(
-        String(account.env || "").toUpperCase(),
-        `${escapeHtml(p.symbol || "—")} · ${escapeHtml(qty + (p.side || ""))} · entry ${escapeHtml(p.avg_entry_price || "—")}`
-      ));
-    }
-    if (account.known === false && (!traded || env === traded)) {
-      rows.push(execRow(String(account.env || "").toUpperCase(), `<b>could not be read</b> — ${escapeHtml(account.reason || "")}`));
-    }
-  }
-  facts.innerHTML = rows.join("");
-}
-
-function execRow(label, html) {
-  return `<div class="rp-kv"><span class="label">${escapeHtml(label)}</span><span>${html}</span></div>`;
+  chips.push(`<span class="chip-info ${on ? "on alarm" : "off"}" title="${on
+    ? "The master switch is ON: the loop trades this account from its next bar. The dot blinks while it is"
+    : "The master switch is OFF: nothing is trading"}">`
+    + `<span class="dot"></span>trading ${on ? "on" : "off"}</span>`);
+  setIfChanged(host, chips.join(""));
 }
 
 // Mirror of the server's lock: disable everything that would be refused with 409.
@@ -1823,6 +1800,7 @@ function drawOscPanes() {
         handleScroll: { mouseWheel: true },
         handleScale: {
           mouseWheel: false,
+          pinch: false, // the library's own pinch is a second, unbounded zoomer (see chart_zoom.js)
           axisPressedMouseMove: { time: false, price: true },
         },
         // Same free-floating crosshair as the main chart, so the synced horizontal line
@@ -1914,6 +1892,11 @@ async function loadDelta() {
   try {
     const s = await api("/api/v1/delta/status");
     renderDelta(s);
+    // The panel has just read the file for itself. If the bars have moved on since the chart's
+    // copy was taken, redraw them: otherwise ⬇ Re-check reports a current dataset beside a chart
+    // that is a session behind, and the two readings look like a contradiction rather than a
+    // refresh that did not happen (see ``reloadForDatasetGrew``).
+    reloadForDatasetGrew(s.rows);
   } catch (err) {
     body.innerHTML = `<p class="muted">Delta check failed: ${escapeHtml(err.message)}</p>`;
   }
@@ -2212,99 +2195,52 @@ function escapeHtml(str) {
   ));
 }
 
-/* ---------- Live: what the loop is doing, and is the position protected ----------
-   Two reads with different costs, so they are loaded differently. /api/v1/loop is
-   local files and is refreshed with everything else; /api/v1/orders asks ALPACA, so it
-   is fetched when the panel is opened or refreshed by hand — the dashboard must not
-   generate broker traffic merely by being open. */
-// The loop is a SEPARATE process and this dashboard never starts one — that is the whole
-// point of the two-process split. So "armed" and "trading" are two different facts, and only
-// one of them is a switch. The two are joined below in a visible LINE, not in a `title` — the
-// embedded browser renders no native tooltip, which is how this stayed invisible.
-const LOOP_COMMAND = "python -m src.main";
-const LOOP_LOG = "data/loop.log";
+/* ---------- The dataset watcher ----------
+   The bars the chart is drawn from are a snapshot taken when the page loaded, and something
+   writes more of them while it is open: during a session the LOOP does, every tick, because
+   syncing the dataset to now is one of the steps of a tick. A page left open across the open
+   therefore sat on Friday's chart for the whole of Monday morning while the delta panel beside it
+   said "nothing to fetch" — two panels, both correct, answering about two different times.
 
-/* How much is OPEN, and the other two trading boxes, now live in ``trading_switch.js``: the log
- * page shows the same three, and one box with two implementations is how the two screens start
- * disagreeing about what "open" means. This page hands over the payload and its own handler names. */
+   So the page asks ONE local file question on a slow cadence — /dataset/status, never a provider
+   call, because fetching stays the loop's job and its throttle — and reloads itself when the
+   count moved. Nothing here asks the broker: the reads that used to pay for that lived in the
+   Trading panel, which is on the Session monitor now. */
+const DATASET_WATCH_MS = 60000;
 
-function showLiveError(message) {
-  const state_ = $("live-state");
-  if (state_) state_.textContent = message;
+const _watch = { timer: null };
+
+function stopDatasetWatch() {
+  if (_watch.timer) { clearTimeout(_watch.timer); _watch.timer = null; }
 }
 
-// The panel polls; the page does not. Two cadences, because the two halves cost very
-// different amounts: the loop's records are local files, while the orders are broker calls. And
-// it stops the moment nobody is looking — a collapsed panel or a backgrounded tab asking Alpaca
-// every minute is a recurring cost with no reader.
-const LIVE_POLL_MS = 5000;      // /loop — files only
-const LIVE_SLOW_MS = 60000;     // /orders — broker calls
-const LIVE_BACKOFF_MS = 30000;  // after a failure: slow down rather than hammer
-const LIVE_MAX_FAILURES = 5;
-
-const _livePoll = { timer: null, lastSlow: 0, failures: 0, token: 0 };
-
-// Money, as the account block needs it. ``signed`` is for the day's change, where the
-// difference between "+$0.00" and "-$0.00" is the whole point of the line.
-function money(value, signed) {
-  if (value === null || value === undefined || value === "") return "—";
-  const number = Number(value);
-  if (!Number.isFinite(number)) return String(value);
-  const body = Math.abs(number).toLocaleString(undefined, {
-    minimumFractionDigits: 2, maximumFractionDigits: 2,
-  });
-  return `${number < 0 ? "-" : (signed && number > 0 ? "+" : "")}$${body}`;
-}
-
-function signedPercent(value) {
-  if (value === null || value === undefined) return "";
-  const number = Number(value);
-  if (!Number.isFinite(number)) return "";
-  return `${number > 0 ? "+" : ""}${number.toFixed(2)}%`;
-}
-
-function livePanelVisible() {
-  // The panel is always open now — it has no toggle of its own — so the only thing that can hide
-  // it is the strategy bar's toggle, which folds the whole row below the strategy line. A hidden
-  // panel is the same case as a collapsed one: no reader, so no broker traffic.
+function strategyBodyVisible() {
   const row = $("strategy-body");
-  return !!$("live-body") && !(row && row.hidden) && !document.hidden;
+  return !!(row && !row.hidden);
 }
 
-function stopLivePoll() {
-  if (_livePoll.timer) { clearTimeout(_livePoll.timer); _livePoll.timer = null; }
+// Self-scheduling rather than setInterval: the next look is queued only once this one has
+// settled, so a slow read makes the watcher slower instead of stacking up requests.
+function scheduleDatasetWatch(delay) {
+  stopDatasetWatch();
+  // Nothing is drawn while the dataset is missing, and a hidden tab has no reader: either way
+  // there is nothing to keep current.
+  if (document.hidden || !$("dashboard") || $("dashboard").hidden) return;
+  _watch.timer = setTimeout(runDatasetWatch, delay === undefined ? DATASET_WATCH_MS : delay);
 }
 
-// Self-scheduling rather than setInterval: the next poll is queued only once this one has
-// settled, so a slow broker makes the panel slower instead of stacking up requests.
-function scheduleLivePoll(delay) {
-  stopLivePoll();
-  if (!livePanelVisible()) return;
-  _livePoll.timer = setTimeout(runLivePoll, delay === undefined ? LIVE_POLL_MS : delay);
-}
-
-/* Take the BROKER half of the panel NOW, rather than waiting for the slow poll to come round.
- *
- * For the moments when what the panel is about has just changed under it — the mode switch to the
- * other account, a row that was folded open again, a tab coming back — because then every box on
- * screen is answering for the account or the moment we just left, and sitting on the old numbers
- * for up to a minute is the thing this panel exists to prevent. The slow cadence restarts from
- * this read, so the next scheduled one is a full interval away rather than immediately after. */
-async function refreshLiveNow() {
-  await loadLive(true);
-  _livePoll.lastSlow = Date.now();
-  scheduleLivePoll();
-}
-
-async function runLivePoll() {
-  _livePoll.timer = null;
-  if (!livePanelVisible()) return;   // collapsed or backgrounded since it was scheduled
-  const slow = Date.now() - _livePoll.lastSlow >= LIVE_SLOW_MS;
-  if (slow) _livePoll.lastSlow = Date.now();
-  const ok = await loadLive(slow, { quiet: true });
-  _livePoll.failures = ok ? 0 : _livePoll.failures + 1;
-  if (_livePoll.failures >= LIVE_MAX_FAILURES) return;  // the operator can ask again
-  scheduleLivePoll(_livePoll.failures ? LIVE_BACKOFF_MS : LIVE_POLL_MS);
+async function runDatasetWatch() {
+  _watch.timer = null;
+  if (document.hidden) return;
+  await watchDatasetRows();
+  // The automation panel rides the same slow cadence: the loop may have switched the instrument
+  // under it, and the list it judges is aged out by the criteria themselves.
+  if (automationPayload) loadAutomation();
+  // So does the account and the switch. Both are flipped on the Session monitor, in another tab,
+  // and a chip reading "paper" while orders would go live is the one stale reading this page must
+  // not show. `setIfChanged` means an unchanged chip is not re-rendered, so its blink is not reset.
+  loadTrading();
+  scheduleDatasetWatch();
 }
 
 // Only write when the text actually changed. Re-rendering an unchanged panel every few
@@ -2314,260 +2250,16 @@ function setIfChanged(el, html) {
   if (el && el.innerHTML !== html) el.innerHTML = html;
 }
 
-async function loadLive(includeOrders, options) {
-  const quiet = !!(options && options.quiet);
-  // A poll and a ↻ can overlap. Only the newest render wins, so a slow response cannot land
-  // on top of a fresher one and show the panel going backwards.
-  const generation = ++_livePoll.token;
-  let loop = null;
-  try {
-    loop = await api("/api/v1/loop");
-  } catch (err) {
-    if (!quiet) showLiveError(`could not read the loop's records: ${err.message}`);
-    return false;
-  }
-  let orders = null;
-  let accounts = null;
-  if (includeOrders) {
-    try {
-      orders = await api("/api/v1/orders");
-    } catch (err) {
-      orders = { ok: false, message: err.message };
-    }
-    try {
-      accounts = await api("/api/v1/accounts");
-    } catch (err) {
-      accounts = { ok: false, message: err.message, accounts: [] };
-    }
-  }
-  if (generation !== _livePoll.token) return false;
-  renderLive(loop, orders, accounts);
-  return true;
-}
+/* One number in a box, the same `.bt-stat` the backtest KPIs and the report page use — the box
+   itself is built by the shared module, which the Session monitor uses too, so a box here and a
+   box there cannot drift apart. Everything this page puts in one is its own: the signal counts,
+   the risk settings. */
+const statTile = TraiderSwitch.tile;
 
-// The account the Trading panel is about: the switch's own read (`/api/v1/execution/status`,
-// loaded with the header combo box) first, and only then the accounts payload, which arrives on
-// the slower cadence. Empty when neither has been read yet, and empty is a real answer — it means
-// "do not mark anything as this account's", not "assume paper".
-function inPlayEnv() {
-  return String(
-    (state.executionStatus && state.executionStatus.env)
-    || (state.liveAccounts && state.liveAccounts.env)
-    || ""
-  ).toLowerCase();
-}
-
-function renderLive(loop, orders, accounts) {
-  const armed = !!(state.tradingState && state.tradingState.on);
-
-  // The broker half is kept across the fast polls, which fetch none of it: without this the
-  // 5-second loop read would re-render the panel with no orders, blanking the tiles that come
-  // from Alpaca and replacing the protection verdict with "open the panel" until the next
-  // slow poll put them back. It flapped, once a poll.
-  if (orders) state.liveOrders = orders;
-  if (accounts) {
-    // A failed re-read is NOT an account worth zero. Overwriting a good snapshot with the empty
-    // list a failure carries blanked every account box until the next slow poll happened to
-    // succeed, and from the outside that reads as "the boxes are gone" rather than "that read
-    // failed". So only a GOOD read is stored, and the last one stands until one lands.
-    if (accounts.ok !== false) state.liveAccounts = accounts;
-  }
-
-  const lines = [];
-  // What is left here is WARNINGS and the loop's own refusals — never a status line. The loop's
-  // next wake, the age of its last tick and the exchange's session used to be printed here as
-  // well, and every one of them is the log page's to say: the countdown is in the loop panel,
-  // the gate table names the exchange, the tick table names what the tick did. On this panel the
-  // same facts sat ABOVE the boxes that answer them, moving under the reader's eye every five
-  // seconds — while the boxes said the same thing in fewer words.
-  if (loop.state === "overdue") {
-    lines.push('<span class="bad">The process holding the loop is gone — nothing will tick</span>');
-  }
-  // Arming writes trading.json; nothing ticks until a process runs the loop. Saying nothing
-  // here is how "trading is ON" became a promise this screen could not keep: the operator
-  // flips the switch, the chip keeps saying "stopped", and the reasonable reading is that the
-  // switch did nothing.
-  // Arming STARTS the loop (``src/web/services/loop_control``), so this is no longer "you forgot
-  // to start it" — it means the start failed, or the loop started and exited, and either way
-  // the reason is in the loop's own log. Naming the file is the difference between a dead end
-  // and a next step. It covers both cases on purpose: a loop that exits at once (a refusal in
-  // the tick, code older than the files on disk) is not a start that failed, and claiming it
-  // was would send the operator looking in the wrong place.
-  if (armed && (loop.state === "stopped" || loop.state === "never")) {
-    lines.push(
-      `<span class="warn">Trading is armed, but no loop is running — nothing will tick. `
-      + `See <code>${escapeHtml(LOOP_LOG)}</code>; start one with `
-      + `<code>${escapeHtml(LOOP_COMMAND)}</code></span>`
-    );
-  }
-  if (loop.last_refusal && loop.last_refusal.reason) {
-    lines.push(`<span class="warn">last refusal: ${escapeHtml(loop.last_refusal.reason)}</span>`);
-  }
-  // A refusal can still have booked a trade, so what the last tick CLOSED is worth a line.
-  const closed = (loop.last_tick && loop.last_tick.trades) || [];
-  for (const trade of closed) {
-    lines.push(`closed ${escapeHtml(trade.direction || "position")} at ${escapeHtml(trade.exit_price)} (${escapeHtml(trade.reason || "")})`);
-  }
-  setIfChanged($("live-state"), lines.map((line) => `<div>${line}</div>`).join(""));
-
-  // From the last read, not from this render's argument: see above.
-  renderProtection(state.liveOrders ? state.liveOrders.protection : null);
-  renderLiveDetail(loop, state.liveOrders);
-}
-
-function renderProtection(verdict) {
-  const host = $("live-protection");
-  if (!host) return;
-  if (!verdict) {
-    host.className = "muted";
-    host.textContent = "Resting exits not read yet (asks Alpaca).";
-    return;
-  }
-  host.className = verdict.state === "unprotected" ? "bad" : "muted";
-  if (verdict.state === "none") {
-    // Nothing held, so nothing to watch: the sentence that used to say so had no news in it —
-    // the Open box reads 0 — and a line per account is what the panel was pruned of. The
-    // verdicts that DO carry news (unprotected, a level with nothing resting at it) are below.
-    // Silent rather than blank: an empty line takes no room (see the `:empty` rule).
-    host.textContent = "";
-    return;
-  }
-  if (verdict.state === "protected") {
-    const levels = verdict.levels || {};
-    const bits = Object.entries(levels)
-      .filter(([, v]) => v && v.wanted)
-      .map(([kind, v]) => `${kind} ${Number(v.wanted).toFixed(2)}`);
-    host.textContent = `Protected: ${bits.join(", ")} — resting at the broker.`;
-    return;
-  }
-  if (verdict.state === "naked") {
-    host.textContent = verdict.message;
-    host.className = "muted";
-    return;
-  }
-  host.innerHTML = `<b>⚠ ${escapeHtml(verdict.message)}</b><br>`
-    + "A level was set and no order is resting at it — check the broker.";
-}
-
-// One number in a box, the same `.bt-stat` the backtest KPIs and the report page use — the box
-// itself is built by the shared module, which the log page uses too, so a dashboard box and a log
-// box cannot drift apart. Everything this page puts in one is its own: the numbers, the account's
-// figures, the counts.
-const liveTile = TraiderSwitch.tile;
-
-function renderLiveDetail(loop, orders) {
-  const host = $("live-metrics");
-  if (!host) return;
-  const tiles = [];
-
-  // -- the two settings the rest is read through --------------------------
-  // FIRST, because they are the frame: which account an order would go to, and whether any are
-  // being sent at all. Everything below is only as safe as these two.
-  //
-  // Both pulse when they are set the dangerous way — a live account, and trading armed — for the
-  // reason the header's dots blink for those two states and no others: this dashboard is left
-  // open, and these are the two settings a glance has to catch. The boxes re-render only when
-  // their TEXT changes (``setIfChanged``), so the pulse runs without restarting on every poll.
-  // The mode comes from the switch's own read and only falls back to the accounts payload: the
-  // accounts are read on the slow poll, and "—" for a minute after opening the page is a box that
-  // has stopped saying anything.
-  //
-  // Both are PRESSABLE, and each calls the handler the header's control for that state calls: the
-  // mode box flips to the other account, the trading box flips the master switch. Acting from
-  // where the state is read is the point — the box is what the operator is looking at when they
-  // decide to change it.
-  // The three trading boxes are built by the shared module (``trading_switch.js``), because the log
-  // page shows the same three: the mode, the switch, and what is open. Each is handed the name of
-  // this page's own handler for it.
-  //
-  // Trading ON freezes the MODE with the rest of the configuration. The switch itself is never
-  // locked: stopping has to stay reachable.
-  const locked = !!state.tradingLocked;
-  const mode = inPlayEnv();
-  tiles.push(TraiderSwitch.envTile(mode, locked, "onModeBoxClick()"));
-  tiles.push(TraiderSwitch.tradeTile(state.tradingPayload, "toggleTrading()"));
-  tiles.push(TraiderSwitch.openTile(state.tradingPayload, mode));
-
-  // -- the account being traded -------------------------------------------
-  // The one the panel is about, so its numbers come first. An account that cannot be read draws
-  // no boxes rather than a row of dashes: an unreadable account is not a balance of zero.
-  const accounts = state.liveAccounts || {};
-  // A snapshot belongs to the account the panel was about when it was READ. Switch modes and it
-  // is the account we just left — drawing it under the new mode is precisely the mix-up this
-  // panel exists to prevent, and it is what a switch used to show for the second or so before
-  // the broker answered. So a snapshot that is not about the account in play is not drawn at all;
-  // it is kept, and becomes the right one again the moment the read for this mode lands.
-  const staleSnapshot = !!(accounts.env && mode && accounts.env !== mode);
-  const active = staleSnapshot
-    ? null
-    : ((accounts.accounts || []).find((row) => row.env === accounts.env) || null);
-  if (active && active.known) {
-    const change = active.day_pl === null || active.day_pl === undefined ? null : Number(active.day_pl);
-    tiles.push(liveTile("Account",
-      `${escapeHtml(active.env || "")}${active.account ? ` ${escapeHtml(active.account)}` : ""}`,
-      active.blocked ? "neg" : "",
-      active.blocked
-        ? "the broker is refusing orders"
-        : `status ${active.status || "unknown"}`));
-    tiles.push(liveTile("Equity", escapeHtml(money(active.equity))));
-    tiles.push(liveTile("Day",
-      `${escapeHtml(money(active.day_pl, true))}${signedPercent(active.day_pl_pct) ? ` (${escapeHtml(signedPercent(active.day_pl_pct))})` : ""}`,
-      change === null ? "" : (change < 0 ? "neg" : (change > 0 ? "pos" : "")),
-      change === null
-        ? "no previous close"
-        : "equity vs the previous close; includes what is open"));
-    tiles.push(liveTile("Cash", escapeHtml(money(active.cash))));
-    tiles.push(liveTile("Buying power", escapeHtml(money(active.buying_power)),
-      "", active.multiplier ? `${Number(active.multiplier)}× cash, at the broker` : ""));
-    // The account's standing at the broker, as its own box rather than as the tooltip on the
-    // Account box: "ACTIVE" or a block is a fact about whether anything can be sent at all, and
-    // it is read at a glance next to the numbers it explains.
-    tiles.push(liveTile("Status", escapeHtml(active.status || "—"),
-      active.blocked ? "neg" : "",
-      active.blocked ? "the broker is refusing orders" : "the account's standing at the broker"));
-  }
-
-  // -- what is held, and what protects it ---------------------------------
-  // There is no position box: it said "flat" or the same thing the Open box says, from the loop's
-  // own record rather than the broker's — two readings of one question, in two vocabularies. What
-  // is held is the Open box's count, and the direction and entry price, when there is one, are in
-  // the facts grid below with the account's own name against them.
-  if (orders && orders.ok !== false) {
-    tiles.push(liveTile("Working orders", String((orders.open || []).length),
-      "", "orders still at the broker: an unfilled entry, or a bracket parent"));
-    tiles.push(liveTile("Exit legs", String((orders.resting || []).length),
-      "", "stop and limit legs at the broker — these close the position"));
-    const newest = (orders.closed || [])[0];
-    if (newest) {
-      tiles.push(liveTile("Last fill",
-        `${escapeHtml(newest.filled_qty || newest.qty || "")} @ ${escapeHtml(newest.filled_avg_price || "—")}`,
-        "", `${newest.side || ""} · ${newest.status || ""}`.trim()));
-    }
-  }
-
-  tiles.push(liveTile("Trades closed", String(((loop.last_tick && loop.last_tick.trades) || []).length),
-    "", "round trips finished"));
-
-  // The OTHER environment is deliberately not reported here. This panel is about the account
-  // being TRADED (``accounts.env``), and a 401 on the one this run never touches is noise that
-  // reads like a fault: it is on the credential badge and in the Account popup. Its balance is
-  // shown nowhere at all — an idle account's equity presented beside the traded one's is a number
-  // waiting to be read as the wrong account's, which is exactly what the log page did when the
-  // switch moved to live with no live keys behind it. A position in the other account is not lost
-  // either — it is listed above, with the account names against it, and it refuses an arming,
-  // with the flatten button, in the switch panel.
-
-  setIfChanged(host, tiles.join(""));
-}
-
-/* The strategy bar's toggle: it folds everything below the strategy line — the trading panel and
- * the signals/rules section together. ONE toggle for one subject, which is why the trading panel
- * no longer has one of its own: two buttons hiding the same panel from different places is how a
- * page ends up with a section nobody can find.
- *
- * Opening it is what asks the broker: the trading panel is the only thing here that wants Alpaca's
- * order list, so it pays for it rather than the page load doing so — and folding it away stops the
- * polling, because a hidden panel has no reader. */
+/* The strategy bar's toggle: it folds the row below the strategy line — the rules, the signals
+ * they produce and the risk they are traded under — because they are one subject (this strategy).
+ * ONE toggle for one thing, and the whole row it hides is a picture of the strategy rather than
+ * anything that has to be kept current while it is shut. */
 function toggleStrategyBody() {
   const row = $("strategy-body");
   const btn = $("strategy-collapse");
@@ -2577,27 +2269,22 @@ function toggleStrategyBody() {
     btn.textContent = row.hidden ? "+" : "−";
     btn.title = row.hidden ? "Expand the panels below" : "Collapse the panels below";
   }
-  if (!row.hidden) {
-    // Unfolded: whatever it was showing is as old as the time it was shut, so take the full
-    // read now — and this is also what starts the poll for a page that had it folded.
-    refreshLiveNow();
-  } else {
-    stopLivePoll();
-  }
 }
 
-// A backgrounded tab is the same case as a folded row: no reader, so no polling. On the
-// way back the panel is refreshed at once rather than waiting out the interval.
-function handleLiveVisibility() {
-  if (livePanelVisible()) {
-    refreshLiveNow();
-  } else {
-    stopLivePoll();
+// A backgrounded tab has no reader, so it stops asking. On the way back the dataset is checked at
+// once rather than waiting out the interval: a tab that was away is exactly when its snapshot of
+// the bars has had time to go stale (the loop writes one per tick).
+function handleVisibility() {
+  if (document.hidden) {
+    stopDatasetWatch();
+    return;
   }
+  watchDatasetRows();
+  scheduleDatasetWatch();
 }
 
-document.addEventListener("visibilitychange", handleLiveVisibility);
-window.addEventListener("pagehide", stopLivePoll);
+document.addEventListener("visibilitychange", handleVisibility);
+window.addEventListener("pagehide", stopDatasetWatch);
 
 /* ---------- Strategy bar + Rules + per-strategy Configuration ---------- */
 const RULES_VALUE_TARGET = "__value__";
@@ -3484,7 +3171,7 @@ async function saveStrategyFull(kind) {
       messageHtml:
         `<p>You are changing the instrument from <b>${escapeHtml(oldInstrument || "—")}</b> to ` +
         `<b>${escapeHtml(newInstrument)}</b>.</p>` +
-        `<p>After saving, the dashboard <b>reloads</b> into the new instrument's context. If no ` +
+        `<p>After saving, the page <b>reloads</b> into the new instrument's context. If no ` +
         `historical data exists for it yet, the “Download historical data” panel will appear.</p>` +
         `<p class="muted">The change is saved to this strategy's config. Your rules are kept.</p>`,
       confirmText: "Save & switch",
@@ -3525,7 +3212,7 @@ async function saveStrategyFull(kind) {
     });
     if (r.ok) {
       if (instrumentChanged) {
-        window.location.reload(); // dashboard now runs in the new instrument context
+        window.location.reload(); // the page now runs in the new instrument context
         return;
       }
       if (historyChanged) {
@@ -4023,6 +3710,7 @@ function drawBtCurve(points, runBarSize) {
       handleScroll: { mouseWheel: true },
       handleScale: {
         mouseWheel: false,
+        pinch: false, // the library's own pinch is a second, unbounded zoomer (see chart_zoom.js)
         axisPressedMouseMove: { time: false, price: true },
       },
       // Same free-floating crosshair, and the same boxed time label under it: this curve
@@ -4070,7 +3758,7 @@ function syncBtReportBtn(d) {
 }
 
 // Opens the standalone report page for the CURRENT strategy in THIS tab (the
-// page has its own "← Back to dashboard" link). The run id is passed when the
+// page has its own "← Back to the Strategy lab" link). The run id is passed when the
 // shown result has one, otherwise the page opens the newest stored run.
 function openBacktestReport() {
   const qs = new URLSearchParams();
@@ -4121,6 +3809,258 @@ function pollBacktest(ms) {
 }
 
 
+/* ---------- Instrument Automation panel ----------
+
+   The one panel on this page that changes what the strategy TRADES, and the only one that stays
+   editable while trading is ON: turning it off is how you stop it, so it saves through its own
+   endpoints rather than the (frozen) strategy-config one — see ``src/config/automation.py``.
+
+   What it shows about the DECISION is the tick's own verdict, computed by the server with the
+   same function the tick calls: a panel that re-derived it in the browser could tell you the
+   instrument is about to change when the loop knows otherwise. */
+let automationPayload = null;
+
+function setAutomationMsg(text) {
+  const m = $("automation-msg");
+  if (m) m.textContent = text || "";
+}
+
+/* The server's criteria schema, in the shape ``fieldInput`` renders — the same fields, the same
+   bounds and the same look as the configuration panel, from a definition the PYTHON side owns
+   (so a criterion added there appears here without a second edit). */
+function automationField(f, values) {
+  const raw = values[f.name];
+  return {
+    key: f.name,
+    label: f.unit ? `${f.label} (${f.unit})` : f.label,
+    type: f.kind === "bool" ? "bool" : (f.kind === "int" || f.kind === "float" ? f.kind : "text"),
+    value: f.kind === "bool" ? (raw ? "True" : "False") : (raw == null ? "" : String(raw)),
+    options: f.options || null,
+    description: f.help || "",
+    min: f.kind === "int" || f.kind === "float" ? 0 : null,
+  };
+}
+
+function toggleAutomationPanel(ev) {
+  if (ev && ev.stopPropagation) ev.stopPropagation();
+  const body = $("automation-body");
+  const btn = $("toggle-automation");
+  if (!body) return;
+  const collapsed = !body.hidden;
+  body.hidden = collapsed;
+  if (btn) {
+    btn.textContent = collapsed ? "+" : "−";
+    btn.title = collapsed ? "Expand instrument automation" : "Collapse instrument automation";
+  }
+  // Opening it re-reads: the list ages, and the instrument it would switch to is the loop's to
+  // change while this page sits open.
+  if (!collapsed) loadAutomation();
+}
+
+async function loadAutomation() {
+  if (!$("automation-body")) return;
+  try {
+    automationPayload = await api("/api/v1/automation");
+    renderAutomation();
+  } catch (err) {
+    setAutomationMsg(`could not read the automation: ${err.message}`);
+  }
+}
+
+function renderAutomation() {
+  const p = automationPayload;
+  const enter = $("automation-enter");
+  const swtch = $("automation-switch");
+  if (!p || !enter || !swtch) return;
+
+  const toggle = $("automation-on");
+  if (toggle) toggle.checked = !!p.on;
+
+  enter.innerHTML = "";
+  (p.criteria.enter_fields || []).forEach((f) => {
+    enter.appendChild(fieldInput(automationField(f, p.criteria.enter), "acfg"));
+  });
+  swtch.innerHTML = "";
+  (p.criteria.switch_fields || []).forEach((f) => {
+    swtch.appendChild(fieldInput(automationField(f, p.criteria.switch), "acfg"));
+  });
+
+  const size = $("automation-size");
+  if (size) size.textContent = String(p.criteria.enter.size || 10);
+  renderAutomationState(p);
+  renderAutomationList(p);
+}
+
+/* What the tick would do with the instrument, in one line under the switch. The full verdict is
+   NOT repeated further down the panel: the list and the criteria above it are the whole story,
+   and a second sentence saying it again is the kind of text that gets read once. */
+function renderAutomationState(p) {
+  const state_ = $("automation-state");
+  const verdict = p.preview || {};
+  const current = p.instrument || "this instrument";
+
+  let stateText = "Off — the tick trades the instrument this strategy is configured with.";
+  let stateClass = "automation-state off";
+  if (p.on) {
+    stateText = verdict.switch
+      ? `On — the next tick would switch ${current} to ${verdict.target}.`
+      : `On — ${verdict.skip || "waiting"}.`;
+    stateClass = "automation-state on";
+  }
+  if (state_) { state_.textContent = stateText; state_.className = stateClass; }
+}
+
+/* A screening's age, in the words the Session monitor uses for the same number — the two panels
+   show one fact and it should not read differently in each. */
+function ageWords(seconds) {
+  if (seconds === null || seconds === undefined) return "never";
+  const s = Math.max(0, Math.round(Number(seconds)));
+  if (s < 60) return `${s}s ago`;
+  if (s < 3600) return `${Math.round(s / 60)}m ago`;
+  if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+  return `${Math.round(s / 86400)}d ago`;
+}
+
+function renderAutomationList(p) {
+  const host = $("automation-list");
+  if (!host) return;
+  const rows = (p.list || {}).rows || [];
+
+  // WHEN the list was screened, and whether its numbers are the last completed session's. The
+  // screener reports the regular session only, so a list screened before the bell is yesterday's
+  // close wearing today's date — fresh by its age and yesterday by its content, which is the one
+  // thing the age beside it cannot say.
+  const when = $("automation-list-when");
+  if (when) {
+    const list = p.list || {};
+    const screened = list.at ? `updated ${ageWords(list.age_seconds)}` : "never screened";
+    const lastClose = list.screened_in_session === false;
+    when.textContent = lastClose ? `${screened} · last session's close` : screened;
+    when.title = [
+      list.at ? `Screened ${new Date(list.at).toLocaleString()}` : "not screened yet",
+      list.session ? `session: ${list.session}` : "",
+      p.session ? `now: ${p.session}` : "",
+      lastClose ? "The screener reports the last COMPLETED regular session — its change %, its "
+        + "volume and its close — so these numbers are that session's, not the pre-market tape's."
+        : "",
+      list.stale ? `the loop would not judge it: ${list.stale}` : "",
+    ].filter(Boolean).join("\n");
+  }
+
+  if (!rows.length) {
+    host.innerHTML = `<p class="muted">No list yet — <b>↻ Refresh list</b> screens the criteria.</p>`;
+    return;
+  }
+
+  const money = (v) => (v == null ? "—" : Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 }));
+  const pct = (v) => (v == null ? "—" : `${Number(v) > 0 ? "+" : ""}${Number(v).toFixed(2)}%`);
+  const body = rows.map((r) => {
+    const leader = r.rank === 1 ? ' class="leader"' : "";
+    const held = String(r.symbol) === String(p.instrument || "");
+    return `<tr${leader}><td>${r.rank}</td><td>${escapeHtml(r.symbol)}${held ? " ●" : ""}</td>`
+      + `<td class="num ${Number(r.change_percent) < 0 ? "neg" : "pos"}">${pct(r.change_percent)}</td>`
+      + `<td class="num">${money(r.volume)}</td>`
+      + `<td class="num">${r.dollar_volume == null ? "—" : "$" + money(r.dollar_volume)}</td>`
+      + `<td class="num">${r.market_cap == null ? "—" : "$" + money(Number(r.market_cap) / 1e6) + "M"}</td>`
+      + `<td class="ranks">${r.rank_change} · ${r.rank_volume}</td>`
+      + `</tr>`;
+  }).join("");
+
+  // No sector column (the screener returns none) and no trailing note: the two ranks make the
+  // ranking visible in the row itself.
+  host.innerHTML = `<table class="lg-table"><thead><tr>`
+    + `<th>#</th><th>symbol</th><th class="num">change</th><th class="num">volume</th>`
+    + `<th class="num">$ volume</th><th class="num">cap</th>`
+    + `<th title="its place in the ranking: by day change, then by dollar volume">ranks</th>`
+    + `</tr></thead><tbody>${body}</tbody></table>`;
+}
+
+function collectAutomation() {
+  const p = automationPayload || {};
+  const criteria = p.criteria || {};
+  const read = (fields, values) => {
+    const out = {};
+    (fields || []).forEach((f) => {
+      const el = document.getElementById("acfg-" + f.name);
+      if (!el) {
+        out[f.name] = (values || {})[f.name];
+      } else {
+        out[f.name] = f.kind === "bool" ? el.checked : el.value;
+      }
+    });
+    return out;
+  };
+  const toggle = $("automation-on");
+  return {
+    on: !!(toggle && toggle.checked),
+    enter: read(criteria.enter_fields, criteria.enter),
+    switch: read(criteria.switch_fields, criteria.switch),
+  };
+}
+
+async function _postAutomation(body) {
+  return api("/api/v1/automation", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+async function saveAutomation() {
+  const btn = $("automation-save");
+  if (btn) btn.disabled = true;
+  try {
+    const res = await _postAutomation(collectAutomation());
+    if (!res.ok) {
+      setAutomationMsg(`Not saved — ${(res.errors || []).join("; ") || res.message}`);
+      return;
+    }
+    automationPayload = res.payload;
+    renderAutomation();
+    setAutomationMsg("Saved.");
+  } catch (err) {
+    setAutomationMsg(`could not save: ${err.message}`);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+/* The switch itself saves at once, with the criteria as they stand: it is the safety control, and
+   a control that only takes effect on a second click is the one that gets forgotten ON. */
+async function onAutomationToggle() {
+  const toggle = $("automation-on");
+  if (!toggle || !automationPayload) return;
+  const turning = toggle.checked;
+  try {
+    const res = await _postAutomation(collectAutomation());
+    if (!res.ok) {
+      toggle.checked = !turning;
+      setAutomationMsg(`Not saved — ${(res.errors || []).join("; ") || res.message}`);
+      return;
+    }
+    automationPayload = res.payload;
+    renderAutomation();
+    setAutomationMsg(turning ? "Instrument automation ON." : "Instrument automation OFF.");
+  } catch (err) {
+    toggle.checked = !turning;
+    setAutomationMsg(`could not save the switch: ${err.message}`);
+  }
+}
+
+async function refreshAutomationList() {
+  setAutomationMsg("Screening…");
+  try {
+    const res = await api("/api/v1/automation/refresh", { method: "POST" });
+    if (res.payload) {
+      automationPayload = res.payload;
+      renderAutomation();
+    }
+    setAutomationMsg(res.ok ? `Screened ${res.rows} instruments.` : `Screening failed — ${res.message}`);
+  } catch (err) {
+    setAutomationMsg(`could not screen: ${err.message}`);
+  }
+}
+
 /* ---------- Transient toast ---------- */
 function flashToast(text, kind) {
   const t = $("toast");
@@ -4148,3 +4088,9 @@ refresh();
 loadAccount(true);
 loadRules();
 loadTrading(); // last: it applies the configuration lock on top of the rendered panels
+// Criteria for changing the instrument, read once at boot: the panel shows them without being
+// opened, and the loop re-reads its own copy every bar rather than asking this page anything.
+loadAutomation();
+// And the dataset watcher, on its own slow cadence: the bars on screen are a snapshot from this
+// load, while the loop writes more of them every tick it takes.
+scheduleDatasetWatch();

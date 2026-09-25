@@ -1,6 +1,6 @@
 # TRAIDER Development Checklist
 
-Track your progress through all 41 tasks across 9 phases.
+Track your progress through all 42 tasks across 9 phases.
 
 > **Plan change:** the unfinished Phase 2 & 3 work (state, logging, alerts, Alpaca connectivity, model training, backtest Gate, report generator) was moved to the new **Phase 5 — Deferred: Core & Backtest Completion**, so **Phase 4 (Risk & Execution) can start now**. Old Phases 5–8 became Phases 6–9.
 >
@@ -385,7 +385,7 @@ The unfinished Phase 2 & 3 work lives here so Risk & Execution can proceed first
         click to switch), charts zoom-linked together
   - [x] Entry point: "📊 Open full report" in the Backtest panel header, shown only
         once at least one run is stored — it navigates in the SAME tab
-  - [x] "← Back to dashboard" spans the full width of the run menu (top of the left
+  - [x] "← Back to the Strategy lab" spans the full width of the run menu (top of the left
         column); the empty state uses the same link style
   - [x] "🗑 Delete report" (top-right corner of the first panel) removes the run on
         screen from disk after a confirmation dialog — run file + index record + report
@@ -485,6 +485,14 @@ The unfinished Phase 2 & 3 work lives here so Risk & Execution can proceed first
     - [ ] No race conditions
     - [ ] Scheduler responsive
 
+- [ ] **test-instrument-automation** (42) — Instrument automation, by hand
+  - [ ] Open the **Instrument Automation** panel (below Risk Management), switch it on and press **Save** — with trading ON as well: this panel is the one write the config lock does not refuse
+  - [ ] Press **↻ Refresh list**: the Top-10 appears with each name's two ranks and the criteria it was screened with, and `data/automation-list-<strategy>.json` is written beside `trading.json`
+  - [ ] Change an entering criterion and save: the cached list is dropped rather than judged against criteria it was not screened for
+  - [ ] Turn trading on and wait for a bar: the tick log shows `switched` at the `instrument` gate, the Session monitor's roadmap stops there with the loop's own reason, and the strategy now names the new instrument
+  - [ ] Confirm the new instrument's history is in the dataset *before* the switch is written — a provider that refuses leaves the instrument alone and says so in the tick's notes
+  - [ ] Confirm nothing switched while a position was open, and no more than once that day
+
 **Phase 7 Gate:** Paper trading stable for 1-2 weeks. Code quality verified.
 
 ---
@@ -541,11 +549,11 @@ The unfinished Phase 2 & 3 work lives here so Risk & Execution can proceed first
   - [ ] Add the Alpaca LIVE key pair in Account Settings (paper keys are not accepted for live)
   - [ ] Press **Validate live credentials** — the badge must read `✓ verified · <account>`. A live switch that was never verified refuses to arm, and says so
   - [ ] Press **Save**: a pair the broker rejects is not stored at all (the rest of the form still saves), so if the live pair is refused the file is left as it was and the popup says why
-  - [ ] Switch the header dropdown to `LIVE — REAL ORDERS`: the label must carry no `— ⚠ no keys` / `⚠ not valid` marker, and its dot turns red and blinks
+  - [ ] Switch the mode to `LIVE — REAL ORDERS` on the Session monitor: the label must carry no `— ⚠ no keys` / `⚠ not valid` marker, and its dot turns red and blinks
   - [ ] Confirm the config lock is OFF (the switch is still `▶ Turn trading on`)
   - [ ] (Optional preflight) Switch back to `PAPER` and turn trading on once: paper is verified by the switch itself, so a pass here proves the path end to end without arming real orders
-  - [ ] Turn trading ON from the header switch and accept the confirmation prompt (asked for paper too)
-  - [ ] Confirm the switch label flips to `⏹ Turn trading off`, its dot blinks, the **Trading** panel in the strategy bar turns its edge green and the config/backtest buttons are disabled
+  - [ ] Turn trading ON from the Session monitor's master switch and accept the confirmation prompt (asked for paper too)
+  - [ ] Confirm the switch label flips to `⏹ Turn trading off`, its dot blinks, the **Trading** panel on the Session monitor turns its edge green and the config/backtest buttons are disabled
   - [ ] Start with 1% of capital
   - [ ] Verify first week:
     - [ ] Orders execute correctly

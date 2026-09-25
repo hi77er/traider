@@ -403,23 +403,43 @@ def test_state_survives_a_restart_without_refiring(tmp_path):
     assert restarted.on_bar_closed(df.iloc[:8], next_bar=bars[8])["action"] == "noop"
 
 
-def test_the_driver_refuses_to_trade_while_the_broker_disagrees(tmp_path):
-    """The broker is the truth about what is held. Acting on stale state is how a bot
-    doubles up or sells something it does not own."""
+def test_a_position_only_the_broker_holds_is_adopted_not_traded_over(tmp_path):
+    """The broker is the truth about what is held — and when it holds something the local
+    state does not know about, the driver TAKES IT ON.
 
-    class LyingBroker(SimulatedBroker):
+    This used to refuse ("local state is flat"). Refusing was the wrong half of the right
+    instinct: it made "trading on" a switch that could never trade, and it left the position
+    unmanaged, which is exactly what it claimed to prevent. Adopted, the position is the
+    strategy's — and since ``step`` opens nothing while one is held, everything the bot does
+    from here closes it.
+    """
+
+    class HoldsSomething(SimulatedBroker):
         def position(self):
             return BrokerPosition(quantity=10, entry_price=100.0, short=False)
+
+        def resting_levels(self):
+            # Far outside the fixture's prices, so the bar under test cannot close the position
+            # on a level: what is pinned here is the adoption, not a stop-out.
+            return {"stop": 50.0, "take": 200.0}
 
     df = _zigzag(40)
     settings = _settings(tmp_path)
     gen = _generator(settings, _always_buy())
+    broker = HoldsSomething()
     driver = LiveDriver(settings=settings, engine=_engine(settings), generator=gen,
-                        broker=LyingBroker(), state_path=tmp_path / "state.json")
+                        broker=broker, state_path=tmp_path / "state.json")
     result = driver.on_bar_closed(df.iloc[:8], next_bar=_bars(df)[8])
-    assert result["action"] == "refused"
-    assert "local state is flat" in result["reason"]
-    assert driver.state.position is None, "nothing was opened"
+
+    assert result["action"] == "decided", "an adoption is a decision, not a refusal"
+    assert result["adopted_position"]["quantity"] == 10
+    pos = driver.state.position
+    assert pos is not None and pos.short is False, "now held locally, at the broker's word"
+    assert pos.entry_price == 100.0, "at the price the broker says it was bought for"
+    assert (pos.stop, pos.take) == (50.0, 200.0), "protected by the broker's own exits"
+    # The broker was not asked for anything: an always-BUY signal on a bar where a position is
+    # held is not an entry, which is the whole of "nothing is added to an adopted position".
+    assert [intent["action"] for intent in result["intents"]] == [], result["intents"]
 
 
 def test_a_broker_that_fills_elsewhere_moves_the_stop_with_it(tmp_path):
@@ -492,10 +512,12 @@ def test_the_resting_exits_are_moved_to_the_levels_the_real_fill_implies(tmp_pat
 
 def test_a_simulated_broker_has_nothing_to_adopt_and_nothing_to_move():
     """Both live-only methods are deliberate no-ops here, which is what keeps the parity
-    test on the same code path as a real run."""
+    test on the same code path as a real run. The resting levels are the third: a simulated
+    position is protected by the engine's own levels, so there are no orders to read."""
     broker = SimulatedBroker()
     assert broker.closing_fill(False) is None
     assert broker.reprice_exits(100.0, 200.0) is None
+    assert broker.resting_levels() == {"stop": None, "take": None}
 
 
 def test_an_exit_the_broker_made_is_adopted_rather_than_refused(tmp_path):

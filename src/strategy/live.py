@@ -21,6 +21,20 @@ Three things this driver owns, because they are genuinely live-only:
   after that is genuine drift, and the driver refuses to submit until the two agree,
   because trading on a position you are wrong about is how a bot doubles up or sells
   something it does not own.
+
+Two things this driver deliberately does NOT keep, both of them positions the broker never
+opened:
+
+* **an entry the broker REFUSED.** The engine records a position while it builds the intent,
+  before anything is sent, so a refusal used to leave one behind — and the tick after it
+  stopped on "the broker is flat and we are not", with nothing in the broker's history ever
+  able to settle it. A refusal is a refusal of the POSITION: the local record is dropped (the
+  order row the loop writes is the whole record of the attempt, and the strategy is free to
+  try again on the next bar), and ``drop_never_opened_position`` clears one left behind by an
+  older run.
+* **an exit for a position that does not exist.** A stop can fire inside the bar its entry
+  filled, so one bar can produce an entry and an exit — and when the entry was refused, the
+  exit is about nothing. It is not sent, and not logged as an order the broker ever saw.
 """
 
 from __future__ import annotations
@@ -34,7 +48,7 @@ import pandas as pd
 
 from src.config import artifacts, state_files
 from src.data import dataset
-from src.strategy.broker import Broker, BrokerPosition, ClosingFill, Fill
+from src.strategy.broker import REJECTED, Broker, BrokerPosition, ClosingFill, Fill
 from src.strategy.engine import (
     CLOSE,
     FORCED,
@@ -46,7 +60,7 @@ from src.strategy.engine import (
     StrategyEngine,
     bar_from_row,
 )
-from src.strategy.state import StrategyState
+from src.strategy.state import Position, StrategyState
 
 logger = logging.getLogger(__name__)
 
@@ -224,6 +238,134 @@ class LiveDriver:
         )
         return report
 
+    def adopt_broker_position(self, bar: Bar) -> Optional[Dict[str, Any]]:
+        """Take ownership of a position the broker holds and the local state does not know about.
+
+        The case: trading was armed while something was already open — the operator's own
+        position, or one this strategy opened in a run whose state file is gone. Arming is
+        ALLOWED on top of one now, so refusing here would make "trading on" a switch that never
+        trades: every tick would stop on the same drift, and the position would sit unmanaged
+        either way.
+
+        Adoption is what makes the position the STRATEGY's, and it is the whole of the answer to
+        "the next signal must be a sell": ``StrategyEngine.step`` opens nothing while a position
+        is held, so from the moment this returns, the only orders this driver can send are the
+        exits — a signal turn, or a level the engine tests the bars against.
+
+        The levels come from the broker's own resting exits when there are any, and from the
+        configuration only as a fallback. That order is deliberate: the orders are what actually
+        protect the position, and a stop placed before a settings edit must keep the level it was
+        sized for rather than moving because the configuration did.
+
+        Returns what it adopted, or ``None`` when there was nothing it could adopt — a position
+        whose entry price the broker cannot report is left to :meth:`reconcile`, which refuses
+        loudly rather than inventing the levels a stop would be derived from.
+        """
+        if self.broker is None:
+            return None
+        if self.state.position is not None:
+            return None
+        actual = self.broker.position()
+        if actual.is_flat:
+            return None
+        entry_px = actual.entry_price
+        if entry_px is None or not float(entry_px):
+            logger.warning(
+                "%s: the broker holds %g %s but reported no entry price — cannot adopt it",
+                self.name, actual.quantity, self.name,
+            )
+            return None
+
+        entry_px = float(entry_px)
+        derived_stop, derived_take = self.engine.levels(entry_px, actual.short)
+        resting = self.broker.resting_levels() or {}
+        stop_lvl = resting.get("stop")
+        take_lvl = resting.get("take")
+        stop_lvl = derived_stop if stop_lvl is None else float(stop_lvl)
+        take_lvl = derived_take if take_lvl is None else float(take_lvl)
+
+        self.state.position = Position(
+            entry_index=bar.index,
+            entry_price=entry_px,
+            raw_entry_price=entry_px,
+            short=bool(actual.short),
+            stop=stop_lvl,
+            take=take_lvl,
+            weight=float(self.state.first_weight or 1.0),
+            stop_pct=self.engine.config.stop_loss_percent,
+        )
+        self.save_state()
+        logger.warning(
+            "%s: adopted the %s position the broker holds — %g at %.4f, stop %s, take %s",
+            self.name, "short" if actual.short else "long", actual.quantity, entry_px,
+            stop_lvl if stop_lvl is not None else "none",
+            take_lvl if take_lvl is not None else "none",
+        )
+        protected = resting.get("stop") is not None or resting.get("take") is not None
+        return {
+            "short": bool(actual.short),
+            "quantity": float(actual.quantity),
+            "price": entry_px,
+            "stop": stop_lvl,
+            "take": take_lvl,
+            "order_id": None,
+            "detail": (
+                f"the {self.env} account already held {actual.quantity:g} {self.name} "
+                f"({'short' if actual.short else 'long'}) when trading was armed, so the "
+                f"strategy adopted it at {entry_px:.4f}; it will be CLOSED — by its "
+                f"{'resting exit' if protected else 'strategy levels'}, or by a signal that "
+                "turns — and nothing new is opened until it is"
+            ),
+        }
+
+    def drop_never_opened_position(self) -> Optional[Dict[str, Any]]:
+        """Forget a LOCAL position the state itself proves was never opened.
+
+        The case: an entry the broker REFUSED, recorded before anything was sent, left its
+        position behind (an older run did that; ``_act`` drops it now). The tick after it stopped
+        on the mismatch — correctly, by the rule at the top of this module — and had no way out:
+        the order history will never show a close for a position that was never opened, so the bot
+        refused every bar for ever until someone edited a file by hand.
+
+        So the evidence is read here instead. All of it has to hold: the state's own record of the
+        last entry says the broker REJECTED it, and the broker is verifiably FLAT. A refusal is a
+        position that never existed, and the local record of it is the only thing left saying
+        otherwise. The caller runs this AFTER :meth:`adopt_broker_exit`, so a position the broker
+        really did close has already been booked at the price its history proves — this cannot take
+        a trade away from the log.
+
+        Not a licence to ignore drift: a position with no such record, or one whose entry was
+        merely not FILLED yet (which may still fill), still refuses.
+        """
+        if self.broker is None:
+            return None
+        pos = self.state.position
+        if pos is None:
+            return None
+        entry = self.state.unfilled_entry or {}
+        if str(entry.get("status") or "").lower() != REJECTED:
+            return None
+        if not self.broker.position().is_flat:
+            # It IS held. Nothing to drop, and reconcile() reports the disagreement.
+            return None
+
+        self.state.position = None
+        self.state.unfilled_entry = None
+        self.save_state()
+        logger.warning(
+            "%s: dropped a position %s was holding that the broker never opened — its entry "
+            "(%s) was rejected", self.name, self.env, entry.get("client_order_id") or "no id",
+        )
+        return {
+            "bar": entry.get("bar"),
+            "order_id": entry.get("client_order_id"),
+            "detail": (
+                f"a recorded position in {self.name} was dropped — the broker is flat and the "
+                f"entry it came from was REFUSED ({entry.get('detail') or entry.get('status')}), "
+                "so nothing was ever opened. The strategy trades on from here"
+            ),
+        }
+
     def reconcile(self) -> Optional[str]:
         """``None`` when local state and the broker agree, else why they do not.
 
@@ -245,12 +387,12 @@ class LiveDriver:
                 "refusing to trade until they agree"
             )
         if local is not None and actual.is_flat:
-            # The adoption step already ran, so the broker closed this position without
-            # leaving a record we could price. Book nothing and stop.
+            # The adoption step already ran, so either the broker closed this position without
+            # leaving a record we could price, or nothing was ever opened. Book nothing and stop.
             return (
                 f"local state holds a position in {self.name} but the broker is flat, and "
                 "its order history does not show what closed it — refusing to trade until "
-                "they agree" + self._refused_entry_note()
+                "they agree" + self._unfilled_entry_note()
             )
         if local is not None and local.short != bool(actual.short):
             return (
@@ -260,24 +402,25 @@ class LiveDriver:
             )
         return None
 
-    def _refused_entry_note(self) -> str:
-        """Why the local state may hold a position the broker never opened.
+    def _unfilled_entry_note(self) -> str:
+        """Why the local state may hold a position the broker does not have.
 
-        Nothing is rolled back when an entry is refused (the position was recorded when the
-        intent was built, which is what keeps the report and the state in step), so the
-        mismatch the caller reports is usually the ordinary consequence of a refusal. Saying
-        which entry, and what the broker said, is the difference between an operator who
-        knows what to clear and one who cannot tell why the bot stopped.
+        One case still leaves one: an entry order the broker ACCEPTED but had not filled when the
+        tick ended. It may fill at any moment, so the position is kept — and this is what names
+        the order to go and look at if it never does. A REFUSED entry is not this case: it left a
+        position behind only in runs before ``_act`` rolled them back, and
+        :meth:`drop_never_opened_position` clears one of those before the caller ever gets here.
         """
-        refused = self.state.refused_entry or {}
-        if not refused:
+        entry = self.state.unfilled_entry or {}
+        if not entry:
             return ""
-        when = refused.get("bar") or "the last entry"
-        said = refused.get("detail") or refused.get("status") or "refused"
+        when = entry.get("bar") or "the last entry"
+        said = entry.get("detail") or entry.get("status") or "no fill"
+        order = entry.get("order_id") or entry.get("client_order_id")
+        named = f" (broker order {order})" if order else ""
         return (
-            f". The entry for bar {when} was REFUSED ({said}) — its position was recorded "
-            "locally anyway, so nothing is open at the broker. Clear the position in this "
-            "strategy's state file to resume"
+            f". The entry for bar {when} was placed but had not filled when the tick ended: "
+            f"{said}{named} — its position is recorded locally until it does"
         )
 
     # -- the tick ----------------------------------------------------------
@@ -326,6 +469,14 @@ class LiveDriver:
         # bars. Adopt it BEFORE reconciling: the mismatch it creates is not drift, and
         # leaving it unbooked would refuse every future tick for ever.
         adopted = self.adopt_broker_exit(fill_bar)
+        # ...and a position the LOCAL state does not know about is taken on for the same reason,
+        # from the other side: arming on top of one is an allowed decision, and a driver that
+        # refused every bar over it would be armed and idle with no way out. Adopted, it is the
+        # strategy's — and the engine can only close it (see ``adopt_broker_position``).
+        taken_on = self.adopt_broker_position(fill_bar)
+        # ...and a position the broker never opened has to go before the same reconcile, or it
+        # wedges the bot for the same reason: nothing in the history can ever settle it.
+        dropped = self.drop_never_opened_position()
 
         mismatch = self.reconcile()
         if mismatch:
@@ -364,6 +515,10 @@ class LiveDriver:
             report["trades"] = booked
         if adopted is not None:
             report["adopted"] = adopted
+        if taken_on is not None:
+            report["adopted_position"] = taken_on
+        if dropped is not None:
+            report["dropped"] = dropped
         return report
 
     def _booked_since(self, mark: int) -> list:
@@ -375,6 +530,17 @@ class LiveDriver:
         if intent.action == SKIP:
             self.engine.settle(self.ledger, self.state, bar, intent)
             return {"intent": intent.action, "reason": intent.reason, "skipped": True}
+        if intent.action == CLOSE and self.state.position is None:
+            # Nothing to close. The entry this exit was built on was refused a moment ago — a stop
+            # can fire inside the bar its entry fills, so one bar can produce both — and a position
+            # that does not exist is not an order: sending the exit would flatten nothing and land
+            # in the orders log as something the broker never saw.
+            return {
+                "intent": intent.action,
+                "reason": intent.reason,
+                "skipped": True,
+                "detail": "the entry was refused, so there was no position to close",
+            }
 
         fill = self._submit(intent, client_order_id)
         # What the broker really paid wins over the expected price. For the simulated
@@ -389,11 +555,21 @@ class LiveDriver:
             "client_order_id": fill.client_order_id or client_order_id or None,
         }
         if intent.action == OPEN:
-            # An entry that did not fill leaves a position only the local state knows about,
-            # so remember what was said about it: the next tick refuses on the mismatch and
-            # this is the only thing that can explain why.
-            self.state.refused_entry = (
-                None if real is not None
+            refused = fill.status == REJECTED
+            if refused:
+                # A refusal at the broker is the refusal of the POSITION. The engine records one
+                # while it builds the intent — before anything is sent — so keeping it here left a
+                # position that never existed, and the next tick stopped on the drift it created
+                # and refused every bar after that. The attempt is not lost: the order row the loop
+                # writes from this report carries the broker's status and its own words, and the
+                # strategy is free to try again on the next bar.
+                self.state.position = None
+            # What to tell an operator if the two sides disagree about a position later. An order
+            # that was PLACED and had not filled when the tick ended is the only case that leaves
+            # one the broker does not have yet — it may fill at any moment — so it is the only one
+            # worth naming.
+            self.state.unfilled_entry = (
+                None if real is not None or refused
                 else {
                     "bar": str(getattr(bar, "time", "") or ""),
                     "status": fill.status,
@@ -419,7 +595,7 @@ class LiveDriver:
                     report["exits"] = exits
             return report
         if intent.action == CLOSE:
-            self.state.refused_entry = None
+            self.state.unfilled_entry = None
             self.engine.settle(self.ledger, self.state, bar, intent, exit_price=real)
             return {
                 "intent": intent.action,

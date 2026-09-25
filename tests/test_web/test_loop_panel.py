@@ -137,6 +137,27 @@ def test_the_panel_sits_under_the_account_and_carries_the_day_inside_it():
     assert html.index('id="lg-ticks"') < html.index("Positions and working orders")
 
 
+def test_the_two_sections_under_the_strip_explain_themselves_or_are_gone():
+    """Asked for removal: the paragraph under the gates, and the one under the ticks header.
+
+    Both were prose about the panel's own shape — what a tick walks, why a row can be absent,
+    which file is the heartbeat — read once and skipped forever after, and both pushed the thing
+    the reader came for further down. The roadmap says the order of the gates by looking like an
+    order, so the paragraph explaining that order has nothing left to explain, and the empty
+    lines the tables print ("nothing was decided on this day") still say why a table has no rows.
+    """
+    html = LOG_HTML.read_text(encoding="utf-8")
+    loop = html[html.index('id="loop-body"') : html.index('id="positions-body"')]
+
+    assert loop.count('class="muted note"') == 0, "the section's own prose is gone"
+    assert "eight possible causes" not in html
+    assert "the heartbeat is per strategy" not in html
+    assert "latest.json" not in loop, "including the file named in the second one"
+    # What must NOT go with them: the tables' own empty lines, which are output rather than
+    # description — the one thing that says why there is nothing to read.
+    assert "nothing was decided on this day" in LOG_JS.read_text(encoding="utf-8")
+
+
 def test_the_panel_folds_away_without_folding_away_the_answer():
     """Collapsible because the day's ticks live in it: the head keeps the COUNTDOWN, so folding it
     hides the tables rather than the one number the panel exists for.
@@ -155,9 +176,13 @@ def test_the_panel_folds_away_without_folding_away_the_answer():
     body = html.index('id="loop-body"')
     countdown = html.index('id="lg-countdown"')
     assert head < countdown < body, "the clock is in the HEAD, so it survives the collapse"
-    assert 'class="lg-clock keep-visible"' in html
+    # The clock rides in a `keep-visible` WRAPPER, which is what the collapse rule spares — the
+    # panel's own ↻ is a sibling of it and folds away, because what it re-reads is off screen. See
+    # tests/test_web/test_panel_refresh.py for that half.
+    assert 'class="lg-clock-block keep-visible"' in html
+    assert html.index('class="lg-clock-block keep-visible"') < countdown, "and the clock is in it"
     assert 'class="lg-clock-label"' in html, "the digits are labelled with what they count to"
-    assert 'id="lg-next-when" class="keep-visible"' in html, "and so does the sentence under it"
+    assert 'id="lg-next-when"' in html, "and the sentence under it"
     # Everything that folds away is the tables: the gates and the day's ticks.
     assert html.index('id="lg-gates"') > body and html.index('id="lg-ticks"') > body
 
@@ -171,7 +196,8 @@ def test_nothing_else_on_the_page_claims_the_same_toggle():
     covers the whole row, the button is what a keyboard reaches.
     """
     html = LOG_HTML.read_text(encoding="utf-8")
-    bodies = ("loop-body", "positions-body", "orders-body", "trades-body")
+    bodies = ("chart-body", "loop-body", "positions-body", "orders-body", "trades-body",
+              "lg-gainers-body", "lg-smallcaps-body")
     for element in bodies:
         assert html.count(f'id="{element}"') == 1, element
     assert html.count('class="card collapsible"') == len(bodies), "one per foldable panel"

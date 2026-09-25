@@ -5,7 +5,7 @@ the SAME strategy machine the backtest drives, and places orders through the Alp
 broker. This document is the agreed design plus the order it gets built in, so the
 reasoning survives the code.
 
-Status: **Phases 0–7 are built** (2026-09-17). 8 is not. The loop runs, the dashboard shows
+Status: **Phases 0–7 are built** (2026-09-17). 8 is not. The loop runs, the Session monitor shows
 what it is doing, and the two things that were deferred to it — the day's loss limits and the
 data-quality gates — are enforced inside the loop. What is missing is the deployment
 follow-through.
@@ -51,20 +51,22 @@ the dashboard. See README, "Two processes"; `tests/test_architecture.py` enforce
 | --- | --- | --- |
 | 1 | Is trading armed? | `src.config.trading_state.is_trading_on` — re-read EVERY tick, never cached |
 | 2 | Is this the strategy it was armed for? | `trading.json`'s `strategy` stamp vs the active one |
-| 3 | Could an order be placed at all? | `execution_status` — credentials resolve for the configured env |
-| 4 | Is the exchange open? | Alpaca `GET /v2/clock` via `AlpacaExecutor.clock()` |
-| 5 | Sync the dataset to the newest CLOSED bar | `delta.sync_missing_days` — the ONLY provider call in the loop |
-| 6 | Read the trailing window | the DATASET (≥ `LiveDriver.required_bars`), truncated at that bar |
-| 7 | Is the newest stored bar the one that should have closed? | `dataset.last_closed_bar`; refuse on a stale file |
-| 8 | Already decided this bar? | `LiveDriver.state.last_decided_bar` |
-| 9 | Reconcile with the broker | `LiveDriver.adopt_broker_exit` then `reconcile` |
-| 10 | Decide | `on_bar_closed` → features → generator → `StrategyEngine.step` |
-| 11 | Place / flatten | `AlpacaBroker.submit` → bracket, then amend the exits after the fill |
-| 12 | Record | ledger + `save_state` + the live store |
+| 3 | Should this strategy trade a DIFFERENT instrument? | `src.scheduler.instrument.evaluate` → `apply` (see below) |
+| 4 | Could an order be placed at all? | `execution_status` — credentials resolve for the configured env |
+| 5 | Is the exchange open? | Alpaca `GET /v2/clock` via `AlpacaExecutor.clock()` |
+| 6 | Sync the dataset to the newest CLOSED bar | `delta.sync_missing_days` — the ONLY provider call in the loop |
+| 7 | Read the trailing window | the DATASET (≥ `LiveDriver.required_bars`), truncated at that bar |
+| 8 | Is the newest stored bar the one that should have closed? | `dataset.last_closed_bar`; refuse on a stale file |
+| 9 | Already decided this bar? | `LiveDriver.state.last_decided_bar` |
+| 10 | Reconcile with the broker | `LiveDriver.adopt_broker_exit`, `adopt_broker_position`, `drop_never_opened_position`, then `reconcile` |
+| 11 | Decide | `on_bar_closed` → features → generator → `StrategyEngine.step` |
+| 12 | Place / flatten | `AlpacaBroker.submit` → bracket, then amend the exits after the fill |
+| 13 | Record | ledger + `save_state` + the live store |
 
 Order is not incidental. Everything that can refuse is asked before anything can spend:
-the switch, then the stamp, then whether an order is even possible, then the exchange, then
-whether the data is current. Reconcile precedes decide so the engine never sizes against
+the switch, then the stamp, then whether the instrument itself is the right one, then
+whether an order is even possible, then the exchange, then whether the data is current.
+Reconcile precedes decide so the engine never sizes against
 a stale view of what is held; state is saved last so a crash mid-tick leaves the bar
 undecided and therefore retryable.
 
@@ -94,29 +96,126 @@ identical from the dashboard.
   against the broker, reported and not traded on → sleep to the next boundary. A position
   may exist while trading is OFF; it is never replayed.
 
+### Instrument automation
+
+Step 3 is the one gate that changes what the rest of the tick is *about*: every step below it —
+the dataset, the clock, the window, the decision — belongs to the instrument it may replace.
+
+The criteria live in `data/automation-<strategy>.json`, beside `trading.json` rather than in the
+strategy store, because the store is frozen while trading is ON and turning this OFF has to be
+possible then. The list comes from `src/data/instrument_automation.py`: one screener request
+through `src.data.screener` (the same path the Market page uses) for US small caps above a price
+and a volume floor, ranked by the **sum** of a rank by day % change and a rank by dollar volume —
+one number would have to invent an exchange rate between percent and dollars. It is cached in
+`data/automation-list-<strategy>.json` with the criteria that made it; the tick re-screens through
+`cache_and_screen` only when the cache is missing, aged past the criteria's own limit (60 minutes
+by default), screened against different criteria, or **screened in another session** — and the
+panel's ↻ calls the same function.
+
+**The list belongs to ONE session**, and the screener's own data is what forces that rule. Yahoo
+reports it from `regularMarketPrice` / `regularMarketChangePercent` / `regularMarketVolume`: the
+last *completed* regular session, with the pre-market and after-hours prints in none of those
+fields. Measured before the 2026-09-23 open, the Top-10 rows matched `regularMarketChangePercent`
+and `regularMarketTime` was the previous day's 16:00 ET close, while the pre-market move (one name
+down 1.0%) appeared nowhere in the list. So a screen taken before the bell is yesterday's ranking
+wearing today's date, and one taken after the close is a ranking whose session has ended.
+
+The gate therefore runs **only inside the session** (`src/config/session.py`, the same window the
+live poll and the model's bar gate use, in the exchange's timezone): outside it the automation
+screens nothing — there is nothing to judge, so a provider call would buy nothing — and switches
+nothing, rather than spending the day's single switch on a ranking from a session that has not
+started. Every cached list carries the session it was screened in (`"2026-09-23 in session"` /
+`"2026-09-23 out of session"`, the second being two *different* sessions either side of the bell),
+and a list whose stamp is not the current one is re-screened before it can be judged. A list with
+no stamp at all — written by a build older than this rule — is treated as unusable and replaced on
+the next tick in the session.
+
+What the rule does not do is ask the exchange: a market holiday inside the window is still the
+tick's own clock gate's business (Alpaca's `/v2/clock`), which refuses the *trade*, so the worst
+case is one wasted switch on a day that could not trade anyway.
+
+The decision is one pure function, `instrument_automation.decide`, with three modes — the default
+being *not_in_list*, so a name that holds its place is never churned out of it. Two guards can hold
+a switch back: nothing may be **held in the account being traded** (a switch mid-position would hand
+the position to the next instrument's rules), and at most **one switch a day**, read from the day's
+own tick log rather than from a counter this feature keeps.
+
+Applying a switch fetches the configured history for the NEW instrument **first**, and writes
+`INSTRUMENT` into the strategy store only if that worked. The order is the safety of the feature:
+`delta.sync_missing_days` does not create history from scratch — it returns early on an empty
+dataset — so a strategy pointed at an instrument with no dataset refuses every bar from then on,
+and a switch without data would trade a working instrument for a stuck one. History that cannot be
+fetched abandons the switch; so does a screener or a store that misbehaves, with the reason in the
+tick's notes. Nothing here raises.
+
+**A switch ends the tick** — action `switched`, stage `instrument`, in the day's log — because
+every step after it was computed for the instrument the tick found, and trading on after changing
+it would trade the wrong symbol for one bar. The next boundary re-reads the store and trades the
+new one.
+
 ## 3. Gates — the policy
 
 | Gate | Behaviour |
 | --- | --- |
-| `turn_on` | **Refuse while ANY position is open**, naming it. **Stamp the strategy name** into the ON state |
+| `turn_on` | **Allowed with a position open in the account it trades** — the run ADOPTS it when it is the instrument the run trades, and leaves it (naming its owner) when it is not. Refuses a position in another account. **Stamps the strategy name** into the ON state |
+| `POST /rules/select` | **Allowed when the strategy being selected trades the held symbol** (it takes the position over). Refuses otherwise |
+| `POST /rules/delete` | **Refuse while any position is open** — deleting the owner leaves nothing that knows how to close it |
 | `POST /execution/env` (paper↔live) | **Refuse while any position is open** — otherwise the position is orphaned in the other account |
 | `turn_off` | **ALWAYS allowed.** Never require flat, never require the network |
 | "Stop trading & flatten" | One deliberate action: OFF + `AlpacaExecutor.flatten()` |
 
-**"Refuse to arm while any position is open" is a decision, not a default.** It was
-chosen as the answer to *"what if I switch the active strategy while a position is
-open?"* because it is the simplest option and because it makes **"only the active
-strategy trades" literally true of the position** as well as of new entries.
+**"Arming may start on top of a position it trades, and then only close it"** is the current
+decision (it replaced a flat refusal on 2026-09-24, at the operator's request). The refusal was
+the one state with no way out of it: waiting changed nothing, the boot could not be told
+anything new, and the flatten button *closes the position* rather than continuing the strategy
+with it. So the switch starts, and the loop takes the position over:
+
+- **`LiveDriver.adopt_broker_position`** runs every tick, before `reconcile`, and takes on a
+  position the broker holds and the local state does not. It is adopted at the broker's own
+  `avg_entry_price`, with the levels from the broker's **resting exits** where they exist (the
+  orders are what actually protect it, and a stop placed before a settings edit must keep the
+  level it was sized for) and from the configuration only as a fallback. `None` is the answer
+  for a level with no leg, which is what the panel's "is it protected" comparison compares.
+- **Which is what makes "the next signal that executes is a SELL" true**: `engine.step` opens
+  nothing while a position is held, so the only orders the driver can send are the exits — a
+  level the bar crosses, or a signal that turns. A BUY on an adopted position produces no order
+  at all. Nothing is ever ADDED to an adopted position.
+- **A position the broker cannot price is not adopted** (no entry price, so no levels to derive),
+  and `reconcile` refuses it as drift — loudly, with nothing invented.
+- **The tick says so.** The adoption is a note on the tick record
+  (`the paper account already held 4 NVDA (long) when trading was armed, so the strategy adopted
+  it at …; it will be CLOSED …`), and `turn_on`'s own message names the position it took on.
+- **The other account is unchanged**: a position in an account this run does not trade still
+  refuses arming. It is the one position this page cannot reach at all — the flatten button works
+  the account **in play** — so "flatten first" is not an instruction the operator can carry out
+  from here.
+- **Another SYMBOL in that account does not refuse it.** The run does not trade that instrument,
+  so nothing about the position changes: it is exactly as reachable as it was while trading was
+  off, and `Stop trading & flatten` still closes it. The message says so and names the owner
+  (`… the paper account holds 3 TSLA: this run trades AAPL, so that position is left exactly as it
+  is. Select the strategy that owns it to have it closed, or Stop trading & flatten`). Refusing
+  here only stopped the operator from running the strategy they had chosen.
+- **`trading_service.adoptable_account` decides ADOPTION, not permission.** It is the test the
+  arming message uses to split what is held into adopted / left alone, and `flat_blocker`'s
+  `held_ok_in_account` (any symbol, arming) and `held_ok_symbol` (that symbol only, the switch) are
+  what the two gates pass.
+- **`/rules/select` may hand the run to the position's OWNER**, and only to it. Without that an
+  operator whose position belonged to a strategy that was no longer active could neither arm nor
+  select it — their only options were to close the position by hand or leave it unmanaged, which
+  is the state this whole section exists to avoid. `/rules/delete` still requires flat: deleting
+  the owner leaves nothing that knows how to close it.
 
 Consequences:
 
-- **`/rules/select` requires flat.** If the strategy could be switched mid-position,
-  the subsequent flatten would run against the NEW strategy's instrument and
-  `EXECUTION_ENV` and miss the position. Blocking the switch is what keeps "flatten
-  first" reachable from the owning strategy's own screen.
+- **A refusal names the remedy that can work.** When the thing in the way is a position in
+  ANOTHER symbol, the message says which symbol and points at the owner: *"… it holds TSLA,
+  which is not AAPL — select the strategy that owns it to have it closed, or flatten it."*
+  "Flatten first" alone is an instruction that costs the operator the position they wanted to
+  keep.
 - The refusal **names the position** and gives both ways out: *"Trading cannot start —
   **Alpha** holds 90 AAPL. Flatten them first (Stop & flatten), or wait: the resting
-  bracket may close it on its own."*
+  bracket may close it on its own."* (This is now the message for a position in an account
+  arming would NOT trade; the account it does trade is reported as adopted instead.)
 - **"Or wait" needs no cleanup**, because the gate reads the **broker**. A position
   closed by its bracket is simply gone by the next attempt; nothing has to tick while
   trading is OFF for that to be true.
@@ -244,7 +343,7 @@ data/live_results/<strategy-slug>/
 | What is held? Which orders are working? What filled, and at what price? | **Alpaca** |
 | Why did it happen — which signal, which bar, which refusal? | **Local logs** |
 
-So the trading log screen renders account state first and local context second, and
+So the Session monitor renders account state first and local context second, and
 degrades gracefully when the local log is missing. It reads two endpoints —
 `GET /api/v1/positions`, `GET /api/v1/orders` — and the page is built so that a
 deleted local log still renders: an empty day, never an error. The local half is
@@ -254,7 +353,42 @@ deleted local log still renders: an empty day, never an error. The local half is
 The same rule appears inside the driver: an exit the broker made on its own is
 **adopted** (booked at the price the broker's order history reports), never
 re-derived locally, because re-deriving would be a guess about the broker's behaviour
-rather than a record of it.
+rather than a record of it. The mirror image is a position the broker never OPENED —
+an entry it refused — which is **dropped** (with a note on the tick) rather than held,
+because the same order history can never settle it either.
+
+### Sizing: the cap is a fraction of equity, not a share count
+
+`AlpacaBroker._open` sends **either a share count or a notional dollar amount**, and which
+one depends on the cap rather than on a setting:
+
+| The exposure allows | What is sent |
+| --- | --- |
+| one whole share or more | `qty` — whole shares, so a bracket can ride with it |
+| less than one whole share | `notional` = `equity × weight` — a fractional order |
+
+The rule is that the cap decides the size. A $100,000 account with `MAX_EXPOSURE_PERCENT=0.01`
+authorises $10; NVDA at $226.89 costs 22.7× that, so a share count can only round to zero —
+and zero is not the size anyone asked for. The broker takes the order as dollars and fills it
+with fractional shares (measured against Alpaca's own asset record: `GET /v2/assets/NVDA` →
+`"fractionable": true`), so the account deploys the amount the strategy sized instead of
+nothing. It is also the size the BACKTEST has always traded: the strategy machine carries a
+`weight` (`returns = weight × bar_return`) and never a share count, so refusing the fraction
+made live disagree with every simulation of it.
+
+Three boundaries, each refused with its reason rather than discovered at the broker:
+
+- **Below Alpaca's minimum notional** ($1): there is no order to send, and the refusal quotes
+  the `Max exposure` that would afford one whole share (at $100,000 and NVDA's price, 0.23%).
+- **With a stop and a take-profit configured**: a fractional order cannot carry a bracket, and
+  an unprotected entry is worse than none — so the entry is refused and the message names both
+  ways out (raise the cap, or configure no stop/take). Whole-share entries keep their bracket.
+- **A limit order**: Alpaca takes notional orders as market orders only, so a notional limit
+  order is refused rather than sent as something else.
+
+Nothing else in the loop had to change for this: reconciliation compares flat/not-flat and
+direction, never quantities, and an exit is `DELETE /v2/positions/<symbol>` — which closes
+whatever is held, fraction included.
 
 ## 6. Data and providers
 
@@ -322,7 +456,9 @@ rather than a record of it.
 | 2.2 | `trading_service.require_flat(action)` — a factory, so each route says what it is refusing | ✅ |
 | 2.3–2.5 | `require_flat` on `/execution/env`, `/rules/select`, `/rules/delete` | ✅ |
 | 2.6 | `turn_on` stamps the active strategy name into `trading.json` | ✅ |
-| 2.7 | `turn_on` refuses while any position is open, naming it and giving both ways out | ✅ |
+| 2.7 | ~~`turn_on` refuses while any position is open, naming it and giving both ways out~~ → **reversed 2026-09-24**: arming is allowed for a position in the instrument it trades, which the loop ADOPTS and can then only close (`adopt_broker_position`); a position in another instrument or account still refuses | ✅ |
+| 2.7b | `flat_blocker(adoptable_instrument=…)` + `trading_service.adoptable_account` — one test of "would this run take the position over", shared by the gate and by arming's own message | ✅ |
+| 2.7c | `/rules/select` may hand the run to the position's OWNER (the strategy trading the held symbol); anything else still refuses | ✅ |
 | 2.8 | `POST /trading/off-flatten` + the panel button: OFF first, then `flatten()` | ✅ |
 | 2.9 | `turn_off` reports what it left behind — nothing / open and protected / open with **no** exit | ✅ |
 
@@ -375,6 +511,8 @@ siblings, and appears read-only in the account panel beside them.
 | 4.10–4.12 | Decide, act, record — in that order, state saved last | ✅ |
 | 4.13 | A per-tick record: PAPER/LIVE label, bar key, signal, intents, order ids, refusals | ✅ |
 | 4.14 | No catch-up: decide on the newest closed bar and log the gap | ✅ |
+| 4.15 | An entry the broker REFUSED leaves no position behind, and no exit is sent for one (`LiveDriver._act`) | ✅ |
+| 4.16 | `LiveDriver.drop_never_opened_position`: a phantom left by an older run is dropped, with a note on the tick, instead of stopping every bar for ever | ✅ |
 
 The tick asks its questions in a fixed order, and each one is a gate that can only refuse:
 is trading on, is this the strategy the switch was armed for, could an order be placed, is
@@ -453,7 +591,7 @@ strategy and a bar with no local log, which is the one thing a deleted log canno
 | 6.1–6.2 | `GET /api/v1/positions`, `GET /api/v1/orders` | ✅ |
 | 6.3 | `GET /api/v1/loop`: lease holder, last-tick age, next wake, last refusal | ✅ |
 | 6.4 | The "N open" header pill, from the broker | ✅ |
-| 6.5 | The trading log screen: account state first, local context second, tolerant of a deleted log | ✅ (`/log`) |
+| 6.5 | The Session monitor: account state first, local context second, tolerant of a deleted log | ✅ (`/log`) |
 | 6.6 | The Trading panel: last tick, position with its exits, environment, the session's ticks | ✅ |
 | 6.7 | The loud case surfaced: a position held with NO resting exits | ✅ |
 | 6.8 | Write `orders.jsonl` / `trades.jsonl` from the loop — built in Phase 3, called by nothing yet | ✅ |
@@ -480,10 +618,13 @@ the real warning gets ignored), `unprotected` (a level was set and nothing is re
 the silent one), `protected`. Reading the configuration instead would let a setting edited
 since the position opened make an unprotected position look protected.
 
-**The dashboard never polls the broker.** The Trading panel's state is local files and refreshes
-with the rest of the page; the orders view asks Alpaca only when the panel is opened or
-refreshed by hand. This app has never polled the broker, and a dashboard that generated
-traffic merely by being open would be the first thing to do so.
+**The Strategy lab never polls the broker.** It reads local files and the API, and the one trading
+fact it borrows is whether trading is ON (which freezes its configuration) — no orders, no
+positions, no accounts. The Session monitor is the page that asks Alpaca, and it does so
+knowingly: the account, the working orders and the protection verdict are re-read on its slow
+poll while today is showing, because a page whose whole job is "what is the bot doing right now"
+is useless if the answer is minutes old. It stops the moment nobody is looking — a backgrounded
+tab reads nothing.
 
 ### Phase 7 — the day's loss limits and data quality ✅ DONE
 
@@ -503,8 +644,8 @@ to OPEN. That module reads nothing, owns nothing and writes nothing.
 
 **The day boundary is the feature, not the tidiness.** Both limits are measured over one
 exchange day and clear when it turns over. A halted bot takes no trades, so a streak that only
-a win could break can never be broken — the bot would be locked out for good with nothing on
-the dashboard to clear it. The day comes from `store.trading_day`, never from the local date.
+a win could break can never be broken — the bot would be locked out for good with nothing in
+the portal to clear it. The day comes from `store.trading_day`, never from the local date.
 
 **A loss is money, not price.** The streak reads `equity_ret` (the leg's return times the
 weight it was sized at): a 1% adverse move on a quarter-sized position costs a quarter of a
@@ -528,6 +669,36 @@ broker made is still adopted and written to the log, on the same bar.
 the broker never received — and the next tick refused for ever over drift that never happened.
 The veto is therefore an argument to `step` (`veto=`), checked before anything is created, and
 `state.position` is never touched.
+
+**A REFUSAL at the broker is the same trap, one layer further out.** The veto covers what the
+LOOP refuses before an order exists; the broker can still refuse the order itself (no buying
+power, a revoked key, a sub-minimum notional), and by then `state.position` has already been
+created by `_entry_intent`. That used to be left standing deliberately — "the position is what
+keeps the report and the state in step" — and the ordinary consequence was this: the next tick
+found a local position the broker did not have, `reconcile` refused on the drift (correctly, by
+its own rule), and every bar after that refused too, because the broker's order history can never
+show a close for a position that was never opened. The bot stopped until someone edited the state
+file, and the refusal message had to explain the whole story to make even that possible.
+
+So a refusal now rolls the position back. Nothing is lost: the attempt is already in the orders
+log — status `rejected`, the broker's own words in `why`, the client order id that ties it to a
+strategy and a bar — and that row is the whole record of it. The bar is still marked decided, so
+the same bar is not re-submitted, and the NEXT bar is free to try again, which is what the
+strategy asked for. Two consequences worth knowing:
+
+- **An exit for a refused entry is never sent.** A stop can fire inside the bar its entry filled,
+  so one bar can produce an entry and an exit. When the entry was refused the exit is about
+  nothing, so `_act` drops it rather than flattening a position that does not exist — an order the
+  broker never saw has no business in the log of what the bot submitted.
+- **An order that was ACCEPTED and did not fill is not the same thing**, and is still kept. It may
+  fill at any moment, so the position it will create stands; if the broker is still flat on the
+  next tick, the refusal names the order to go and look at (`unfilled_entry` on the state).
+- **A phantom left by an older run is dropped rather than refused.** `drop_never_opened_position`
+  runs just before the reconcile and clears a local position when — and only when — the state's own
+  record says its entry was REJECTED and the broker is verifiably flat. The drop is written to the
+  tick's `notes`, because a position that disappears with no trade against it is not a quiet
+  correction. A position with no such record, or one whose entry merely has not filled, still
+  refuses.
 
 **A backtest does NOT apply these limits.** They are the loop's: a backtest has no account and
 no broker, so it cannot measure either limit, and `MAX_LOSS_PERCENT` is defined against equity

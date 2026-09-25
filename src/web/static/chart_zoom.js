@@ -26,14 +26,31 @@
  *    so its tail sits mid-screen and then pinching used to reset the view to fill
  *    the width first, because the window was snapped back inside the data).
  *
- * Callers keep the library's own wheel zoom OFF (`handleScale.mouseWheel: false`)
- * and leave panning to it (`handleScroll.mouseWheel: true`), then bind each chart's
- * element here. `bind` is idempotent per element and re-points the resolver, so an
- * element that outlives its chart (a rebuild) stays correct.
+ *  - A wheel event that arrives while the pointer is DOWN is part of a drag, not a gesture of its
+ *    own. On a trackpad the same two fingers that move the chart also report as a scroll/pinch, so
+ *    a drag used to ZOOM while the reader was only moving the chart sideways. Those events are
+ *    swallowed whole: the pointer is already doing the moving.
+ *  - A gesture that is mostly SIDEWAYS is a move, not a zoom. Two fingers travelling together is a
+ *    pan, and the OS reports that as a magnify (ctrl) often enough that zooming on it is how a
+ *    reader trying to reach an earlier stretch of the session ended up at maximum zoom instead.
+ *  - No single event may take the view anywhere drastic. A pinch arrives as a stream
+ *    of wheel events, so the step per event is capped; unbounded, one flick collapsed
+ *    the window onto a single bar in one frame.
+ *
+ * Callers keep the library's own wheel zoom OFF (`handleScale.mouseWheel: false`, and `pinch:
+ * false` as a second line of defence) and leave PANNING to it (`handleScroll.mouseWheel: true`),
+ * then bind each chart's element here. Both are needed and neither is sufficient: the library
+ * scales ANY ctrl+wheel whatever those options say (measured on the session chart: a pure
+ * sideways one still zoomed 1.6x with `pinch: false`), which is why this module's listener runs in
+ * the CAPTURE phase and STOPS the event — the library's own listener on the canvas never sees a
+ * pinch, so there is exactly one zoomer and it is the bounded one below. `bind` is idempotent per
+ * element and re-points the resolver, so an element that outlives its chart (a rebuild) stays
+ * correct.
  *
  * Assigned to `window` rather than declared with `const`: this file is a shared
- * asset loaded by two different pages (the dashboard and the report), and a global
- * is what makes that contract visible — the same way `LightweightCharts` arrives.
+ * asset loaded by three pages (the Strategy lab, the Session monitor and the
+ * report), and a global is what makes that contract visible — the same way
+ * `LightweightCharts` arrives.
  */
 window.ChartZoom = (function () {
   // Pixels per bar at maximum zoom-out. Every chart here passes this as its
@@ -51,6 +68,12 @@ window.ChartZoom = (function () {
   // zoom-out, where the candles are sub-pixel anyway.
   const MIN_BAR_SPACING = 0.01;
 
+  // The most one wheel event may change the zoom, as a log-step: e^0.35 ≈ 1.42x. A trackpad
+  // sends a pinch as a stream of events, so a gesture still zooms the whole way in a fraction
+  // of a second; what this stops is a SINGLE event taking the view somewhere drastic.
+  // Exported with the clamp, for the same reason: a test has to be able to name the bound.
+  const MAX_ZOOM_STEP = 0.35;
+
   const resolvers = new WeakMap(); // element -> () => {chart, barCount}
   const bound = new WeakSet(); // elements that already carry the listener
 
@@ -59,7 +82,14 @@ window.ChartZoom = (function () {
     const span = range.to - range.from;
     if (!(span > 0)) return null;
     const anchor = range.from + ratio * span; // the bar under the pointer stays put
-    const factor = Math.exp(-deltaY * 0.005); // pinch out (negative delta) -> zoom in
+    // ONE STEP AT A TIME. A trackpad reports a pinch as a STREAM of wheel events, so a gesture
+    // still zooms smoothly and all the way — but no single event may take the view somewhere
+    // drastic. Unbounded, one event (a fast flick, a coarse wheel, the tail of a gesture, each
+    // reported with a delta in the hundreds) collapsed the window onto a SINGLE bar in one frame:
+    // the reader saw the chart "suddenly zoom in to the maximum" and lost the stretch they were
+    // looking at. Measured on the session chart: deltaY of -400 went from 72 bars to 9.
+    const step = Math.max(-MAX_ZOOM_STEP, Math.min(MAX_ZOOM_STEP, -deltaY * 0.005));
+    const factor = Math.exp(step); // pinch out (negative delta) -> zoom in
     // A chart whose bar count is unknown (not yet data-fed) keeps the old
     // proportional bound rather than locking the view to nothing.
     const maxSpan = barCount > 1 ? barCount : span * 10;
@@ -74,21 +104,71 @@ window.ChartZoom = (function () {
     return { from: newFrom, to: newFrom + newSpan };
   }
 
+  /* Move the window sideways by a wheel gesture.
+   *
+   * The library pans a wheel itself, and for a plain one that is left to it. A PINCH is not left to
+   * it (see ``bind``), so a pinch that is mostly sideways — two fingers travelling together, which
+   * a trackpad reports with ctrl set as well — has to be moved here, by the same arithmetic the
+   * library uses: the pixels travelled, as a share of the pane, in bars. */
+  function panBy(scale, deltaX, paneWidth) {
+    const range = scale.getVisibleLogicalRange();
+    if (!range || !(paneWidth > 0)) return;
+    const span = range.to - range.from;
+    if (!(span > 0)) return;
+    const shift = (deltaX / paneWidth) * span;
+    scale.setVisibleLogicalRange({ from: range.from + shift, to: range.to + shift });
+  }
+
   function bind(el, resolve) {
     if (!el || typeof resolve !== "function") return;
     resolvers.set(el, resolve);
-    if (bound.has(el)) return; // one listener per element — the resolver was replaced
+    if (bound.has(el)) return; // one wheel listener per element — the resolver was replaced
     bound.add(el);
+
+    // Is the pointer DOWN on this chart? A drag is how the reader moves the chart, and on a
+    // trackpad the same two fingers also report as a scroll/pinch — so a wheel event that arrives
+    // mid-drag is an artefact of the move, not a gesture of its own. This is the case that made a
+    // drag ZOOM instead of move. Tracked on the window for the release, so a drag that ends
+    // outside the element cannot leave the flag stuck on.
+    let dragging = false;
+    el.addEventListener("mousedown", () => { dragging = true; }, true);
+    window.addEventListener("mouseup", () => { dragging = false; });
+    window.addEventListener("blur", () => { dragging = false; });
+
     el.addEventListener("wheel", (ev) => {
-      if (!ev.ctrlKey) return; // plain wheel never zooms — the library pans instead
-      ev.preventDefault(); // stop the browser from zooming the whole page instead
+      if (dragging || ev.buttons) {
+        // Part of a drag. Swallowed WHOLE — no zoom, and no pan either, because the pointer is
+        // already moving the chart: two sources moving it at once is a chart that fights the hand.
+        ev.preventDefault();
+        ev.stopPropagation();
+        return;
+      }
+      if (!ev.ctrlKey) return; // a plain wheel never zooms — the library pans it
+      // From here it is a PINCH, and this module is the only thing allowed to act on one. The
+      // library scales ANY ctrl+wheel — sideways or not, and whatever `handleScale` says: measured
+      // on this chart, a PURE sideways one (dx -200, dy 0) still zoomed 1.6x with `pinch: false`.
+      // So the event is taken in the CAPTURE phase, before the library's own listener on the
+      // canvas, and stopped there: both the page and the library are kept out of it.
+      ev.preventDefault(); // or the browser zooms the whole PAGE instead
+      ev.stopPropagation();
+
       const spec = (resolvers.get(el) || (() => null))();
       if (!spec || !spec.chart) return;
       const scale = spec.chart.timeScale();
-      const range = scale.getVisibleLogicalRange();
-      if (!range) return;
       const box = el.getBoundingClientRect();
       if (!box.width) return;
+
+      // A gesture that is mostly SIDEWAYS is a MOVE, not a zoom: two fingers travelling together
+      // is a pan, and the OS reports that as a magnify (ctrl) often enough that zooming on it is
+      // how a reader trying to reach an earlier stretch of the session ended up at maximum zoom.
+      if (Math.abs(ev.deltaX) > Math.abs(ev.deltaY)) {
+        const width = typeof scale.width === "function" ? scale.width() : 0;
+        panBy(scale, ev.deltaX, width || box.width);
+        return;
+      }
+
+      const range = scale.getVisibleLogicalRange();
+      if (!range) return;
       const ratio = Math.max(0, Math.min(1, (ev.clientX - box.left) / box.width));
       const next = clampRange(range, ev.deltaY, ratio, spec.barCount | 0);
       if (!next) return;
@@ -99,8 +179,9 @@ window.ChartZoom = (function () {
         return;
       }
       scale.setVisibleLogicalRange(next);
-    }, { passive: false });
+    }, { passive: false, capture: true });
   }
 
-  return { bind: bind, clampRange: clampRange, MIN_BAR_SPACING: MIN_BAR_SPACING };
+  return { bind: bind, clampRange: clampRange, MIN_BAR_SPACING: MIN_BAR_SPACING,
+           MAX_ZOOM_STEP: MAX_ZOOM_STEP };
 })();

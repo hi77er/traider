@@ -1,4 +1,4 @@
-"""Rule-based signal API for the dashboard (test the rule engine from the UI)."""
+"""Rule-based signal API for the Strategy lab (test the rule engine from the UI)."""
 
 from __future__ import annotations
 

@@ -57,7 +57,7 @@
     return res.json();
   }
 
-  /* Transient message, bottom-centre (reuses the dashboard's #toast styling). */
+  /* Transient message, bottom-centre (reuses the Strategy lab's #toast styling). */
   function flashToast(text, kind) {
     const el = $("toast");
     if (!el) return;
@@ -68,7 +68,7 @@
     flashToast._timer = setTimeout(() => { el.hidden = true; }, 4000);
   }
 
-  /* Promise-based confirmation dialog (same contract as the dashboard's). */
+  /* Promise-based confirmation dialog (same contract as the Strategy lab's). */
   function confirmDialog(opts) {
     return new Promise((resolve) => {
       const backdrop = $("rp-confirm-backdrop");
@@ -550,6 +550,7 @@
       handleScroll: { mouseWheel: true },
       handleScale: {
         mouseWheel: false,
+        pinch: false, // the library's own pinch is a second, unbounded zoomer (see chart_zoom.js)
         axisPressedMouseMove: { time: false, price: true },
       },
       // Free-floating crosshair, so the synced horizontal line is not snapped to

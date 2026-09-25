@@ -26,6 +26,7 @@ from src.data.dataset import chart_time, load_dataset
 from src.features import indicators
 from src.features.engineering import FeatureEngineer
 from src.features.schema import macd_tag
+from src.model import rules as rules_mod
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +48,6 @@ _MACD_HIST_PRICE_FORMAT = {"type": "price", "precision": 2, "minMove": 0.01}
 _CACHE: Dict[str, pd.DataFrame] = {}
 _CACHE_LOCK = threading.Lock()
 
-# Feature-config fields that influence the computed series.
 _CFG_FIELDS = (
     "historical_bar_size",
     "features_sma_periods",
@@ -83,6 +83,16 @@ def chart_indicators(settings: Optional[Settings] = None) -> dict:
     settings = settings or get_effective_settings()
     frame, last_date = _cached_indicator_frame(settings)
     overlays = _build_overlays(settings, frame)
+    strategy = _active_strategy(settings)
+    referenced = set(rules_mod.referenced_series(strategy)) if strategy else set()
+
+    for overlay in overlays:
+        # Which of these the strategy's own rules test. The chart uses it to offer a control per
+        # indicator the strategy actually reads, instead of a switch for every configured feature —
+        # the difference between "what could be drawn" and "what this strategy is looking at".
+        names = {overlay.get("key")}
+        names.update(line.get("name") for line in overlay.get("lines") or [])
+        overlay["used"] = bool(names & referenced)
 
     return {
         "symbol": settings.instrument,
@@ -90,6 +100,17 @@ def chart_indicators(settings: Optional[Settings] = None) -> dict:
         "last_date": last_date,
         "overlays": overlays,
     }
+
+
+def _active_strategy(settings: Settings) -> Optional[rules_mod.RuleSet]:
+    """The strategy the panel is showing, or None. Never raises: no store, a corrupt store and no
+    active strategy all mean the same thing to a chart — there are no rules to read."""
+    try:
+        store = rules_mod.load_store(settings)
+        return store.strategies.get(store.active) if store.active else None
+    except Exception as exc:  # noqa: BLE001 - a chart must not fail over a rules file
+        logger.warning("Could not read the strategy's rules for the chart: %s", exc)
+        return None
 
 
 def clear_cache() -> None:

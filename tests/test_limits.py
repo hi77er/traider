@@ -336,6 +336,82 @@ def test_a_halting_loop_still_adopts_an_exit_it_did_not_ask_for(tmp_path) -> Non
     assert halted.state.position is None, "and both sides now agree it is flat"
 
 
+def test_a_position_the_broker_already_holds_is_adopted_and_only_closed(tmp_path) -> None:
+    """Arming on top of a position: the driver TAKES IT ON, and can then only close it.
+
+    The operator's request, in two bars: trading may be switched on while something is open in
+    the account it trades. Refusing the bar instead would make "trading on" a switch that never
+    trades — every tick would stop on the same drift — and the position would sit unmanaged
+    either way.
+
+    ``step`` is what makes the second half true: it opens nothing while a position is held, so a
+    BUY signal on an adopted position produces no order at all, and the first order this driver
+    can send is the SELL that closes it.
+    """
+    broker = CountingBroker()
+    # Roughly the frame's last price, so the adopted levels are not hit by the same bar: the
+    # point here is the adoption and the signal, not an immediately stopped-out position.
+    broker.quantity, broker.entry_price = 5.0, 159.0
+    driver = _driver(tmp_path, ["BUY", "SELL"], broker=broker)
+
+    first = driver.on_bar_closed(_frame())
+
+    assert first["action"] == "decided", "the tick goes on: the position is managed from here"
+    assert first["adopted_position"]["quantity"] == 5.0
+    assert first["adopted_position"]["price"] == 159.0
+    assert "adopted it" in first["adopted_position"]["detail"], "and says so where it is read"
+    assert broker.submitted == [], "a BUY cannot open a second position on top of one"
+    assert driver.state.position is not None and driver.state.position.short is False
+
+    driver.on_bar_closed(_frame(shift=2))
+
+    assert broker.submitted == ["close"], "and the SELL is the first order it can send"
+    assert driver.state.position is None
+
+
+def test_an_adopted_position_keeps_the_levels_the_broker_is_protecting_it_with(tmp_path) -> None:
+    """Where an adopted position's levels come from, and why the broker answers.
+
+    The orders are what actually protect the position, so a stop placed before a settings edit
+    has to keep the level it was sized for rather than moving because the configuration did. The
+    configuration is only the FALLBACK: for a position whose legs have gone, or one that never
+    had any because no stop is configured.
+    """
+
+    class Protected(CountingBroker):
+        def resting_levels(self):
+            return {"stop": 150.0, "take": 170.0}
+
+    broker = Protected()
+    broker.quantity, broker.entry_price = 5.0, 159.0
+    driver = _driver(tmp_path, ["BUY"], broker=broker)
+
+    driver.on_bar_closed(_frame())
+
+    pos = driver.state.position
+    derived = driver.engine.levels(159.0, False)
+    assert derived != (150.0, 170.0), "the fixture proves nothing if the two agree"
+    assert (pos.stop, pos.take) == (150.0, 170.0), "the broker's legs win over the configuration"
+
+
+def test_a_position_the_broker_cannot_price_is_refused_rather_than_adopted(tmp_path) -> None:
+    """No entry price, no levels: the stop an adoption would derive from is not knowable.
+
+    So the driver leaves it to ``reconcile``, which refuses with the drift message it always
+    had — loudly, and with nothing invented along the way.
+    """
+    broker = CountingBroker()
+    broker.quantity, broker.entry_price = 5.0, None
+    driver = _driver(tmp_path, ["BUY"], broker=broker)
+
+    report = driver.on_bar_closed(_frame())
+
+    assert report["action"] == "refused"
+    assert "local state is flat" in report["reason"]
+    assert driver.state.position is None, "nothing was invented"
+    assert broker.submitted == []
+
+
 def test_a_halted_day_still_lets_an_open_position_leave(tmp_path) -> None:
     """The exception, and the reason the whole design works.
 

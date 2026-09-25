@@ -73,6 +73,39 @@ def is_open_at(settings, when: Optional[datetime] = None) -> bool:
     return now.time() >= start or now.time() <= end
 
 
+def stamp(settings, when: Optional[datetime] = None) -> str:
+    """WHICH session ``when`` belongs to, e.g. ``"2026-09-23 in session"``.
+
+    One session per trading day, identified by the date in the exchange's own timezone and by
+    whether the moment is inside the window — so ``"2026-09-23 out of session"`` (before the
+    bell, or after it) and ``"2026-09-23 in session"`` are TWO different sessions rather than
+    one. That distinction is the whole point of the stamp: the screener's numbers are the last
+    completed session's, so a list screened before the bell is not the list the session trades
+    on, even though it was screened on the same day.
+
+    It exists so a cached list can say which session it is an answer for. Comparing stamps is
+    how a reader — the tick, or the panel — sees that a list belongs to a session that has
+    ended instead of trusting a number from it.
+    """
+    tz = ZoneInfo(getattr(settings, "market_timezone", None) or "UTC")
+    now = when or datetime.now(tz)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=tz)
+    now = now.astimezone(tz)
+    return f"{now.date().isoformat()} {'in session' if is_open_at(settings, now) else 'out of session'}"
+
+
+def is_in_session(stamp: Optional[str]) -> bool:
+    """Whether a stamp was taken inside the session — the stamp's own words say so.
+
+    Read back rather than stored twice: a document carries ONE session fact, and two copies of a
+    fact are two things that can disagree. Used wherever a reader has to be told that the numbers
+    in front of them are the last completed session's: a screen taken before the bell returns
+    yesterday's close, and the list looks no different for it.
+    """
+    return str(stamp or "").endswith(" in session")
+
+
 def last_weekday(day: date) -> date:
     """``day`` itself when it is a weekday, else the Friday before it."""
     while day.weekday() >= 5:

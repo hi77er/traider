@@ -77,7 +77,7 @@ def test_the_counts_are_boxes_and_the_fills_sentence_is_gone():
     """
     body = _function(APP_JS, "signalTiles")
 
-    for value in ('liveTile("Buy"', 'liveTile("Sell"', 'liveTile("Hold"'):
+    for value in ('statTile("Buy"', 'statTile("Sell"', 'statTile("Hold"'):
         assert value in body, value
     assert 'liveTile("Risk"' not in body, "the risk state is the Risk section's now"
     assert "signal-metrics" in body, "in a grid of its own"

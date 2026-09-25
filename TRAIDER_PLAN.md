@@ -88,7 +88,7 @@ follow-through (Phase 8).
 │  └────────────────────────────────────────────┘             │
 │                                                               │
 │  ┌────────────────────────────────────────────┐             │
-│  │   Logging & Web Portal (Dashboard)         │             │
+│  │   Logging & Web Portal                     │             │
 │  └────────────────────────────────────────────┘             │
 │                                                               │
 └─────────────────────────────────────────────────────────────┘
@@ -237,7 +237,7 @@ fails if a web module ever gains a path to the loop.
 - **Risk:** `RISK_LIMIT_PERCENT`, `MAX_LOSS_PERCENT`, `MAX_CONSECUTIVE_LOSSES`, `MAX_EXPOSURE_PERCENT`, `POSITION_SIZING_MODE`, `STOP_LOSS_PERCENT`, `TAKE_PROFIT_PERCENT`, `CIRCUIT_BREAKER_ENABLED`
 - **Backtest gates:** `GATE_MIN_SHARPE`, `GATE_MAX_DRAWDOWN_PERCENT`, `GATE_MIN_WIN_RATE_PERCENT`, `GATE_MAX_WEEKLY_LOSS_PERCENT`, `BACKTEST_SLIPPAGE_PERCENT`, `BACKTEST_COMMISSION_PER_TRADE`
 - **Execution — account-wide (Alpaca):** `ALPACA_PAPER_API_KEY`, `ALPACA_PAPER_API_SECRET`, `ALPACA_LIVE_API_KEY`, `ALPACA_LIVE_API_SECRET`, `EXECUTION_MAX_RETRIES`, `EXECUTION_RETRY_BASE_DELAY_SECONDS`, `EXECUTION_ORDER_TIMEOUT_SECONDS`
-- **Execution — per strategy:** `EXECUTION_ENV` (paper | live) — stored per strategy but edited from the header dropdown, not a settings panel
+- **Execution — per strategy:** `EXECUTION_ENV` (paper | live) — stored per strategy but edited from the Mode control on the Session monitor, not a settings panel
 - **Execution — runtime (NOT config):** `data/trading.json` holds the trading ON/OFF switch. It is deliberately outside the configuration files, because those are exactly what the switch freezes.
 - **Scheduler:** no settings. `SCHEDULER_ENABLED` and `SCHEDULER_TIMEZONE` are RETIRED
   (nothing read either; the trading switch says whether a tick acts, and the schedule
@@ -538,7 +538,7 @@ The Web Portal is the single interface for monitoring and controlling the bot. B
   placement belongs to the loop (`src/main.py`), which runs separately. See README,
   "Two processes".
 - `auth.py` — HTTP Basic auth via `WEB_PORTAL_AUTH_ENABLED` / `WEB_PORTAL_USERNAME` / `WEB_PORTAL_PASSWORD` (dev default: disabled when password empty)
-- `routes/pages.py` — `GET /` (dashboard), `GET /api/v1/health`
+- `routes/pages.py` — `GET /` (the Strategy lab), `GET /api/v1/health`
 - `routes/dataset.py` — `GET /api/v1/dataset/status`, `GET /api/v1/dataset/data` (paginated), `POST /api/v1/dataset/backfill` (async background thread)
 - `routes/delta.py` — `GET /api/v1/delta/status`, `POST /api/v1/delta/sync` (Daily Delta panel)
 - `routes/chart.py` + `services/chart_service.py` — `GET /api/v1/chart/indicators`: overlay-ready indicator series (price SMA/Bollinger overlays + oscillator panes), memoized on (data + feature-config) fingerprint
@@ -547,7 +547,7 @@ The Web Portal is the single interface for monitoring and controlling the bot. B
 - `services/delta_service.py` — Daily Delta: missing-day detection + sync (wraps `src/data/delta.py`)
 - `services/config_service.py` — config schema (grouped sections/fields), masked secrets, atomic `.env` writes with Pydantic validation
 - `data/delta.py` — eligible-date logic (final daily bar after close), provider-grounded missing-day detection, merge missing bars into the Parquet dataset
-- `templates/index.html` + `static/app.js` + `static/style.css` — dark dashboard split into two panes: left = summary card, lightweight-charts candlestick chart, Daily Delta card ("All data synced" + last 5 bars, or missing-days list + Fetch button), paginated data table, "no data" state with download button; right = **collapsed-by-default** editable `.env` settings form (Save/Reload, secrets masked, section groups, boolean toggles). `INSTRUMENT` is **read-only** (only changeable by editing `.env` manually) so the trading symbol can't be switched in-flight.
+- `templates/index.html` + `static/app.js` + `static/style.css` — dark Strategy lab split into two panes: left = summary card, lightweight-charts candlestick chart, Daily Delta card ("All data synced" + last 5 bars, or missing-days list + Fetch button), paginated data table, "no data" state with download button; right = **collapsed-by-default** editable `.env` settings form (Save/Reload, secrets masked, section groups, boolean toggles). `INSTRUMENT` is **read-only** (only changeable by editing `.env` manually) so the trading symbol can't be switched in-flight.
 
 **Next (pending):**
 - **Progress / status:** scheduler state, last decision time, position, P&L

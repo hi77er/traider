@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Optional, Protocol, runtime_checkable
+from typing import Dict, Optional, Protocol, runtime_checkable
 
 from src.strategy.engine import CLOSE, OPEN, Intent
 
@@ -158,6 +158,17 @@ class Broker(Protocol):
         derived from. A broker with no resting orders does nothing.
         """
 
+    def resting_levels(self) -> Dict[str, Optional[float]]:
+        """Where the broker's resting exits sit now, as ``{"stop": …, "take": …}``.
+
+        Asked when a position is ADOPTED — trading armed while something was already open.
+        The levels that protect a position are the broker's orders, not the current
+        configuration: a stop placed before a settings edit must not silently move because
+        the edit happened, so the levels come from the legs themselves. ``None`` for a level
+        with no leg behind it, which is the honest answer and keeps the panel's "is it
+        protected" comparison a comparison rather than a guess.
+        """
+
 
 class SimulatedBroker:
     """Fills at the price the engine expected, charging the configured costs.
@@ -224,3 +235,9 @@ class SimulatedBroker:
         simulated stop already sits where the fill put it and there is no order to amend.
         """
         return None
+
+    def resting_levels(self) -> Dict[str, Optional[float]]:
+        """No legs, so no levels: a simulated position is protected by the engine's own
+        levels, which the driver derives from the configuration when it adopts.
+        """
+        return {"stop": None, "take": None}

@@ -159,6 +159,26 @@ def default_ruleset(instrument: Optional[str] = None) -> RuleSet:
     )
 
 
+def referenced_series(ruleset: "RuleSet") -> List[str]:
+    """Every series this strategy's ENABLED rules test, in the order they appear.
+
+    A condition names the series it compares by the feature column behind it (``sma_50``,
+    ``macd_hist_12_26_9``, ``close``) — the same vocabulary the chart's indicator bundle is keyed
+    by — so this is what decides which of those indicators a chart offers a control for. A rule
+    that is switched off is not trading, and an indicator nothing tests is a picture without a
+    question.
+    """
+    names: List[str] = []
+    for rule in ruleset.rules or []:
+        if not rule.enabled:
+            continue
+        for condition in rule.conditions:
+            for name in (condition.feature, condition.ref):
+                if name and name not in names:
+                    names.append(name)
+    return names
+
+
 def default_store(instrument: Optional[str] = None) -> StrategyStore:
     """A store with a single 'default' strategy (the example rules)."""
     rs = default_ruleset(instrument)
@@ -247,6 +267,35 @@ def save_store(settings: Settings, store: StrategyStore) -> Path:
     _atomic_write(path, content)
     logger.info("Saved %d strategy(ies) to %s (active=%s)", len(data["strategies"]), path, active)
     return path
+
+
+def set_strategy_config(settings: Settings, name: str, values: Dict[str, str]) -> Path:
+    """Write ``KEY -> value`` into one strategy's config and save.
+
+    The store's OWN writer, for a caller that must not go through the panel: the instrument
+    automation changes the instrument from inside a tick, where every route that saves a
+    strategy is closed (trading is ON, which is what the automation acts under). Only the
+    named keys are touched, so nothing else the strategy holds can be lost by it.
+
+    Refuses on an unreadable store rather than saving: ``load_store`` answers an empty store
+    for a corrupt file, and writing that back would replace a strategy collection with none.
+    """
+    unreadable = store_error(settings)
+    if unreadable:
+        raise ValueError(f"the strategy store cannot be written — {unreadable}")
+    store = load_store(settings)
+    strategy = store.strategies.get(name)
+    if strategy is None:
+        raise KeyError(f"no strategy named {name!r}")
+
+    config = dict(strategy.config or {})
+    for key, value in values.items():
+        config[str(key).strip().upper()] = str(value)
+    strategy.config = config
+    if config.get("INSTRUMENT"):
+        # The mirror the panel and the resolver both read (see ``rules_service``).
+        strategy.instrument = str(config["INSTRUMENT"]).strip().upper()
+    return save_store(settings, store)
 
 
 def load_store(settings: Settings) -> StrategyStore:

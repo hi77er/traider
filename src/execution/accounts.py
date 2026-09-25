@@ -45,6 +45,7 @@ __all__ = [
     "CACHE_SECONDS",
     "EnvAccount",
     "forget",
+    "history",
     "snapshot",
     "snapshots",
 ]
@@ -108,6 +109,13 @@ class EnvAccount:
     fields: Tuple[Tuple[str, Any], ...] = ()
     known: bool = True
     reason: str = ""
+    #: What the reader has to FIX, when there are no figures to show: ``"credentials"`` when the
+    #: key is missing or was REFUSED (a 401/403 — retrying cannot help), ``"broker"`` when Alpaca
+    #: failed to answer at all (a timeout, a 5xx, a dropped connection). The panel prints an
+    #: instruction beside the reason, and the one it has — "add the key pair" — is only true of
+    #: the first. A 504 from Alpaca's gateway is not a credential problem, and sending an operator
+    #: to re-enter keys they have already entered sends them after the wrong thing entirely.
+    fix: str = ""
 
     def as_dict(self) -> Dict[str, Any]:
         """The shape the dashboard renders: the projected fields plus what is derived."""
@@ -115,6 +123,7 @@ class EnvAccount:
             "env": self.env,
             "known": self.known,
             "reason": self.reason,
+            "fix": self.fix,
             "account": "",
             "equity": None,
             "last_equity": None,
@@ -209,17 +218,39 @@ def _read(viewed, env: str, status: Dict[str, Any]) -> EnvAccount:
         return EnvAccount(
             env=env,
             known=False,
+            fix="credentials",
             reason=f"no {env} credentials are configured, so this account cannot be read",
         )
 
     try:
         payload = probe(viewed, env)
-    except (AlpacaError, ExecutionConfigError) as exc:
+    except ExecutionConfigError as exc:
+        # The configuration itself is what is unusable — there is nothing to ask, and the only
+        # thing that fixes it is a key.
         logger.warning("Could not read the %s account: %s", env, exc)
-        return EnvAccount(env=env, known=False, reason=f"the {env} account could not be read ({exc})")
+        return EnvAccount(
+            env=env, known=False, fix="credentials",
+            reason=f"the {env} account could not be read ({exc})",
+        )
+    except AlpacaError as exc:
+        # ``rejected`` is the broker saying NO to this key; anything else — a gateway timeout, a
+        # 5xx, a body it could not parse — is the broker failing to answer, and the key is not
+        # what the reader has to go and change.
+        logger.warning("Could not read the %s account: %s", env, exc)
+        return EnvAccount(
+            env=env,
+            known=False,
+            fix="credentials" if exc.rejected else "broker",
+            reason=f"the {env} account could not be read ({exc})",
+        )
     except Exception as exc:  # noqa: BLE001 - a panel must not 500 over a number
+        # Nothing here knows what this was — a dropped connection, a DNS blip, a proxy. What it
+        # is not is a statement about the credential, and the panel must not pretend otherwise.
         logger.exception("Unexpected failure reading the %s account", env)
-        return EnvAccount(env=env, known=False, reason=f"the {env} account could not be read ({exc})")
+        return EnvAccount(
+            env=env, known=False, fix="broker",
+            reason=f"the {env} account could not be read ({exc})",
+        )
 
     if not isinstance(payload, dict) or not payload:
         return EnvAccount(env=env, known=False, reason=f"the {env} account came back empty")
@@ -251,6 +282,79 @@ def snapshot(settings, env: str, *, force: bool = False) -> EnvAccount:
 def snapshots(settings, envs: Optional[Sequence[str]] = None, *, force: bool = False) -> List[EnvAccount]:
     """Both accounts by default — see the module docstring for why."""
     return [snapshot(settings, env, force=force) for env in (envs or ENVS)]
+
+
+def probe_history(viewed, env: str, period: str, timeframe: str) -> Dict[str, Any]:
+    """The broker call behind the equity curve — ``GET /v2/account/portfolio/history``.
+
+    Separate from the cache and patchable by name, exactly like ``probe`` above: a test that
+    patches this one goes offline without stubbing a session.
+    """
+    return executor_for(viewed, env).portfolio_history(period=period, timeframe=timeframe)
+
+
+def _equity_points(payload: Dict[str, Any]) -> List[Dict[str, float]]:
+    """``timestamp[]`` and ``equity[]`` zipped into points, unusable ones dropped.
+
+    Alpaca aligns the two arrays by INDEX and pads a point whose value it does not have with
+    a null, so a null is the absence of a balance rather than a balance of zero — dropped,
+    never plotted as 0. A series with a hole at the account's opening value is a chart that
+    lies about the day.
+    """
+    points: List[Dict[str, float]] = []
+    for stamp, value in zip(payload.get("timestamp") or [], payload.get("equity") or []):
+        equity = _number(value)
+        try:
+            at = int(stamp)
+        except (TypeError, ValueError):
+            continue
+        if equity is None:
+            continue
+        points.append({"time": at, "equity": round(equity, 2)})
+    return points
+
+
+def history(
+    settings, env: str, *, period: str = "1D", timeframe: str = "5Min"
+) -> Dict[str, Any]:
+    """``env``'s equity through the session, as the broker recorded it.
+
+    NOT cached, unlike ``snapshot``: this is drawn as a curve beside a live price chart, and
+    a series served from a half-minute cache lags the line next to it for no reason — one
+    request per read, on the slow half of whatever polls it.
+
+    Degrades to ``ok: False`` with a reason rather than raising: the panel it feeds sits under
+    a chart that must still draw when the account cannot be read.
+    """
+    env = str(env or "").strip().lower() or "paper"
+    viewed = _viewed(settings, env)
+    status = execution_status(viewed)
+    if not status.get("ok") and not _keys_configured(status, env):
+        return {
+            "ok": False,
+            "env": env,
+            "reason": f"no {env} credentials are configured, so this account has no curve",
+            "points": [],
+        }
+    try:
+        payload = probe_history(viewed, env, period, timeframe)
+    except (AlpacaError, ExecutionConfigError) as exc:
+        logger.warning("Could not read the %s account's history: %s", env, exc)
+        return {"ok": False, "env": env, "reason": str(exc), "points": []}
+    except Exception as exc:  # noqa: BLE001 - a panel must not 500 over a curve
+        logger.exception("Unexpected failure reading the %s account's history", env)
+        return {"ok": False, "env": env, "reason": str(exc), "points": []}
+
+    if not isinstance(payload, dict) or not payload:
+        return {"ok": False, "env": env, "reason": "the broker returned no history", "points": []}
+    return {
+        "ok": True,
+        "env": env,
+        "reason": "",
+        "timeframe": payload.get("timeframe") or timeframe,
+        "base_value": _number(payload.get("base_value")),
+        "points": _equity_points(payload),
+    }
 
 
 def forget() -> None:

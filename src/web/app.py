@@ -20,6 +20,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from src.web.routes import account as account_routes
+from src.web.routes import automation as automation_routes
 from src.web.routes import chart as chart_routes
 from src.web.routes import backtest as backtest_routes
 from src.web.routes import dataset as dataset_routes
@@ -76,6 +77,7 @@ app.include_router(execution_routes.router)
 app.include_router(live_routes.router)
 app.include_router(trading_routes.router)
 app.include_router(rules_routes.router)
+app.include_router(automation_routes.router)
 app.include_router(signal_routes.router)
 app.include_router(backtest_routes.router)
 app.include_router(report_routes.router)

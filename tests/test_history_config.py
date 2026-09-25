@@ -91,7 +91,7 @@ def test_delete_dataset_removes_local_file(tmp_path):
 # configured provider can actually fill decides the list the panel shows.
 EXPECTED_PERIODS = {
     "1m": ("6d",),  # Yahoo serves 5 sessions of 1-minute bars -> 15d/30d/7d are all out
-    "2m": ("30d",),  # yfinance stops at ~31 sessions, so 60d came back 43 days short
+    "2m": ("30d", "40d"),  # yfinance stops at ~31 sessions (measured), so 60d never fits
     "5m": ("30d", "60d"),
     "15m": ("30d", "60d"),
     "1h": ("1y", "2y"),

@@ -205,12 +205,13 @@ def test_the_mode_it_is_already_on_is_a_noop(mode_results):
     assert got["api"] == 0 and got["dialogs"] == 0 and got["reloads"] == 0
 
 
-def test_the_write_is_one_function_with_one_caller_per_page():
-    """The most dangerous write in the app exists ONCE, on two screens.
+def test_the_write_is_one_function_with_one_caller():
+    """The most dangerous write in the app exists ONCE, on ONE screen.
 
-    Asserted by counting rather than by reading: one definition, and one call per page — the
-    dashboard's box and the log page's. A second route into it (an extra caller, or a page that
-    re-implements the confirmation) is the failure this is here to catch.
+    Asserted by counting rather than by reading: one definition in the shared module, and one
+    caller — the Session monitor's Mode box. There is exactly one page that can move the account
+    now: the Strategy lab has no trading controls at all, so a caller appearing in ``app.js`` means
+    the switch has been copied back onto a page that should not have one.
     """
     app = APP_JS.read_text(encoding="utf-8")
     log = (APP_JS.parent / "log.js").read_text(encoding="utf-8")
@@ -219,5 +220,5 @@ def test_the_write_is_one_function_with_one_caller_per_page():
     assert "onEnvChange" not in app, "the header dropdown's handler is gone"
     assert "exec-env" not in app, "and so is everything that served it"
     assert shared.count("async function flipEnv(") == 1, "one definition"
-    assert app.count("TraiderSwitch.flipEnv(") == 1, "the dashboard's Mode box is one caller"
-    assert log.count("TraiderSwitch.flipEnv(") == 1, "and the log page's is the other"
+    assert app.count("TraiderSwitch.flipEnv(") == 0, "the lab has no Mode box to call it from"
+    assert log.count("TraiderSwitch.flipEnv(") == 1, "and the Session monitor's is the one caller"

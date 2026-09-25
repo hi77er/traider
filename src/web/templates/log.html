@@ -3,12 +3,24 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TRAIDER — Trading log</title>
+  <title>TRAIDER — Session monitor</title>
+  <!-- The page title's own face. Everything else stays on the system stack, and the CSS
+       falls back to what macOS and Windows already ship if this cannot be fetched. -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@600;700&display=swap" />
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body class="report-page">
   <header>
-    <h1>📋 TRAIDER — Trading log</h1>
+    <!-- The same identity group as the Strategy lab: the logo both pages share, and the name of
+         THIS one. The name is a TITLE, not a suffix on the product name — the two pages are one
+         product, and which of them you are on should be the loudest thing in the bar. -->
+    <div class="header-left">
+      <h1>TRAIDER</h1>
+      <span class="page-name">Session monitor</span>
+    </div>
   </header>
 
   <main class="report-main">
@@ -18,20 +30,75 @@
     <aside class="card report-menu">
       <!-- The way back sits at the top of the day menu, like the report page's, so leaving is
            the same gesture on both screens and never depends on the header. -->
-      <a class="rp-backlink" href="/">← Back to dashboard</a>
+      <a class="rp-backlink" href="/">← Back to the Strategy lab</a>
       <h2>Days</h2>
-      <p class="muted note">One entry per day the loop ran this strategy. The counters come
-        from its own index, so this list stays fast however large the logs get.</p>
+      <!-- WHICH strategy every panel on this page is about. The page follows the strategy the
+           lab has selected (the switch's stamp while trading is on), and there is no picker
+           here on purpose — so without this line the reader has to work out whose session the
+           ticks, orders, trades and roadmap belong to. It is set from the same payload that
+           names the strategy for the rest of the page (``/api/v1/loop``). -->
+      <p class="muted note" id="lg-strategy-name" title="The Session monitor follows the strategy selected in the Strategy lab"></p>
+      <p class="muted note">Every day this strategy has run, newest first, with the exchange's
+        today at the top — the day this page opens on, whether or not its session has started.
+        The list comes from the loop's own index, so it stays fast however large the logs get.</p>
       <div id="lg-days" class="rp-runs"></div>
+
+      <!-- ── The day's tape, as the two lists worth having beside the session: the biggest gainers
+           and the small caps doing the most volume, both off the same screener the Market page's
+           panels run (the US primary tape's last completed session). They sit under the days
+           because the three answer one question between them — what this bot has run, and what
+           moved — and they are REFERENCE here, not controls: nothing on this page screens them to
+           order anything. The one thing each does is screen itself again, from its own ↻. ── -->
+      <section class="card collapsible" id="lg-gainers-card">
+        <div class="card-head" onclick="toggleCard(event)" title="Collapse / expand the day's gainers">
+          <button class="ghost small" onclick="toggleCard(event)"
+                  title="Collapse the day's gainers">−</button>
+          <h2>Top 10 gainers</h2>
+        </div>
+        <div class="collapse-body" id="lg-gainers-body">
+          <!-- The controls, under the title they belong to rather than beside it: the column is
+               240px wide, and the table below is wider than that on purpose (it scrolls sideways),
+               so the head is the title alone. The ↻ is the icon alone for the same reason —
+               screening again is the only thing to do here. -->
+          <div class="lg-screen-actions">
+            <button id="lg-gainers-refresh" class="ghost small"
+                    onclick="refreshMarketList('top_gainers')"
+                    title="Screen the day's gainers again, now — the same screen the Market page's Top Gainers panel runs">↻</button>
+            <!-- WHEN this page read the list. The screener's own numbers are the last completed
+                 session's, so the read time is what says which print this is. -->
+            <span class="muted lg-screen-at" id="lg-gainers-at"></span>
+          </div>
+          <div id="lg-gainers-list" class="lg-screen-list"></div>
+        </div>
+      </section>
+
+      <section class="card collapsible" id="lg-smallcaps-card">
+        <div class="card-head" onclick="toggleCard(event)"
+             title="Collapse / expand the day's most traded small caps">
+          <button class="ghost small" onclick="toggleCard(event)"
+                  title="Collapse the day's most traded small caps">−</button>
+          <h2>Small caps by volume</h2>
+        </div>
+        <div class="collapse-body" id="lg-smallcaps-body">
+          <div class="lg-screen-actions">
+            <button id="lg-smallcaps-refresh" class="ghost small"
+                    onclick="refreshMarketList('small_cap_volume')"
+                    title="Screen the day's small caps again, now — the same screen the Market page's Highest Volume — Small Caps panel runs">↻</button>
+            <span class="muted lg-screen-at" id="lg-smallcaps-at"></span>
+          </div>
+          <div id="lg-smallcaps-list" class="lg-screen-list"></div>
+        </div>
+      </section>
     </aside>
 
     <section class="report-body">
       <div id="lg-error" class="bt-warn" hidden></div>
 
-      <!-- ── The ACCOUNT: what it is worth, and what the bot is doing with it — as the same BOXES
-           the dashboard's Trading panel shows. The mode, the switch and what is open come first,
-           because the figures under them are only read the right way round once those three say
-           which account this is and whether anything is being sent to it.
+      <!-- ── The ACCOUNT: what it is worth, and what the bot is doing with it — the same BOXES
+           the dashboard's Trading panel used to show, now that the panel is this page. The mode,
+           the switch and what is open come first, because the figures under them are only read
+           the right way round once those three say which account this is and whether anything is
+           being sent to it.
 
            WHICH account is not a detail of this card: it is the scope of the whole PAGE. Every
            panel below is filtered to the one in play — a strategy trades one account at a time,
@@ -56,6 +123,91 @@
         <div id="lg-accounts"></div>
       </div>
 
+      <!-- ── THE SESSION CHART, in prices and in the account: what the instrument did, and what the
+           account did about it. Above the Loop because it is the thing the loop's decisions
+           were made against — the gates and the day's ticks read as an answer once the price
+           they were read at is on screen.
+
+           Up to four kinds of pane over one time axis: the bars with their volume, the indicators
+           the strategy is looking at — the price-scaled ones drawn on the candles, the rest in
+           panes of their own — and, under them, the account's equity, which is the broker's own
+           series rather than anything this page reconstructs. Collapsible like the rest: it is a
+           picture, and the tables below are the detail. ── -->
+      <div class="card collapsible">
+        <div class="card-head" onclick="toggleCard(event)"
+             title="Collapse / expand the session chart">
+          <button class="ghost small" onclick="toggleCard(event)"
+                  title="Collapse the session chart">−</button>
+          <h2>Session chart</h2>
+          <!-- What the chart is OF, in the head: which instrument, which bar size, which day.
+               It stays on screen when the panel folds (``keep-visible``), because it is the
+               answer to "the chart of what" and the fold should not take that with it. -->
+          <div class="settings-actions" onclick="event.stopPropagation()">
+            <!-- One control for the signals, and the indicator chips live above the chart itself
+                 (``lg-indicator-chips``): a chip is a per-indicator switch, and a row of them
+                 belongs on the thing it switches. They configure a chart that is hidden when the
+                 panel folds, so unlike the line beside them they are not ``keep-visible``. -->
+            <label class="chart-toggle" title="Draw the signals this strategy generated that were not a hold, as a row of arrows along the top of the chart — each one pointing down at the bar it was decided on. Filled ones are green or red; the ones that were never filled are grey">
+              <input type="checkbox" id="lg-signals-toggle" checked onchange="onChartToggle()">
+              signals
+            </label>
+            <!-- The account's pane under the chart, on the reader's own switch. It appears on its
+                 own once a round trip has closed today (``equityWanted``), and this chip is the
+                 reader overruling that: showing it on a day whose trades say nothing, or taking
+                 it off the screen when the account's curve is not what is being read. -->
+            <label class="chart-toggle" title="Show the account's equity under the price chart. It appears on its own once a round trip has closed today; this chip shows it anyway, or hides it">
+              <input type="checkbox" id="lg-equity-toggle" onchange="onEquityToggle()">
+              equity
+            </label>
+            <!-- What the chart is OF, in the head: which instrument, which bar size, which day.
+                 It stays on screen when the panel folds (``keep-visible``), because it is the
+                 answer to "the chart of what" and the fold should not take that with it. -->
+            <span class="muted keep-visible" id="lg-chart-meta"></span>
+            <!-- The panel's own ↻, in the corner: the BARS and the read-outs drawn over them,
+                 re-read for the day on screen. The tables below have their own — the loop's
+                 records are a different question from the bars — and this one redraws in place,
+                 so the zoom the reader set survives it. -->
+            <button class="ghost small" onclick="refreshChart()"
+                    title="Re-read this day's bars and the read-outs drawn over them, now">↻ Refresh</button>
+          </div>
+        </div>
+        <div class="collapse-body" id="chart-body">
+          <h3 class="lg-sub">Price and volume</h3>
+          <!-- One chip per indicator the strategy's RULES test, and nothing for the features it
+               merely has configured: a chart is read against the rules it is trading. All of them
+               start on, and each chip draws its indicator where that indicator belongs — the
+               price-scaled ones on the candles, the rest in a pane of their own below. -->
+          <div id="lg-indicator-chips" class="indicator-toggles"></div>
+          <!-- The frame is what the volume read-out is positioned in. The label is a SIBLING of
+               the chart host, never a child of it: the library draws its canvases INTO that
+               element, and everything this page has put there has been taken away by it. -->
+          <div class="chart-volume-frame">
+            <div id="lg-chart" class="lg-chart"></div>
+            <span class="chart-volume-label" id="lg-vol-label" hidden></span>
+          </div>
+          <!-- One line per pane, as SIBLINGS of the chart hosts: the library draws its canvas
+               into the host, so writing a message into one would take the chart with it. -->
+          <p class="muted note" id="lg-chart-note" hidden></p>
+          <!-- The indicators that need a scale of their own, one small chart each, under the
+               price pane and above the account's: built and torn down by the chips over the
+               price pane, and kept on the same stretch of time as the panes around them
+               (``linkPanes``). -->
+          <div id="lg-osc-panes"></div>
+          <!-- The account's own series, and it is drawn only once a round trip has been CLOSED:
+               an account that has not finished one has a flat line, and a flat line under a price
+               chart reads as a verdict on the strategy. Folded away until then, and revealed by
+               the page (``showEquityPane``) — hidden in the markup so it stays out of the way
+               even if the script never runs. -->
+          <div id="lg-equity-panel" hidden>
+            <h3 class="lg-sub">Account equity</h3>
+            <div id="lg-equity" class="lg-chart lg-chart-eq"></div>
+            <!-- One line for when the curve cannot be drawn at all — an unreadable account, or a
+                 server that predates the endpoint. The chart above it must still draw. -->
+            <p class="muted note" id="lg-equity-note" hidden></p>
+          </div>
+        </div>
+      </div>
+
       <!-- ── THE LOOP: one panel for the process itself — when it next wakes, the gates it walks,
            and what it did on the last one. All three come from the loop's own files (the lease
            it committed to, its last tick, the day's records) rather than from the broker.
@@ -67,30 +219,30 @@
           <button class="ghost small" onclick="toggleCard(event)"
                   title="Collapse the loop view">−</button>
           <h2>The Loop</h2>
-          <!-- The clock, in the panel's top-right corner: what the number counts to, the countdown
-               itself, and the sentence explaining it underneath. It stays visible when the panel
-               is folded — the number is the reason to look at the panel at all. -->
-          <div class="settings-actions lg-clock-block" onclick="event.stopPropagation()">
-            <span class="lg-clock keep-visible">
-              <span class="lg-clock-label">Tick in</span><span id="lg-countdown">—</span>
-            </span>
-            <span id="lg-next-when" class="keep-visible"></span>
+          <!-- The clock and the panel's own ↻, in the panel's top-right corner: what the number
+               counts to, the countdown itself, and the sentence explaining it underneath. The
+               clock stays visible when the panel is folded — the number is the reason to look at
+               the panel at all — while the ↻ folds away with the tables it re-reads. -->
+          <div class="settings-actions" onclick="event.stopPropagation()">
+            <!-- The clock first so the ↻ is the corner: the button that re-reads the panel is the
+                 one thing a reader reaches for, and it is where every other card keeps it. -->
+            <div class="lg-clock-block keep-visible">
+              <span class="lg-clock">
+                <span class="lg-clock-label">Tick in</span><span id="lg-countdown">—</span>
+              </span>
+              <span id="lg-next-when"></span>
+            </div>
+            <!-- Re-reads the lease, the last tick's gates and today's records now rather than on
+                 the next poll. -->
+            <button class="ghost small" onclick="refreshLoop()"
+                    title="Re-read the loop's lease, its last tick and the day's records now">↻ Refresh</button>
           </div>
         </div>
         <div class="collapse-body" id="loop-body">
           <h3 class="lg-sub">The gates the last tick walked</h3>
           <div id="lg-gates"></div>
-          <p class="muted note">A tick walks these in order and stops at the first that says no,
-            so a row below it never ran — that is the whole reason for the list: "nothing is
-            happening" has eight possible causes. The names come from the loop's own record, for
-            the account in play: the heartbeat is per strategy, so it can hold the other account's
-            tick, and then this says so instead of drawing it.</p>
 
           <h3 class="lg-sub">What the loop did <span id="lg-day"></span></h3>
-          <p class="muted note">One line per tick, newest first, for the account in play — the
-            other account's ticks are not shown. A tick that decided nothing is not written:
-            <code>latest.json</code> is the heartbeat, this file is what it <em>did</em>. The
-            account column says which one each row is.</p>
           <div id="lg-ticks"></div>
         </div>
       </div>
@@ -109,6 +261,13 @@
           <button class="ghost small" onclick="toggleCard(event)"
                   title="Collapse positions and working orders">−</button>
           <h2>Positions and working orders</h2>
+          <!-- Its own ↻ rather than the Account card's: this panel is the one that asks the
+               BROKER, and a reader who wants the broker asked again now should not have to reload
+               the loop's records with it. -->
+          <div class="settings-actions" onclick="event.stopPropagation()">
+            <button class="ghost small" onclick="refreshPositions()"
+                    title="Ask the broker what is held and working, now">↻ Refresh</button>
+          </div>
         </div>
         <div class="collapse-body" id="positions-body">
           <p class="muted note">Read from the broker, never from the loop's records: something
@@ -128,11 +287,15 @@
           <button class="ghost small" onclick="toggleCard(event)"
                   title="Collapse the orders the bot submitted">−</button>
           <h2>Orders the bot submitted</h2>
+          <div class="settings-actions" onclick="event.stopPropagation()">
+            <button class="ghost small" onclick="refreshOrders()"
+                    title="Re-read the orders the loop has recorded, now">↻ Refresh</button>
+          </div>
         </div>
         <div class="collapse-body" id="orders-body">
-          <p class="muted note">The loop's own account of every order it sent, including the
-            ones that were refused, with the client id that joins each row to the broker's
-            copy.</p>
+          <p class="muted note">The loop's own account of every order it sent on this day,
+            including the ones that were refused, with the client id that joins each row to the
+            broker's copy.</p>
           <div id="lg-orders"></div>
         </div>
       </div>
@@ -143,9 +306,13 @@
           <button class="ghost small" onclick="toggleCard(event)"
                   title="Collapse the trades closed">−</button>
           <h2>Trades closed</h2>
+          <div class="settings-actions" onclick="event.stopPropagation()">
+            <button class="ghost small" onclick="refreshTrades()"
+                    title="Re-read the round trips the loop has closed, now">↻ Refresh</button>
+          </div>
         </div>
         <div class="collapse-body" id="trades-body">
-          <p class="muted note">Round trips the loop has finished, newest first — entry, exit,
+          <p class="muted note">Round trips this day's loop finished, newest first — entry, exit,
             the reason, and the return the strategy machine itself computed.</p>
           <div id="lg-trades"></div>
         </div>
@@ -168,6 +335,10 @@
 
   <div id="toast" hidden></div>
 
+  <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+  <script src="/static/chart_zoom.js"></script>
+  <script src="/static/chart_time.js"></script>
+  <script src="/static/chart_volume.js"></script>
   <script src="/static/trading_switch.js"></script>
   <script src="/static/log.js"></script>
 </body>

@@ -3,20 +3,28 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>TRAIDER — Dashboard</title>
+  <title>TRAIDER — Strategy lab</title>
+  <!-- The page title's own face. Everything else stays on the system stack, and the CSS
+       falls back to what macOS and Windows already ship if this cannot be fetched. -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@600;700&display=swap" />
   <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
   <header>
-    <!-- Just the identity, and on the right everything that configures or navigates away. Trading
-         used to be represented up here too — the mode, the master switch and the open count as
-         three pills — and every one of them was a second copy of an answer the Trading panel
-         gives, in a place where none of them could be acted on. The panel is where trading is
-         read and changed, and the header no longer pretends otherwise. -->
+    <!-- Identity, and the name of THIS page centred over it: two pages share the same logo, and
+         "which one am I on" should not have to be inferred from the panels below. On the right,
+         everything that navigates away. -->
     <div class="header-left">
-      <h1>📈 TRAIDER</h1>
+      <h1>TRAIDER</h1>
+      <span class="page-name">Strategy lab</span>
     </div>
-    <!-- Right: everything that configures or navigates away. -->
+    <!-- Right: everything that navigates away, and nothing that configures. Trading is not here
+         at all: the switch, the mode and the account live on the Session monitor, which is where
+         they are acted on — a second copy of them on a page that only builds strategies was a
+         control nobody could act on from where it was read. -->
     <div class="header-actions">
       <a class="btn-link" href="/market" title="Whole-market screens: screener, gainers, volume, losers, small caps">🌎 Market</a>
       <button id="open-account-settings" class="ghost small" onclick="openAccountSettings()" title="Account-wide settings: broker (Trading Account), data folders, backtest defaults">🏦 Account Settings</button>
@@ -24,19 +32,28 @@
   </header>
 
   <main class="page">
-    <!-- ── Strategy header bar (whole dashboard is scoped to this) ── -->
+    <!-- ── Strategy header bar (the whole page is scoped to this strategy) ── -->
     <div class="card strategy-bar" id="strategy-bar">
       <div id="header-summary" class="header-summary" hidden></div>
       <div class="strategy-bar-main">
-        <!-- The bar's own toggle, and the ONLY one in the bar: it folds everything below the
-             strategy line — the trading panel with the signals under it, and the rules the
-             signals are made of — because they are one subject (this strategy: what it is doing,
-             what it says, and why). Inside the folded row nothing folds on its own any more: one
-             toggle for one thing beats three that hide pieces of it. -->
+        <!-- The bar's own toggle, and the ONLY one in the bar: it folds the row below the
+             strategy line — the rules, the signals they produce and the risk they are traded
+             under — because they are one subject (this strategy: what it would do, what it is
+             saying, and what it would risk). -->
         <button id="strategy-collapse" class="ghost small" onclick="toggleStrategyBody()"
                 title="Collapse / expand the panels below">−</button>
         <span class="strategy-bar-title">Strategy</span>
-        <select id="strategy-select" onchange="onStrategySelect()" title="Switch the active strategy — reloads the dashboard"></select>
+        <select id="strategy-select" onchange="onStrategySelect()" title="Switch the active strategy — reloads the page"></select>
+        <!-- The way to the monitor sits BESIDE the picker: the strategy chosen here is what the
+             loop trades, and its session is the next thing read about it. In the header it was
+             one more place to go among the others, when it is this page's other half. -->
+        <a class="btn-link purple" href="/log" title="What the loop did: the day's ticks, the gates it walked, the orders and the trades">🕒 Session monitor</a>
+        <!-- What the bot is POINTED AT, as two read-only chips: the account in play and whether
+             the master switch is on. Both are answered — and acted on — on the Session monitor,
+             so this says which state that page is in rather than offering a second switch for a
+             page that never places an order. Nothing here can spend money; a live account with
+             the switch on is the pair worth noticing, and it is the pair this bar now names. -->
+        <span class="info-chips" id="lab-state"></span>
         <span id="strategy-msg" class="muted"></span>
       </div>
       <div class="strategy-bar-actions">
@@ -55,64 +72,30 @@
         <button id="strategy-delete" class="ghost small danger" onclick="deleteActiveStrategy()" title="Delete the current strategy">🗑 Delete</button>
       </div>
       <div class="strategy-rules-row" id="strategy-body">
-        <!-- LEFT: the Trading panel, in the slot the signals list used to have. It belongs up
-             here because the strategy bar is what the dashboard is about — the strategy, what it
-             says now, what it will do, and whether it is trading — and because none of it needs a
-             stored dataset, so a panel that reports the switch, the loop, the account and the
-             exchange must not sit inside the column that hides with the chart. -->
-        <section class="strategy-slot" id="strategy-trading">
-          <!-- Not collapsible: the bar's toggle above folds this panel with the rest of the row,
-               so a second toggle here would hide the same panel twice under two different
-               buttons. Everything this panel shows is meant to be read at a glance. -->
-          <section class="card" id="live-card">
-            <div class="card-head">
-              <h2>Trading</h2>
-              <div class="settings-actions">
-                <!-- No "Turn trading off" button here: the Trading box below IS the switch, so a
-                     button beside it would be a second owner of one action. The flatten button is
-                     the one control that is NOT the switch — it closes what is open as well — and
-                     it is the only way to reach that while trading is off. -->
-                <button id="trading-flatten-btn" class="ghost small danger" onclick="stopAndFlatten()" hidden
-                        title="Turn trading off and close whatever is open — the stop button does not close anything">✂ Stop trading &amp; flatten</button>
-                <button id="live-refresh" class="ghost small" onclick="loadLive(true)"
-                        title="Re-read the loop's records and the broker">↻ Refresh</button>
-                <a class="btn-link" href="/log">Open trading log →</a>
-              </div>
-            </div>
-            <div id="live-body">
-              <p id="live-state" class="muted">Checking…</p>
-              <p id="live-protection" class="muted"></p>
-              <!-- The numbers as boxes, in the same style as the backtest KPIs and the report
-                   page: a dashboard is read by glancing at boxes. The Mode and Trading boxes are
-                   also BUTTONS — they do what the header's mode control and the master switch do
-                   — and each ends in the status dot that used to sit on the pill up there: blue
-                   for the calm setting, red and blinking for the one that spends money. -->
-              <div id="live-metrics" class="live-metrics"></div>
-              <div id="trading-facts" class="rp-kv-grid"></div>
-            </div>
-          </section>
-          <!-- What the strategy is saying, directly under the panel that acts on it: the reading
-               and the switch that trades it are one subject, and the signal is the reason anyone
-               looks at the switch. It used to head the other slot, above the rules — which are
-               what the strategy WILL do, not what it is saying. Rendered whole by `renderSignals`
-               into this element, so the id and the class are the only contract. -->
-          <section id="signals" class="strategy-signals"></section>
-        </section>
+        <!-- LEFT: what the strategy WILL do — the rules that decide it — and under them what it
+             is saying right now. The rules are the page's subject, so they head the left of the
+             row; the signals below them are their reading, which is why the two share a column
+             rather than sitting in different halves of it.
 
-        <!-- RIGHT: what the strategy WILL do about it — the rules, and the risk settings they are
-             traded under. They answer one question between them ("why that signal, and what would
-             it risk?"), and as two panels side by side they read as two unrelated ones. The
-             signals themselves are not here: they sit under the Trading panel, where the reading
-             is something the panel below can act on. -->
-        <section class="strategy-slot">
+             Trading used to fill this slot (the mode, the switch, the account's boxes and the
+             working orders). It is on the Session monitor now, whole: the switch is acted on
+             where the loop's day is read, and a page that BUILDS a strategy had no business also
+             being the place you arm it. Nothing was left behind but the reading. -->
+        <section class="strategy-slot" id="strategy-rules-slot">
           <div class="strategy-rules-section">
             <h3 class="strategy-section-title">Rules</h3>
             <div id="strategy-rules" class="strategy-rules" hidden></div>
           </div>
-          <!-- What the rules are traded UNDER: every risk setting for this strategy, as boxes,
-               under the rules they change. The Risk Management panel in the right column is
-               where they are EDITED; this is where they are read, beside the rules that use
-               them. -->
+          <!-- What those rules are saying, directly under them. Rendered whole by `renderSignals`
+               into this element, so the id and the class are the only contract. -->
+          <section id="signals" class="strategy-signals"></section>
+        </section>
+
+        <!-- RIGHT: what the rules would RISK — every risk setting for this strategy, as boxes.
+             The two halves balance: what it would do on the left, what it would stake on the
+             right. The Risk Management panel in the right column is where they are EDITED; this
+             is where they are read, beside the rules that use them. -->
+        <section class="strategy-slot">
           <div class="strategy-rules-section">
             <h3 class="strategy-section-title">Risk</h3>
             <div id="strategy-risk" class="risk-metrics"></div>
@@ -154,17 +137,20 @@
               </div>
             </div>
             <div id="indicator-toggles" class="indicator-toggles"></div>
-            <div id="chart-canvas"></div>
+            <!-- The frame is what the volume read-out is positioned in. The label is a SIBLING of
+                 the chart host, never a child of it: the library draws its canvases in there and
+                 clears out whatever else it finds. -->
+            <div class="chart-volume-frame">
+              <div id="chart-canvas"></div>
+              <span class="chart-volume-label" id="chart-volume-label" hidden></span>
+            </div>
             <div id="indicator-panes"></div>
           </div>
 
-          <!-- The Trading panel is not in this column any more — it is in the strategy bar, in
-               the slot beside the signals and the rules it acts on. It was ONE card here before
-               that (a switch card under the chart and an account panel under the backtest, with
-               the same facts printed in both, used to be two). Its controls hide with its body,
-               so the master switch in the top bar is what stays reachable while it is collapsed.
-               What matters for this column is only that it is NOT in it: nothing here reports
-               trading, and this column hides when there is no dataset. -->
+          <!-- Trading is not in this column, and not on this page: the switch, the mode, the
+               account's boxes and the working orders are the Session monitor's, whole. This
+               column builds a strategy and measures it — the chart, the indicators, the
+               backtest — and it hides when there is no dataset for the instrument. -->
 
           <!-- Backtest: run against the latest saved strategy/rules.
                Collapsible like the other panels, and expanded by default: it is the action
@@ -220,10 +206,9 @@
           </div>
         </section>
 
-        <!-- The Trading panel is NOT here any more: it moved up into the strategy bar, which is
-             where the rest of "what this strategy is doing" lives. It was outside ``#dashboard``
-             only so that it survived having no stored dataset — in the bar it survives that too,
-             and it sits with the signals and the rules it belongs to. -->
+        <!-- Nothing trading-related sits here any more: the panel that used to live outside the
+             ``#dashboard`` section — so that it survived having no stored dataset — is on the
+             Session monitor, where the loop's day is. -->
       </section>
 
       <!-- ── Right: Configuration, Rules, data panels ── -->
@@ -242,7 +227,7 @@
             <p class="muted note">Per-strategy settings for the active strategy (instrument, bar size and
               history window, trading hours, features and their parameters, backtest gates, schedule).
               <b>💾 Save</b> records them in this strategy's <code>config</code> object in the
-              JSON file; switching strategy reloads the whole dashboard in that strategy's context.
+              JSON file; switching strategy reloads the whole page in that strategy's context.
               Risk limits live in the <b>Risk Management</b> panel below.</p>
             <div id="pconfig-groups"></div>
           </div>
@@ -286,6 +271,55 @@
               backtest replays the same rules so the Gate describes the system that will actually trade.
               Stored with the strategy.</p>
             <div id="risk-groups"></div>
+          </div>
+        </section>
+
+        <!-- Instrument Automation: the tick may replace this strategy's instrument with the best
+             of a screened list. Read top to bottom the way it decides: the switch that arms it,
+             the criteria that pick the list, the list itself, and the criteria for acting on it.
+             The ONLY panel here that stays editable while trading is ON — turning it off is how
+             you stop it (see src/config/automation.py). -->
+        <section class="card collapsible" id="automation-card">
+          <div class="card-head" onclick="toggleAutomationPanel(event)"
+               title="Collapse / expand instrument automation">
+            <button id="toggle-automation" class="ghost small" onclick="toggleAutomationPanel(event)"
+                    title="Expand instrument automation">+</button>
+            <h2>Instrument Automation</h2>
+            <div class="settings-actions" onclick="event.stopPropagation()">
+              <button id="automation-save" class="primary small" onclick="saveAutomation()">💾 Save</button>
+            </div>
+          </div>
+          <div class="collapse-body" id="automation-body" hidden>
+            <!-- 1. the switch -->
+            <label class="automation-switch" id="automation-toggle-row">
+              <input type="checkbox" id="automation-on" class="switch" onchange="onAutomationToggle()">
+              <span>Replace the instrument automatically</span>
+            </label>
+            <p class="automation-state" id="automation-state"></p>
+            <!-- The page's own message line (save results, screening failures). It sits below the
+                 switch with the state rather than at the top of the panel: nothing but the head
+                 comes before the control this panel exists for. -->
+            <p id="automation-msg" class="muted"></p>
+
+            <!-- 2. what may ENTER the list -->
+            <div id="automation-enter" class="automation-fields"></div>
+
+            <!-- 3. the list those criteria produce -->
+            <h3 class="lg-sub">Top <span id="automation-size">10</span> matching</h3>
+            <div class="automation-list-head">
+              <button class="ghost small" onclick="refreshAutomationList()"
+                      title="Screen the criteria again, now">↻ Refresh list</button>
+              <!-- WHEN the list was screened, and whether its numbers are the last completed
+                   session's. The screener reports the regular session only, so a list screened
+                   before the bell is the previous close's numbers and looks no different from a
+                   fresh one screened during the session. -->
+              <span class="muted automation-list-when" id="automation-list-when"></span>
+            </div>
+            <div id="automation-list"></div>
+
+            <!-- 4. what makes the tick ACT on it -->
+            <h3 class="lg-sub">Instrument switch</h3>
+            <div id="automation-switch" class="automation-fields"></div>
           </div>
         </section>
 
@@ -387,8 +421,9 @@
   <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
   <script src="/static/chart_zoom.js"></script>
   <script src="/static/chart_time.js"></script>
+  <script src="/static/chart_volume.js"></script>
   <!-- The master switch, before app.js: the toggle handler in it is a thin wrapper over this
-       file, which the trading log page loads too — one confirmation, two pages. -->
+       file, which the Session monitor loads too — one confirmation, two pages. -->
   <script src="/static/trading_switch.js"></script>
   <script src="/static/app.js"></script>
 </body>

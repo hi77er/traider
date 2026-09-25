@@ -8,6 +8,7 @@ import pandas as pd
 
 from src.config.settings import Settings
 from src.data.dataset import save_dataset
+from src.model import rules as R
 from src.web.services import chart_service
 
 
@@ -288,3 +289,76 @@ def test_clear_cache_resets(tmp_path):
     chart_service.chart_indicators(st)
     chart_service.clear_cache()
     assert chart_service._CACHE == {}
+
+
+# ---------------------------------------------------------------------------
+# which indicators the strategy's RULES test (the chart's chips)
+# ---------------------------------------------------------------------------
+def _write_store(tmp_path, *, feature="sma_20", ref=None, enabled=True, active=True):
+    """A rules file with one strategy whose BUY rule tests ``feature`` (against ``ref``)."""
+    store = R.StrategyStore(
+        active="rules" if active else None,
+        strategies={"rules": R.RuleSet(
+            name="rules", instrument="AAPL",
+            rules=[R.Rule(side="BUY", mode="all", enabled=enabled, conditions=[
+                R.RuleCondition(feature=feature, op=">", value=32.0) if ref is None
+                else R.RuleCondition(feature=feature, op=">", ref=ref),
+            ])],
+        )},
+    )
+    path = R.save_store(_settings(tmp_path, strategy_rules_file=str(tmp_path / "store.json")),
+                        store)
+    return str(path)
+
+
+def test_only_the_indicators_the_rules_test_are_marked_used(tmp_path):
+    st = _seed(tmp_path, strategy_rules_file=_write_store(tmp_path))
+    bundle = chart_service.chart_indicators(st)
+    used = {o["key"] for o in bundle["overlays"] if o["used"]}
+
+    assert used == {"sma_20"}, "the rules name sma_20 and nothing else"
+
+
+def test_a_rule_that_compares_two_series_marks_both(tmp_path):
+    st = _seed(
+        tmp_path,
+        features_sma_periods="10,20,50",
+        strategy_rules_file=_write_store(tmp_path, feature="close", ref="sma_50"),
+    )
+    used = {o["key"] for o in chart_service.chart_indicators(st)["overlays"] if o["used"]}
+
+    # `close` is a candle, not an overlay: only the series that HAS an overlay can be marked.
+    assert used == {"sma_50"}
+
+
+def test_macd_is_matched_by_its_histogram_column_and_not_only_its_key(tmp_path):
+    """The rules name the FEATURE column (``macd_hist_12_26_9``), the overlay is drawn as
+    ``macd_...`` — a chart that matched on the key alone would offer no control for an indicator
+    the strategy trades on."""
+    st = _seed(tmp_path, strategy_rules_file=_write_store(tmp_path, feature="macd_hist_12_26_9"))
+    by_key = {o["key"]: o for o in chart_service.chart_indicators(st)["overlays"]}
+
+    assert by_key["macd_12_26_9"]["used"] is True
+    assert sum(1 for o in by_key.values() if o["used"]) == 1
+
+
+def test_a_disabled_rule_and_a_missing_store_mark_nothing(tmp_path):
+    st = _seed(tmp_path, strategy_rules_file=_write_store(tmp_path, enabled=False))
+    assert not any(o["used"] for o in chart_service.chart_indicators(st)["overlays"])
+
+    chart_service.clear_cache()
+    quiet = _seed(tmp_path, strategy_rules_file=str(tmp_path / "absent.json"))
+    assert not any(o["used"] for o in chart_service.chart_indicators(quiet)["overlays"])
+
+
+def test_a_corrupt_rules_file_never_takes_the_chart_down(tmp_path):
+    """The indicators are the chart's content; `used` only decides which of them get a control.
+    A half-written store must leave every series computed and every flag simply false."""
+    broken = tmp_path / "broken.json"
+    broken.write_text("{not json", encoding="utf-8")
+    st = _seed(tmp_path, strategy_rules_file=str(broken))
+    bundle = chart_service.chart_indicators(st)
+
+    assert bundle["overlays"], "the series are still built"
+    assert not any(o["used"] for o in bundle["overlays"])
+

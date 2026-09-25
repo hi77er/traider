@@ -197,6 +197,27 @@ class AlpacaClient:
         """Equity, buying power, status. The cheapest proof the key works."""
         return self.request("GET", "/v2/account") or {}
 
+    def portfolio_history(
+        self, *, period: str = "1D", timeframe: str = "5Min", extended_hours: bool = True
+    ) -> Dict[str, Any]:
+        """Equity THROUGH the session, as the broker recorded it.
+
+        The one honest source for "how did the account move while it was being traded":
+        the loop's own records carry no equity (a tick says what it decided, not what the
+        account was worth), and a page that sampled the balance itself would only know the
+        moments it happened to be open. Alpaca keeps the series — one point per
+        ``timeframe``, marks between ticks included — so nothing has to be reconstructed.
+        """
+        return self.request(
+            "GET",
+            "/v2/account/portfolio/history",
+            params={
+                "period": period,
+                "timeframe": timeframe,
+                "extended_hours": "true" if extended_hours else "false",
+            },
+        ) or {}
+
     def clock(self) -> Dict[str, Any]:
         """Is the market open, and when does it close? Used to skip a dead tick."""
         return self.request("GET", "/v2/clock") or {}

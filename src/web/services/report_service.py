@@ -30,7 +30,7 @@ def _resolve_strategy(strategy: Optional[str]) -> Optional[str]:
 
     The page is usually opened from the backtest panel, which passes the
     strategy explicitly so the report keeps referring to the strategy it was
-    opened for even if the dashboard is switched to another one afterwards."""
+    opened for even if the lab is switched to another one afterwards."""
     return (strategy or "").strip() or active_strategy_name()
 
 
@@ -48,7 +48,7 @@ def runs_payload(strategy: Optional[str] = None) -> dict:
     """The run menu for one strategy."""
     name = _resolve_strategy(strategy)
     if not name:
-        return _empty(None, "No strategy is active — create one in the dashboard first.")
+        return _empty(None, "No strategy is active — create one in the Strategy lab first.")
     runs = bt_store.list_runs(get_effective_settings(), name)
     return {"strategy": name, "run_id": None, "runs": runs, "report": None, "error": None}
 
@@ -57,7 +57,7 @@ def report_payload(strategy: Optional[str] = None, run_id: Optional[str] = None)
     """The full report for one run (newest by default) plus the run menu."""
     name = _resolve_strategy(strategy)
     if not name:
-        return _empty(None, "No strategy is active — create one in the dashboard first.")
+        return _empty(None, "No strategy is active — create one in the Strategy lab first.")
 
     settings = get_effective_settings()
     runs = bt_store.list_runs(settings, name)

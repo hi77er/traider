@@ -31,6 +31,10 @@ def _settings(tmp_path, **kwargs) -> Settings:
         data_dir=str(tmp_path / "data"),
         historical_data_dir=str(tmp_path / "data" / "historical"),
         live_dir=str(tmp_path / "data" / "live_results"),
+        # A store of its OWN, empty: the monitor follows the ACTIVE strategy, so a fixture that
+        # left this at the default would read the machine's real store and answer with whatever
+        # strategy happens to be selected on the laptop running the suite.
+        strategy_rules_file=str(tmp_path / "store.json"),
         instrument="AAPL",
         historical_bar_size="1h",
         market_timezone="America/New_York",

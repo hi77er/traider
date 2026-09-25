@@ -16,7 +16,7 @@ _MARKET = Path(__file__).resolve().parents[1] / "templates" / "market.html"
 
 @router.get("/", include_in_schema=False)
 def index() -> FileResponse:
-    """Serve the dashboard page."""
+    """Serve the Strategy lab."""
     return FileResponse(_INDEX)
 
 

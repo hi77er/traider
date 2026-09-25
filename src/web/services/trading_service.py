@@ -52,14 +52,17 @@ from src.execution import credentials, positions
 from src.execution.alpaca_client import AlpacaError
 from src.execution.alpaca_executor import OrderRefused
 from src.execution.config import ExecutionConfigError, execution_status
+from src.model import rules as rules_mod
 from src.web.services import config_service, loop_control
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
     "STATE_FILENAME",
+    "adoptable_account",
     "flat_blocker",
     "get_state",
+    "instrument_of",
     "is_trading_on",
     "payload",
     "require_flat",
@@ -72,12 +75,48 @@ __all__ = [
 
 
 # -- the exposure gate -----------------------------------------------------
+def instrument_of(settings, name: str) -> str:
+    """The instrument a named strategy trades, as its stored config declares it.
+
+    Read through the CALLER's settings, so the store that answers is the one that caller is
+    pointed at (a test's temp data root, not the machine's). A strategy that inherits the
+    instrument — the common case, since the panel only writes a row when it is edited — falls
+    back to the settings' own, which is what the effective settings resolve to anyway.
+    """
+    config = {}
+    try:
+        store = rules_mod.load_store(settings)
+        strategy = (getattr(store, "strategies", None) or {}).get(name)
+        config = (getattr(strategy, "config", None) or {}) if strategy else {}
+    except Exception:  # noqa: BLE001 - a store we cannot read is not a reason to 500
+        logger.warning("Could not read the store while resolving %r's instrument", name)
+    value = str(config.get("INSTRUMENT") or "").strip().upper()
+    return value or str(getattr(settings, "instrument", "") or "").strip().upper()
+
+
+def adoptable_account(state, *, trade_env: str, instrument: str) -> bool:
+    """Would a run about to be armed TAKE OVER what this account holds?
+
+    True when the account is the one it trades AND every position in it is the instrument it
+    trades. This is the ADOPTION test, not the arming gate: arming tolerates any position in the
+    account it trades (see ``flat_blocker``), because the operator asking to run is entitled to
+    run — what this decides is whether the loop will take the position on as its own and close
+    it, or leave it alone and say so.
+    """
+    symbol = str(instrument or "").strip().upper()
+    if not symbol or state.env != trade_env or not state.payloads:
+        return False
+    return all(str(payload.get("symbol") or "").strip().upper() == symbol for payload in state.payloads)
+
+
 def flat_blocker(
     settings,
     *,
     action: str,
     unreadable_blocks: bool = True,
     trade_env: Optional[str] = None,
+    held_ok_in_account: Optional[str] = None,
+    held_ok_symbol: Optional[str] = None,
 ) -> Optional[str]:
     """Why this action must not proceed, or ``None`` when nothing is in the way.
 
@@ -117,23 +156,74 @@ def flat_blocker(
     switch leaves it unmanaged. It was already unmanaged the moment the key stopped
     working, and the pill says ``… unreadable`` so the condition stays on screen.
 
-    ⚠️ Neither flag narrows the HELD rule, and nothing may: a position that can be seen, in
-    EITHER account, is exactly what the switch or delete would leave behind — the flatten
-    button follows the strategy. Switching the environment keeps the strict rule for the same
-    reason: the account being switched to is one whose contents are unknown at the moment of
-    the switch, and the switch is what would put orders there.
+    ``held_ok_in_account`` narrows the FIRST rule, and only ever for a position in the ONE
+    account named: that account is the one the action trades, so what is held there is reachable
+    — by the run itself when it is the instrument the run trades (the loop ADOPTS it, and can then
+    only CLOSE it: ``StrategyEngine.step`` opens nothing while a position is held), or by the
+    flatten button, which closes whatever the account holds. ARMING therefore passes the account
+    in play and tolerates any symbol in it: running is the operator's decision, the position is
+    not made less reachable by being left open, and the message says which of the two will happen.
+    ``held_ok_symbol`` adds the instrument condition on top, which is what `/rules/select` uses — a
+    switch may hand the run to the position's OWNER and nothing else.
+
+    Before this, arming while anything was open was the one state with no way out of it: the
+    operator could not arm, could not be told anything new by waiting, and the flatten button
+    closes the position rather than continuing the strategy. The honest cost of the adopted case
+    is that the position is one the strategy did not size: its levels are the broker's own resting
+    exits where they exist (the orders are what actually protect it) and the configuration's
+    otherwise, and the tick that adopts it says so in its notes.
+
+    What is deliberately NOT tolerated is a position this screen cannot reach at all: another
+    ACCOUNT, whose flatten button is not on this page. That still refuses, and it is the one case
+    where "flatten first" is not an instruction the operator can carry out from here.
     """
     states = positions.snapshots(settings)
     held = positions.held(states)
+
+    if held and held_ok_in_account is not None:
+        wanted = str(held_ok_symbol or "").strip().upper()
+        held = [
+            state
+            for state in held
+            if not (
+                state.env == held_ok_in_account
+                and (
+                    not wanted
+                    or all(
+                        str(payload.get("symbol") or "").strip().upper() == wanted
+                        for payload in state.payloads
+                    )
+                )
+            )
+        ]
 
     if held:
         # The tail gives the operator both ways out, and both are real: flattening is
         # available in one click, and waiting works with no cleanup at all, because a
         # bracket that closes the position simply stops being there.
+        #
+        # ...and when the thing in the way is a position this action could not take over
+        # anyway (another symbol), "flatten first" is only half the answer: the owner of that
+        # position is a strategy, and handing the run to it is the way through that keeps the
+        # position. Saying so is the difference between an instruction and a dead end.
+        wanted = str(held_ok_symbol or getattr(settings, "instrument", "") or "").strip().upper()
+        foreign = [
+            payload
+            for state in held
+            if state.env == (held_ok_in_account or trade_env or "")
+            for payload in state.payloads
+            if str(payload.get("symbol") or "").strip().upper() != wanted
+        ]
+        tail = (
+            f" It holds {', '.join(sorted({str(p['symbol']).upper() for p in foreign}))}, which "
+            f"is not {wanted} — select the strategy that owns it to have it closed, or flatten it."
+            if foreign and wanted
+            else ""
+        )
         return (
             f"{action} — {positions.describe(states)}. Flatten first "
             "(Stop trading & flatten), or wait: a resting bracket may close the position "
-            "on its own."
+            "on its own." + tail
         )
 
     if unreadable_blocks:
@@ -186,16 +276,27 @@ def turn_on(settings, *, confirm_live: bool = False) -> dict:
     # POSITION rather than about a key — it is the actionable problem, and the one they
     # probably do not know about.
     #
-    # This is the deliberate decision that makes "only the active strategy trades" true of
-    # the POSITION as well as of new entries: the bot will not start on top of something
-    # it did not open, because then nothing on screen would own it.
+    # It no longer REFUSES it, though, and ``held_ok_in_account`` is the whole of that decision: a
+    # position in the account the run trades is reachable — the strategy takes it over when it is
+    # its own instrument, and the flatten button on this screen closes it either way — so arming on
+    # top of one is a state the bot can live with rather than a state it has to be protected from.
+    # Being unable to arm was the real hazard: the operator's other two options were to wait (which
+    # changes nothing) and to flatten (which abandons the position the strategy was in).
     # The environment in play is resolved FIRST, because it is what the gate below has to
     # prove: the account arming would trade. ``execution_status`` reads settings only — no
     # broker and no network — so hoisting it costs nothing.
     status_info = execution_status(settings)
+    instrument = str(getattr(settings, "instrument", "") or "").strip().upper()
+    env = str(status_info["env"] or "").strip().lower()
 
+    # ``held_ok_in_account``: a position in the account this run trades does not stop it. What
+    # happens to that position is the message's job (adopted and closed, or left alone), not the
+    # gate's — arming is the operator's decision and this page can always flatten what it holds.
     blocker = flat_blocker(
-        settings, action="Trading cannot start", trade_env=status_info["env"]
+        settings,
+        action="Trading cannot start",
+        trade_env=env,
+        held_ok_in_account=env,
     )
     if blocker:
         states = positions.snapshots(settings)
@@ -210,6 +311,18 @@ def turn_on(settings, *, confirm_live: bool = False) -> dict:
             "execution": status_info,
             "positions": [p.as_dict() for p in states],
         }
+
+    # What arming is about to leave on the books: everything the account in play holds. Two cases,
+    # and the message below has to tell them apart rather than saying only that the switch is on —
+    # a position this run trades is ADOPTED (and can then only be closed), and one it does not is
+    # left exactly as it is, with its owner named so the operator can hand the run over if that is
+    # what they wanted.
+    open_now = positions.held(positions.snapshots(settings, envs=[status_info["env"]]))
+    adopted = [
+        state for state in open_now
+        if adoptable_account(state, trade_env=env, instrument=instrument)
+    ]
+    untouched = [state for state in open_now if state not in adopted]
 
     # Fail closed: if an order could not actually be placed, "trading on" would be
     # a lie — the operator would believe the bot is live when it would refuse
@@ -289,18 +402,42 @@ def turn_on(settings, *, confirm_live: bool = False) -> dict:
     loop = loop_control.start(settings)
     if not loop["running"]:
         logger.error("TRADING IS ON BUT THE LOOP DID NOT START: %s", loop["reason"])
+    # The two halves of "trading is on" the operator did not already know. Adopted: the loop takes
+    # it over on its next tick, from then on the only order it can send is an exit, and nothing new
+    # is opened until it is flat. Untouched: the run does not trade that instrument, so nothing
+    # changes about it — and its OWNER is named, because handing the run over is how an operator
+    # with one position and the wrong strategy active gets it managed.
+    adopted_note = (
+        f" — {positions.describe(adopted)}, so the strategy ADOPTS that position: it will be "
+        "CLOSED (its resting exit, its levels, or a signal that turns) and nothing new is "
+        "opened until it is flat"
+        if adopted
+        else ""
+    )
+    untouched_note = (
+        f" — {positions.describe(untouched)}: this run trades {instrument or 'another instrument'}, "
+        "so that position is left exactly as it is. Select the strategy that owns it to have it "
+        "closed, or Stop trading & flatten"
+        if untouched
+        else ""
+    )
     result = {
         "ok": True,
         "message": (
-            f"Trading is ON — orders route to {state['env'].upper()} · {loop['message']}"
+            f"Trading is ON — orders route to {state['env'].upper()}{adopted_note}{untouched_note}"
+            f" · {loop['message']}"
             if loop["running"]
             else (
-                f"Trading is ON — orders route to {state['env'].upper()}, but the loop did not "
-                f"start ({loop['reason']}), so nothing will tick or trade until it is running"
+                f"Trading is ON — orders route to {state['env'].upper()}{adopted_note}"
+                f"{untouched_note}, but the loop did not start ({loop['reason']}), so nothing will "
+                "tick or trade until it is running"
             )
         ),
         "state": state,
         "execution": status_info,
+        "holding": [p.as_dict() for p in open_now],
+        "adopted": [p.as_dict() for p in adopted],
+        "untouched": [p.as_dict() for p in untouched],
         "loop": loop,
     }
     # The gate may have been served from the cache a moment ago; an arming is exactly the

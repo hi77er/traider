@@ -302,3 +302,37 @@ def test_a_daily_axis_stays_a_date_even_with_the_zone_known():
         f" return [o.timeVisible, o.tickMarkFormatter({json.dumps(key)}, {DAY_OF_MONTH}, 'en-US')]; }})()",
     )
     assert got == [False, "Sep 17"]
+
+
+# ---------------------------------------------------------------------------
+# the same label in a table cell
+# ---------------------------------------------------------------------------
+def test_a_bar_cell_names_the_market_s_time_and_its_zone():
+    """The loop records a bar as a UTC stamp — seconds and offset included — and both are facts
+    about how the record is STORED rather than about the bar: every stamp is on the minute, and
+    "+00:00" is not a zone anyone trades in. A cell wants the time the market was at, named by
+    the zone's abbreviation."""
+    assert _js(
+        "ChartTime.stampCell('2026-09-21T16:25:00+00:00', " + json.dumps(ET) + ")"
+    ) == "12:25 EDT"
+    assert _js(
+        "ChartTime.stampCell('2026-09-21T16:25:00+00:00', 'UTC')"
+    ) == "16:25 UTC"
+
+
+def test_the_zone_abbreviation_follows_the_date_through_a_dst_change():
+    """Why an abbreviation and not an offset: the same wall-clock hour is a different instant
+    either side of the change, and EST/EDT says which one this bar was."""
+    january = _js("ChartTime.stampCell('2026-01-15T15:00:00+00:00', " + json.dumps(ET) + ")")
+    july = _js("ChartTime.stampCell('2026-07-15T15:00:00+00:00', " + json.dumps(ET) + ")")
+
+    assert january == "10:00 EST"
+    assert july == "11:00 EDT"
+
+
+def test_a_cell_falls_back_to_whatever_the_stamp_says():
+    """A bar whose stamp cannot be read is shown as it came: the thing that wrote it had a
+    reason, and a cell that blanks it hides the record that explains the oddity."""
+    assert _js("ChartTime.stampCell('whenever', " + json.dumps(ET) + ")") == "whenever"
+    assert _js("ChartTime.stampCell(null, " + json.dumps(ET) + ")") == "—"
+    assert _js("ChartTime.stampCell('', " + json.dumps(ET) + ")") == "—"

@@ -68,6 +68,7 @@ from src.execution.alpaca_broker import AlpacaBroker
 from src.execution.alpaca_executor import AlpacaExecutor
 from src.execution.config import execution_status
 from src.model.simple_model import RuleBasedSignalGenerator
+from src.scheduler import instrument as instrument_mod
 from src.scheduler import lease as lease_mod
 from src.strategy import limits
 from src.strategy.config import StrategyConfig
@@ -81,7 +82,7 @@ __all__ = ["build_driver", "run", "tick"]
 #: Actions worth a line in the day's log. The heartbeat is not one of them: a market that
 #: has been shut for eight hours would otherwise write eight hours of identical lines, and
 #: the log is what someone reads to find out what HAPPENED.
-LOGGED_ACTIONS = frozenset({"decided", "refused"})
+LOGGED_ACTIONS = frozenset({"decided", "refused", "switched"})
 
 #: The GATES a tick walks, in the order it walks them, and the names it stamps on a record that
 #: stopped at one (see ``tick``). They exist for the reader of a quiet bot: ``refused`` alone
@@ -94,6 +95,7 @@ LOGGED_ACTIONS = frozenset({"decided", "refused"})
 TICK_STAGES = (
     "switch",     # is trading on, re-read every tick
     "armed",      # is this the strategy the switch was armed for
+    "instrument", # should the strategy's instrument be a different one
     "execution",  # could an order be placed at all
     "clock",      # is the exchange open — asked of the exchange, never inferred
     "sync",       # the dataset is brought up to now
@@ -367,6 +369,26 @@ def tick(
             stage="armed",
         )
 
+    # -- 1c. is the INSTRUMENT about to change? -----------------------------
+    # Before the dataset, the clock and the decision, because all three are about the instrument
+    # this gate may replace — a switch ENDS the tick for that reason, and the next boundary reads
+    # the store again and trades what it now says.
+    move = instrument_mod.evaluate(settings, strategy, at=at)
+    if move.get("switch"):
+        done = instrument_mod.apply(settings, strategy, move.get("target"))
+        if done.get("ok"):
+            return finish(
+                "switched",
+                f"instrument automation: {move.get('reason')} — now trading "
+                f"{done.get('to')} ({done.get('rows')} bars of history)",
+                stage="instrument",
+                logged=True,
+            )
+        # A switch was due and could not be made. The instrument is unchanged, so the tick goes
+        # on trading the one it has — automation that can stop trading by failing would be worse
+        # than no automation — and the failure is in the notes for whoever reads the log.
+        notes.append(f"instrument automation could not switch — {done.get('reason')}")
+
     # -- 2. could an order be placed at all? --------------------------------
     status = execution_status(settings)
     if not status.get("ok"):
@@ -479,6 +501,18 @@ def tick(
 
     # -- 7. record ---------------------------------------------------------
     intents = result.get("intents") or []
+    dropped = result.get("dropped")
+    if dropped:
+        # Said out loud, as a note on the tick: a position the driver had been holding is gone
+        # with no trade against it, and the ticks table is where a reader goes to find out why.
+        # The tick itself goes on — that is the point of dropping it.
+        notes.append(dropped.get("detail") or "a position the broker never opened was dropped")
+    taken_on = result.get("adopted_position")
+    if taken_on:
+        # Also a note, and for the same reason: the strategy is now holding something it did
+        # not open, on the operator's instruction to arm anyway. The tick goes on — the position
+        # is managed from here — and this is the line that says which position that is.
+        notes.append(taken_on.get("detail") or "a position the broker held was adopted")
     order_ids = [i.get("order_id") for i in intents if i.get("order_id")]
     if result.get("adopted"):
         order_ids.append(result["adopted"].get("order_id"))

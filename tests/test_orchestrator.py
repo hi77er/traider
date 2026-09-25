@@ -63,6 +63,11 @@ def _settings(tmp_path, **kw) -> Settings:
         _env_file=None,
         data_dir=str(tmp_path / "data"),
         historical_data_dir=str(tmp_path / "data" / "historical"),
+        # The loop WRITES here (``latest.json``, a tick log, the day index), so it has to be a
+        # temp tree like the datasets: without this a suite run leaves a tick in the live tree of
+        # whatever strategy the machine has active, and the Session monitor then shows a session
+        # that never happened — an "action: off" tick nobody ran.
+        live_dir=str(tmp_path / "data" / "live_results"),
         strategy_rules_file=str(tmp_path / "active.json"),
         instrument="AAPL",
         historical_bar_size="1h",
@@ -489,6 +494,77 @@ def test_a_refused_tick_writes_no_orders_but_its_trades_are_kept(tmp_path, armed
     assert trades[0]["exit_price"] == 104.0 and trades[0]["ret"] == 0.04
     assert orchestrator.store.read_orders(settings, STRATEGY) == [], "nothing was submitted"
     assert orchestrator.store.load_index(settings, STRATEGY)[0]["trades"] == 1
+
+
+def test_a_position_the_broker_never_opened_is_dropped_and_said_out_loud(tmp_path, armed):
+    """The tick that finds one goes ON, and the record says what was let go.
+
+    A position only the local state holds, with nothing in the broker's history that could ever
+    settle it, is what used to stop every tick from here on. When the driver can prove it was never
+    opened it drops it — and a position that disappears with no trade against it is not a quiet
+    correction, so it goes on the tick's notes where a reader of the day will meet it.
+    """
+    settings = armed()
+    detail = "a recorded position in X was dropped — the broker is flat and its entry was REFUSED"
+
+    class DroppingDriver:
+        name = STRATEGY
+        state = type("S", (), {"position": None})()
+
+        def on_bar_closed(self, window):
+            return {
+                "action": "decided", "bar": "2024-01-05T17:30:00+00:00", "signal": "HOLD",
+                "intents": [],
+                "dropped": {"bar": "2024-01-05 13:30:00", "order_id": "traider-X-abc",
+                            "detail": detail},
+            }
+
+    record = orchestrator.tick(
+        settings, now=_at("2024-01-05 14:05"), sync_call=lambda: {}, clock_call=Calls().clock,
+        driver=DroppingDriver(),
+    )
+
+    assert record["action"] == "decided", "the drop is not a refusal — that is its whole point"
+    assert record["notes"] == [detail]
+    logged = orchestrator.store.read_ticks(settings, STRATEGY, "2024-01-05")[0]
+    assert logged["notes"] == record["notes"], "and it is written to the day's log"
+
+
+def test_a_position_the_driver_adopted_is_said_out_loud_on_the_tick(tmp_path, armed):
+    """The other correction that is not a refusal: a position the driver TOOK ON.
+
+    Trading may be armed while something is already open in the account it trades — the loop
+    adopts it (see ``LiveDriver.adopt_broker_position``) and can then only close it. That is a
+    position the strategy owns without having opened it, so the tick says which one it is: the
+    operator reads the notes column to find out what the bot is now managing.
+    """
+    settings = armed()
+    detail = (
+        "the paper account already held 5 X (long) when trading was armed, so the strategy "
+        "adopted it at 159.0000; it will be CLOSED"
+    )
+
+    class AdoptingDriver:
+        name = STRATEGY
+        state = type("S", (), {"position": None})()
+
+        def on_bar_closed(self, window):
+            return {
+                "action": "decided", "bar": "2024-01-05T17:30:00+00:00", "signal": "BUY",
+                "intents": [],
+                "adopted_position": {"short": False, "quantity": 5.0, "price": 159.0,
+                                     "stop": 155.8, "take": 165.4, "detail": detail},
+            }
+
+    record = orchestrator.tick(
+        settings, now=_at("2024-01-05 14:05"), sync_call=lambda: {}, clock_call=Calls().clock,
+        driver=AdoptingDriver(),
+    )
+
+    assert record["action"] == "decided", "an adoption is a decision, not a refusal"
+    assert record["notes"] == [detail]
+    logged = orchestrator.store.read_ticks(settings, STRATEGY, "2024-01-05")[0]
+    assert logged["notes"] == record["notes"], "and it is written to the day's log"
 
 
 def test_a_closed_position_writes_a_trade_row(tmp_path, armed):

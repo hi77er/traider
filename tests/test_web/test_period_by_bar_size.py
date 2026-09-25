@@ -40,7 +40,7 @@ pytestmark = pytest.mark.skipif(
 # configured provider (yfinance by default — see history.PROVIDER_MAX_DAYS).
 PERIODS_BY_BAR_SIZE = {
     "1m": ["6d"],
-    "2m": ["30d"],
+    "2m": ["30d", "40d"],
     "5m": ["30d", "60d"],
     "15m": ["30d", "60d"],
     "1h": ["1y", "2y"],

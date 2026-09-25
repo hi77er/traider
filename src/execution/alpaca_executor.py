@@ -20,10 +20,12 @@ now, exits after) is the classic bug of this shape: the process dies between the
 calls and the position is naked, or a filled take-profit leaves a resting stop that
 opens the opposite position. One call, or no order.
 
-**3. Brackets need whole shares.** Alpaca takes fractional orders DAY-only with no
-bracket, and the position sizer produces whole shares anyway (`risk.position_sizing`).
-So a fractional quantity *with* exits is refused with an explanation rather than
-quietly sent without its stop — a silent naked entry is worse than no entry.
+**3. Brackets need whole shares, fractions need DAY.** Alpaca takes fractional orders DAY-only
+with no bracket, so a fractional quantity *with* exits is refused with an explanation rather
+than quietly sent without its stop — a silent naked entry is worse than no entry. The other
+half of the rule is that an entry the exposure cannot afford as a whole share is sent as a
+NOTIONAL order (``notional=``, the dollars the cap authorises) instead of being dropped: see
+``AlpacaBroker._open``, where the cap decides which of the two is sent.
 
 **4. A retry reuses its `client_order_id`.** A submit that times out may have been
 received. Alpaca deduplicates on `client_order_id`, so the id is generated once per
@@ -158,8 +160,9 @@ def build_order_payload(
     *,
     symbol: str,
     side: str,
-    quantity: float,
+    quantity: Optional[float] = None,
     client_order_id: str,
+    notional: Optional[float] = None,
     stop_loss_price: Optional[float] = None,
     take_profit_price: Optional[float] = None,
     order_type: str = "market",
@@ -171,6 +174,12 @@ def build_order_payload(
 
     Pure on purpose: the payload is the thing most worth asserting in a test, and
     keeping it a function means the executor can be tested without one.
+
+    ONE OF ``quantity`` OR ``notional``, never both and never neither. A quantity is a
+    share count (whole unless the caller means fractions); a notional is a DOLLAR amount,
+    which is how a position smaller than one share is ordered — Alpaca fills it with
+    fractional shares at the market price, so the account deploys exactly what the
+    strategy authorised instead of a share count that happens to round to it.
 
     ``base_price`` is the price the exits are measured from (the limit price, or the
     reference price the caller was looking at). It is only used to validate the stop
@@ -184,18 +193,44 @@ def build_order_payload(
     if side not in SIDES:
         raise OrderRefused(f"Unknown side {side!r}; expected {BUY} or {SELL}")
 
-    quantity = float(quantity)
-    if quantity <= 0:
+    if (quantity is None) == (notional is None):
         raise OrderRefused(
-            f"Quantity must be positive (got {quantity:g}) — refusing to place an order"
+            "Pass exactly one of quantity (shares) or notional (dollars) — refusing to guess "
+            "which one the caller meant"
         )
-    if not _is_whole(quantity) and (stop_loss_price or take_profit_price):
-        raise OrderRefused(
-            f"{quantity:g} shares is fractional: Alpaca takes fractional orders DAY-only "
-            "and cannot attach a bracket, so the entry would go in with NO stop. Size "
-            "whole shares (the position sizer does) or place the entry yourself — "
-            "refusing to send an unprotected entry."
-        )
+    if notional is not None:
+        # Notional orders are fractional by definition, and Alpaca's two rules for them are
+        # both checked here rather than discovered in a broker error: they are MARKET-only,
+        # and they cannot carry a bracket.
+        if float(notional) <= 0:
+            raise OrderRefused(
+                f"Notional must be positive (got {float(notional):g}) — refusing to place an order"
+            )
+        if order_type == "limit":
+            raise OrderRefused(
+                "Alpaca takes notional orders as MARKET orders only; a limit order needs a "
+                "share quantity — refusing to send it"
+            )
+        if stop_loss_price or take_profit_price:
+            raise OrderRefused(
+                f"A notional order for ${float(notional):.2f} is fractional by definition, and "
+                "Alpaca cannot attach a bracket to a fractional order — the entry would go in "
+                "with NO stop. Raise the exposure so a whole share fits, or configure no "
+                "stop/take-profit and manage the exit from the strategy."
+            )
+    if quantity is not None:
+        quantity = float(quantity)
+        if quantity <= 0:
+            raise OrderRefused(
+                f"Quantity must be positive (got {quantity:g}) — refusing to place an order"
+            )
+        if not _is_whole(quantity) and (stop_loss_price or take_profit_price):
+            raise OrderRefused(
+                f"{quantity:g} shares is fractional: Alpaca takes fractional orders DAY-only "
+                "and cannot attach a bracket, so the entry would go in with NO stop. Size "
+                "whole shares (the position sizer does) or place the entry yourself — "
+                "refusing to send an unprotected entry."
+            )
 
     order_type = str(order_type or "market").lower()
     if order_type == "limit" and not limit_price:
@@ -212,11 +247,17 @@ def build_order_payload(
 
     payload: Dict[str, Any] = {
         "symbol": symbol,
-        "qty": f"{quantize_quantity(quantity, fractional=not _is_whole(quantity)):g}",
         "side": side.lower(),
         "type": order_type,
         "client_order_id": client_order_id,
     }
+    if notional is None:
+        payload["qty"] = f"{quantize_quantity(quantity, fractional=not _is_whole(quantity)):g}"
+    else:
+        # Alpaca computes the share count itself at the fill price, which is the point: the
+        # authorised amount is a DOLLAR figure, and converting it here would make the size drift
+        # with the price between building the payload and the fill.
+        payload["notional"] = f"{float(notional):.2f}"
     if order_type == "limit":
         payload["limit_price"] = f"{float(limit_price):.2f}"
 
@@ -346,6 +387,14 @@ class AlpacaExecutor:
     def position(self, instrument: str) -> Optional[Dict[str, Any]]:
         return self.client.position(instrument)
 
+    def portfolio_history(
+        self, *, period: str = "1D", timeframe: str = "5Min", extended_hours: bool = True
+    ) -> Dict[str, Any]:
+        """Equity through the session, as the broker recorded it (see the client's own note)."""
+        return self.client.portfolio_history(
+            period=period, timeframe=timeframe, extended_hours=extended_hours
+        )
+
     def positions(self) -> list:
         """EVERY position in the account, not just this strategy's instrument.
 
@@ -394,10 +443,11 @@ class AlpacaExecutor:
         self,
         instrument: str,
         side: str,
-        quantity: float,
+        quantity: Optional[float] = None,
         stop_loss_price: Optional[float] = None,
         take_profit_price: Optional[float] = None,
         *,
+        notional: Optional[float] = None,
         order_type: str = "market",
         limit_price: Optional[float] = None,
         time_in_force: Optional[str] = None,
@@ -407,6 +457,9 @@ class AlpacaExecutor:
         timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
         """Send one order and report what happened. Raises on refusal.
+
+        Sized by ``quantity`` (shares) OR ``notional`` (dollars), exactly one: a notional
+        order is how a position the exposure allows but a whole share does not fit is sent.
 
         Returns a small, stable dict — ``order_id``, ``status``, ``filled_qty``,
         ``filled_avg_price``, ``env`` … — plus ``raw``, the broker's own payload, for
@@ -423,6 +476,7 @@ class AlpacaExecutor:
             symbol=instrument,
             side=side,
             quantity=quantity,
+            notional=notional,
             client_order_id=client_id,
             stop_loss_price=stop_loss_price,
             take_profit_price=take_profit_price,
@@ -433,11 +487,13 @@ class AlpacaExecutor:
         )
 
         logger.warning(
-            "%s ORDER %s %s x%s%s (client_order_id %s)",
+            "%s ORDER %s %s %s%s (client_order_id %s)",
             self.label,
             payload["side"].upper(),
             payload["symbol"],
-            payload["qty"],
+            # The size reads as what it IS: a share count, or the dollars a fractional
+            # order deploys.
+            f"x{payload['qty']}" if "qty" in payload else f"${payload['notional']}",
             " + bracket" if payload.get("order_class") == "bracket" else "",
             client_id,
         )

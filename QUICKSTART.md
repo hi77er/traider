@@ -105,7 +105,7 @@ Build a modular Python trading bot for AAPL (Apple) stock that:
 8. SCHEDULER → Main loop (wakes on the bar boundary, not on a fixed clock)
    └─ Runs as its own process; the trading switch decides whether a tick acts
 
-9. LOGGING & WEB PORTAL → Records every decision + dashboard alerts
+9. LOGGING & WEB PORTAL → Records every decision + web portal alerts
    └─ Why did it trade? Why didn't it? Progress, charts, config, alerts.
 
 10. BACKTESTER → Test strategy on historical data before live
@@ -165,7 +165,7 @@ and the trading window — there is no DECISION_INTERVAL_HOURS / DECISION_TIME s
 → Reproducible, manageable, ~$15/month
 
 ✅ **Web Portal (FastAPI) for monitoring** not Telegram  
-→ Dashboard shows status, candlestick chart, and data table; a separate `/market`
+→ The Strategy lab shows status, candlestick chart, and data table; a separate `/market`
 page screens the whole US market (gainers, volume, losers, small caps)
 
 ---
@@ -191,9 +191,9 @@ starts or stops the other — see [Two processes](README.md#two-processes).
 ```
 
 Endpoints:
-- `GET /` — dashboard (left: summary, chart, Backtest, Live; right: the collapsible
-  strategy/risk forms, Daily Delta and the data table)
-- `GET /log` — the trading log: the account's state, then a day of the loop's own ticks,
+- `GET /` — the Strategy lab (left: summary, chart, Backtest; right: the collapsible
+  strategy/risk forms, the instrument automation panel, Daily Delta and the data table)
+- `GET /log` — the Session monitor: the account's state, then a day of the loop's own ticks,
   submitted orders and closed trades (account state first, local context second)
 - `GET /api/v1/health` — health check
 - `GET /api/v1/loop` — is a loop running, when it next wakes, its last tick and last refusal
@@ -217,10 +217,15 @@ Endpoints:
 - `GET  /api/v1/market/presets` — the Yahoo preset screeners available to the screener panel
 - `GET  /api/v1/market/screen?preset=&size=&market_cap_min=&market_cap_max=&min_price=&min_volume=` — run one preset with filters
 - `POST /api/v1/market/refresh` — drop the cached market overview
+- `GET  /api/v1/automation` — the instrument automation's criteria, its cached Top-10, and what
+  the tick would decide with them right now
+- `POST /api/v1/automation` — save the criteria. The **one** strategy write not behind the trading
+  lock: turning the automation off has to work while a loop is trading
+- `POST /api/v1/automation/refresh` — screen a new Top-10 now (what the panel's ↻ calls)
 
 ### Market page (`/market`)
 
-Whole-market screening, opened from the **🌎 Market** button in the dashboard header.
+Whole-market screening, opened from the **🌎 Market** button in the Strategy lab header.
 Seven sections: a **preset screener** (15 Yahoo presets × your own market-cap /
 price / volume filters), **whole market**, **top gainers**, **highest volume**,
 **top losers**, and the **small-cap** gainers/volume equivalents. The two long
@@ -232,6 +237,24 @@ panel is a live request on a cold load (7 Yahoo calls); the assembled overview
 is then memoized for 90 s. Volume is **raw share volume, not relative volume**,
 penny stocks are excluded (`price > $1`) and OTC/pink sheets are dropped.
 
+### Instrument automation (Strategy lab, below Risk Management)
+
+The tick may replace the strategy's instrument with the leader of a screened list.
+Open **Instrument Automation** and flip the switch — that saves at once, so the automation
+can be disarmed while a loop is trading; the fields are changed and stored with **Save**. The
+criteria go to `data/automation-<strategy>.json`, beside `trading.json`, which is why they stay
+editable while trading is ON — this is the only panel on the page that does. The fields above the
+list are the screen the Top-10 is picked from (US small caps $300M–$2B, price above $3, day
+volume above 1M shares, ten names kept), and **↻ Refresh list** runs it now into
+`data/automation-list-<strategy>.json`; the loop refreshes it on its own once it is older
+than **List maximum age** (60 minutes), through the same call the button uses. Each row
+carries its two ranks — by day % change and by dollar volume — and the sum that orders the
+list. The **Instrument switch** criteria (default: the current instrument has dropped out
+of the list) decide when the tick acts, and only while nothing is held in the account
+being traded and at most once a day. A switch fetches history for the new instrument
+**first**, then writes it into the strategy and **ends that tick** — the tick log shows
+`switched` at the `instrument` gate, and the next bar trades the new symbol.
+
 ### Where settings live
 
 Three configuration layers — plus one runtime switch that is deliberately NOT
@@ -239,10 +262,11 @@ configuration — each edited from its own place:
 
 | Layer | Editor | File | Holds |
 |-------|--------|------|-------|
-| Global | your text editor | `.env` | data provider + API keys. **Not in the dashboard**: the settings form was removed, so these are edited in the file directly |
+| Global | your text editor | `.env` | data provider + API keys. **Not in the Strategy lab**: the settings form was removed, so these are edited in the file directly |
 | Account | **🏦 Account Settings** (header) | `data/account/account.json` | the Alpaca paper + live key pairs, the data folder, backtest costs |
 | Strategy | **Strategy Configuration** / **Rules** / **Risk Management** panels | `data/strategies/store.json` | instrument, bar size + history period, trading hours + exchange, features, gates, schedule, risk limits, rules, paper/live |
-| Runtime | **header switch** + dropdown | `data/trading.json` | trading ON/OFF. Deliberately NOT configuration: it lives beside the datasets, because the configuration files it freezes cannot hold the switch that freezes them. |
+| Runtime | **master switch** + mode (Session monitor) | `data/trading.json` | trading ON/OFF. Deliberately NOT configuration: it lives beside the datasets, because the configuration files it freezes cannot hold the switch that freezes them. |
+| Runtime | **Instrument Automation** panel (Strategy lab) | `data/automation-<strategy>.json` · `data/automation-list-<strategy>.json` | the automation's criteria, and the cached Top-10 they screen. Not configuration either: the panel must stay editable while trading is ON, and the loop writes the list too |
 
 Precedence: **strategy > account > .env**. Booleans render as on/off switches and
 secrets (`*_PASSWORD`, `*_API_KEY`, …) are masked — leave a secret field empty to
@@ -274,7 +298,7 @@ Trading always starts OFF, and turning it on checks the credentials for the acco
 in play — so "trading on" can never be a lie. Turning it on **always asks first**,
 on paper as well as live: the live prompt is about real money, the paper one is
 about the strategy acting on the next signal. Turning it off never asks. The
-**Trading** panel in the strategy bar (beside the signals and the rules, collapsed
+**Trading** panel on the Session monitor (beside the signals and the rules, collapsed
 to a state chip) shows the resolved target and spells out the lock. Orders route to
 **paper by default**: configuring live credentials never moves the switch, and
 neither does reusing a strategy.
@@ -324,11 +348,13 @@ The verdicts live in `data/credential_checks.json`, beside `trading.json` — ru
 state, not configuration, and it stores a hash of the key id rather than the key.
 Credentials themselves are never written to it and never appear in a message.
 
-While trading is ON, the **Trading** panel in the strategy bar says so and the server
+While trading is ON, the **Trading** panel on the Session monitor says so and the server
 refuses every configuration write with HTTP 409 — settings, account, rules,
 strategy create/rename/delete/select, the backtest runner, the dataset
 rebuild/backfill and the delta sync — with the matching buttons disabled in the UI.
-Nothing that would change what the bot is running may be edited mid-flight. Turning
+Nothing that would change what the bot is running may be edited mid-flight. The
+**Instrument Automation** panel is the one exception: its criteria save while trading
+is ON, because turning the automation off is how it is stopped. Turning
 trading off is always allowed: it is the only action that releases the lock.
 The **Daily Delta** panel (left, shown once a dataset exists) checks the Parquet for missing
 completed days. When synced it shows "All data synced" + the last 5 bars; when days are missing
@@ -344,7 +370,11 @@ Auth: set `WEB_PORTAL_AUTH_ENABLED=true` (plus `WEB_PORTAL_USERNAME`/`WEB_PORTAL
 > **Restart after editing code.** uvicorn loads each module once, so a server started
 > before your edit keeps running the old logic. The trading gate watches itself for
 > this: if `credentials.py` or `trading_service.py` changed after the process started,
-> the switch's tooltip says so and the dashboard warns once — restart to clear it.
+> the switch's tooltip says so and the Strategy lab warns once — restart to clear it.
+> The **loop** watches its own source too: a process started before a change to
+> `src/scheduler/orchestrator.py` (the instrument automation's gate, for instance)
+> refuses to open new positions and must be restarted, and the web server needs a
+> restart before a new API route is served.
 
 ---
 
@@ -465,9 +495,9 @@ MAX_LOSS_PERCENT=10
 MAX_CONSECUTIVE_LOSSES=3
 
 # Execution — Alpaca credentials (account-wide). Which environment an order goes
-# to (paper or live) is chosen PER STRATEGY from the header dropdown in the
-# dashboard — it is not a field in any settings panel. Orders are only ever sent
-# while trading is ON (the header's master switch, stored in data/trading.json).
+# to (paper or live) is chosen PER STRATEGY from the Mode control on the
+# Session monitor — it is not a field in any settings panel. Orders are only ever sent
+# while trading is ON (the master switch, stored in data/trading.json).
 ALPACA_PAPER_API_KEY=YOUR_PAPER_KEY_ID
 ALPACA_PAPER_API_SECRET=YOUR_PAPER_SECRET  # ← AWS Secrets Manager in prod
 ALPACA_LIVE_API_KEY=

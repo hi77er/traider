@@ -1,7 +1,7 @@
 """Rule-based signal business logic for the Web Portal.
 
 Evaluates the ACTIVE strategy's rules over the canonical dataset using
-``src.model.simple_model`` and returns what the dashboard needs to test the
+``src.model.simple_model`` and returns what the Strategy lab needs to test the
 rule engine from the UI: the latest decision, per-bar decisions (for chart
 markers), per-side counts, the enabled rules that were evaluated, and the
 position fills the chart shades.

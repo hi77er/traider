@@ -13,6 +13,9 @@ key. The stub answers by (method, path) and records every request, which is how 
 
 from __future__ import annotations
 
+import json
+from dataclasses import replace
+
 import pytest
 
 from src.config.settings import Settings
@@ -28,7 +31,7 @@ from src.execution import (
     shares_for,
 )
 from src.execution.alpaca_broker import broker_position
-from src.strategy.broker import FILLED, NO_FILL, REJECTED, Fill
+from src.strategy.broker import FILLED, NO_FILL, REJECTED, Fill, SimulatedBroker
 from src.strategy.engine import CLOSE, OPEN, Intent
 
 PAPER_URL = "https://paper-api.alpaca.markets"
@@ -472,14 +475,97 @@ def test_a_short_intent_is_a_SELL_with_the_levels_the_other_way_up():
     assert fill.status == FILLED
 
 
-def test_an_entry_the_equity_cannot_afford_is_reported_not_rounded_up():
+def test_an_entry_a_whole_share_cannot_afford_goes_in_as_a_notional_order():
+    """The cap is a FRACTION of equity, so a size under one share is still a size.
+
+    This used to be a refusal, and the refusal was the bug: the backtest sizes by weight
+    (``returns = weight * bar_return``) and trades these entries, so live refusing them made the
+    two disagree at exactly the equities and prices where the cap is smallest. What goes to the
+    broker is the authorised AMOUNT — Alpaca fills it with fractional shares — and it goes as a
+    notional order rather than a share count so the size cannot drift with the price between
+    building the payload and the fill.
+
+    $50 of equity at a weight of 0.5 authorises $25; one share costs $100.
+    """
+    settings = _settings()
+    session = StubSession()
+    session.queue("GET", "/v2/account", StubResponse(200, {"equity": "50"}))
+    session.queue("POST", "/v2/orders", _filled(price="100.00", qty="0.25"))
+    executor = AlpacaExecutor(
+        settings, client=AlpacaClient(resolve_execution_target(settings), session=session),
+        sleep=lambda _s: None, guard=lambda: None,
+    )
+    broker = AlpacaBroker(settings, executor=executor)
+
+    fill = broker.submit(
+        Intent(action=OPEN, reason="signal", expected_price=100.0, weight=0.5),
+        client_order_id="traider-T-small",
+    )
+
+    payload = next(r for r in executor.client.calls if r["method"] == "POST")["json"]
+    assert payload["notional"] == "25.00", "the authorised dollars, to the cent"
+    assert "qty" not in payload, "a notional order carries no share count"
+    assert payload["type"] == "market" and payload["time_in_force"] == "day", "Alpaca's rules"
+    assert fill.status == FILLED
+    assert fill.quantity == 0.25, "the FRACTION the broker filled, not a share count"
+
+
+def test_a_whole_share_that_fits_is_still_bought_in_whole_shares():
+    """The other half of the contract: fractions are the fallback, not the new default.
+
+    A bracket needs whole shares, so a cap that affords them keeps buying them — 0.01% of
+    $100,000 is a fractional order, 50% of $1,000 is not.
+    """
+    settings = _settings()
+    broker = AlpacaBroker(settings, executor=_executor(settings), equity_provider=lambda: 1000.0)
+
+    broker.submit(Intent(action=OPEN, reason="signal", expected_price=100.0, weight=0.5))
+
+    payload = next(r for r in broker.executor.client.calls if r["method"] == "POST")["json"]
+    assert payload["qty"] == "5" and "notional" not in payload, "$500 / $100 = 5 whole shares"
+
+
+def test_an_entry_under_the_brokers_notional_minimum_is_refused_with_the_fix():
+    """Below Alpaca's floor there is no order to send — and the useful answer is not "refused"
+    but the setting that would afford one share, quoted in the same breath.
+
+    $50 of equity at a 1% cap authorises $0.50, under the $1.00 minimum.
+    """
     settings = _settings()
     broker = AlpacaBroker(settings, executor=_executor(settings), equity_provider=lambda: 50.0)
 
-    fill = broker.submit(Intent(action=OPEN, reason="signal", expected_price=100.0, weight=1.0))
+    fill = broker.submit(Intent(action=OPEN, reason="signal", expected_price=100.0, weight=0.01),
+                         client_order_id="traider-T-tiny")
 
     assert fill.status == REJECTED
-    assert "afford" in fill.detail
+    assert "minimum" in fill.detail and "$0.50" in fill.detail
+    assert "200.00%" in fill.detail, "one share of $100 on $50 of equity needs a 200% cap"
+    assert fill.client_order_id == "traider-T-tiny"
+
+
+def test_a_cap_too_small_for_a_share_and_a_bracket_is_refused_with_both_ways_out():
+    """A fractional order cannot carry a stop, and an unprotected entry is worse than none — so
+    this refusal stands, naming the two settings that would resolve it rather than sending the
+    entry without its stop."""
+    settings = _settings()
+    session = StubSession()
+    session.queue("GET", "/v2/account", StubResponse(200, {"equity": "50"}))
+    executor = AlpacaExecutor(
+        settings, client=AlpacaClient(resolve_execution_target(settings), session=session),
+        sleep=lambda _s: None, guard=lambda: None,
+    )
+    broker = AlpacaBroker(settings, executor=executor)
+
+    fill = broker.submit(
+        Intent(action=OPEN, reason="signal", expected_price=100.0, weight=0.5,
+               stop=95.0, take=110.0),
+        client_order_id="traider-T-bracketed",
+    )
+
+    assert fill.status == REJECTED
+    assert "cannot carry a stop/take bracket" in fill.detail
+    assert "200.00%" in fill.detail, "the exposure that would afford a whole share"
+    assert [r["method"] for r in session.requests] == ["GET"], "no order was sent"
 
 
 def test_a_broker_refusal_becomes_a_rejected_fill_and_does_not_raise():
@@ -530,9 +616,10 @@ def test_the_broker_implements_the_seam_the_driver_is_written_against():
 
 
 def test_a_local_refusal_names_the_order_the_broker_never_saw():
-    """Three of the four ways an entry is refused here happen BEFORE anything is sent: the
-    switch, the size, the price. Our own id is the only identifier those orders will ever
-    have, so a refusal without one cannot be tied to the bar that asked for it.
+    """The ways an entry is refused here happen BEFORE anything is sent: the switch, the price,
+    the notional minimum, a bracket a fraction cannot carry. Our own id is the only identifier
+    those orders will ever have, so a refusal without one cannot be tied to the bar that asked
+    for it.
 
     Note the ordering this pins down: sizing needs equity, so the account is READ before the
     switch is consulted (the guard lives in the executor's ``place_order``). A read moves no
@@ -562,27 +649,6 @@ def test_a_local_refusal_names_the_order_the_broker_never_saw():
     assert unpriced.status == REJECTED and "no price" in unpriced.detail
     assert unpriced.client_order_id == "traider-T-np"
     assert [r["method"] for r in session.requests] == ["GET"], "nothing further was sent"
-
-
-def test_an_entry_one_share_cannot_afford_is_named_too():
-    """The other local refusal, and the one most likely to be seen in a small account."""
-    settings = _settings()
-    session = StubSession()
-    session.queue("GET", "/v2/account", StubResponse(200, {"equity": "50"}))
-    executor = AlpacaExecutor(
-        settings, client=AlpacaClient(resolve_execution_target(settings), session=session),
-        sleep=lambda _s: None, guard=lambda: None,
-    )
-    broker = AlpacaBroker(settings, executor=executor)
-
-    refused = broker.submit(
-        Intent(action=OPEN, expected_price=100.0, weight=0.5), client_order_id="traider-T-poor"
-    )
-
-    assert refused.status == REJECTED
-    assert "cannot afford" in refused.detail
-    assert refused.client_order_id == "traider-T-poor"
-    assert [r["method"] for r in session.requests] == ["GET"], "no order was sent"
 
 
 def test_closing_cancels_the_resting_exits_before_it_closes():
@@ -804,18 +870,25 @@ def test_a_live_tick_places_a_bracketed_order_through_the_shared_engine(tmp_path
 # ---------------------------------------------------------------------------
 # a refused entry, and the mismatch it leaves behind
 # ---------------------------------------------------------------------------
-def _always_buy_driver(tmp_path, session):
-    """A driver whose generator always says BUY, wired to the stubbed broker."""
+def _always_buy_driver(tmp_path, session=None, *, broker=None, **overrides):
+    """A driver whose generator always says BUY, wired to the stubbed broker.
+
+    ``broker`` replaces the Alpaca one: a case that is about the DRIVER (an order the broker
+    accepted and never filled) is clearer against the simulated broker than against a stub
+    session scripted to refuse everything.
+    """
     import pandas as pd
 
     from src.strategy import StrategyConfig, StrategyEngine, bar_from_row
     from src.strategy.live import LiveDriver
 
-    settings = _settings()
-    executor = AlpacaExecutor(
-        settings, client=AlpacaClient(resolve_execution_target(settings), session=session),
-        sleep=lambda _s: None, guard=lambda: None,
-    )
+    settings = _settings(**overrides)
+    if broker is None:
+        executor = AlpacaExecutor(
+            settings, client=AlpacaClient(resolve_execution_target(settings), session=session),
+            sleep=lambda _s: None, guard=lambda: None,
+        )
+        broker = AlpacaBroker(settings, executor=executor)
 
     class AlwaysBuy:
         def evaluate_frame(self, df):
@@ -825,7 +898,7 @@ def _always_buy_driver(tmp_path, session):
         settings=settings,
         engine=StrategyEngine(StrategyConfig.from_settings(settings, slippage=0.0, commission=0.0)),
         generator=AlwaysBuy(),
-        broker=AlpacaBroker(settings, executor=executor),
+        broker=broker,
         state_path=tmp_path / "state.json",
         name="TEST",
     )
@@ -845,49 +918,162 @@ def _always_buy_driver(tmp_path, session):
     return driver, frame, bars_list, need
 
 
-def test_a_refused_entry_is_named_when_the_next_tick_stops_on_the_mismatch(tmp_path):
-    """An entry the broker refuses still leaves a position locally, so the loop stops.
+def test_a_refused_entry_is_logged_and_leaves_no_position_behind(tmp_path):
+    """The broker refusing an entry refuses the POSITION, not just one order.
 
-    Nothing is rolled back — the engine records the position when it builds the intent, which
-    is what keeps the report and the state in step — so the tick after a refusal refuses on
-    "local holds a position, the broker is flat" and goes on refusing every bar. That message
-    on its own blames a position that never existed; what it has to carry is the CAUSE, or an
-    operator cannot tell what to clear.
+    The engine records a position while it builds the intent — before anything is sent — so a
+    refusal used to leave one behind, and the tick after it stopped on "the broker is flat and we
+    are not" and went on refusing EVERY bar after that. A refusal is not a position: nothing is
+    held, and the tick has to be free to try again.
     """
     session = StubSession()
     driver, frame, bars, need = _always_buy_driver(tmp_path, session)
 
     session.queue("GET", "/v2/positions/AAPL", StubResponse(404, {"message": "no position"}))
     session.queue("GET", "/v2/account", StubResponse(200, {"equity": "20000"}))
+    # TWO answers: the stub's last answer is sticky, and this tick has to be refused while the
+    # next one gets through.
     session.queue(
         "POST", "/v2/orders",
         StubResponse(403, {"code": 40310000, "message": "insufficient buying power"}),
+        _filled(price="110.50", qty="90"),
     )
 
     first = driver.on_bar_closed(frame.iloc[: need + 1], next_bar=bars[need + 1])
 
     assert first["action"] == "decided", "a refusal is reported, not raised"
-    assert first["intents"][0]["status"] == REJECTED
-    # The broker's words travel with the report, which is where the order row is built from.
-    assert "insufficient buying power" in first["intents"][0]["detail"]
-    # The position IS recorded: that is the fact the next tick trips over.
-    assert driver.state.position is not None
-    assert "insufficient buying power" in driver.state.refused_entry["detail"]
+    intent = first["intents"][0]
+    assert intent["status"] == REJECTED
+    # What lands in the orders log: the attempt, the broker's status, and its own words. This is
+    # the whole record of the refusal — nothing else is written down about it.
+    assert "insufficient buying power" in intent["detail"]
+    assert intent["client_order_id"].startswith("traider-TEST-"), "still traceable"
+    # ...and the position goes with it, from the state and from the file.
+    assert driver.state.position is None, "nothing is held: the entry never happened"
+    assert driver.state.unfilled_entry is None, "nothing left to explain either"
+    assert json.loads((tmp_path / "state.json").read_text())["position"] is None
+    assert driver.state.last_decided_bar, "the bar is still decided — it is not retried"
+
+    # The NEXT bar is free to trade: the same signal is another attempt, not another refusal.
+    second = driver.on_bar_closed(frame.iloc[: need + 2], next_bar=bars[need + 2])
+
+    assert second["action"] == "decided", "a refused entry must not wedge the tick after it"
+    assert second["intents"][0]["status"] == FILLED, second["intents"][0]
+    assert driver.state.position is not None, "the retry is what opens the position"
+
+
+def test_an_exit_for_a_refused_entry_is_never_sent(tmp_path):
+    """One bar can decide an entry AND a stop on it. When the entry is refused, the stop is about
+    nothing: a position that does not exist is not something to send an order about, and an order
+    the broker never saw does not belong in the log of what the bot submitted."""
+    session = StubSession()
+    driver, frame, bars, need = _always_buy_driver(tmp_path, session)
 
     session.queue("GET", "/v2/positions/AAPL", StubResponse(404, {"message": "no position"}))
-    session.queue("GET", "/v2/orders", StubResponse(200, []))
+    session.queue("GET", "/v2/account", StubResponse(200, {"equity": "20000"}))
+    session.queue("POST", "/v2/orders", StubResponse(403, {"message": "insufficient buying power"}))
+    session.queue("DELETE", "/v2/positions/AAPL", StubResponse(404, {"message": "no position"}))
 
+    # A bar that reaches DOWN through the stop the entry would have rested: the fixture has to
+    # produce the exit, or the assertion below proves nothing about one.
+    dive = replace(bars[need + 1], low=bars[need + 1].open * 0.9)
+    report = driver.on_bar_closed(frame.iloc[: need + 1], next_bar=dive)
+
+    kinds = [i["intent"] for i in report["intents"]]
+    assert kinds == ["open", "close"], f"the bar has to produce both, not {kinds}"
+    assert report["intents"][1].get("skipped") is True
+    assert not [r for r in session.requests if r["method"] == "DELETE"], (
+        "nothing was sent for a position that does not exist"
+    )
+
+
+def test_an_entry_that_was_placed_but_had_not_filled_keeps_its_position(tmp_path):
+    """The boundary of that rule: NOT FILLED is not REFUSED.
+
+    An order the broker accepted may fill at any moment, so the position it will create is kept —
+    and when the broker is still flat on the next tick, the refusal has to name the order to go
+    and look at. Only a refusal is dropped.
+    """
+
+    class NeverFills(SimulatedBroker):
+        """Takes the entry and does not fill it: the order is working, the account is flat."""
+
+        def submit(self, intent, client_order_id=None):
+            return Fill(status=NO_FILL, detail="still working after the timeout", order_id="ord-9",
+                        client_order_id=client_order_id)
+
+    driver, frame, bars, need = _always_buy_driver(tmp_path, broker=NeverFills())
+
+    first = driver.on_bar_closed(frame.iloc[: need + 1], next_bar=bars[need + 1])
+
+    assert first["intents"][0]["status"] == NO_FILL
+    assert driver.state.position is not None, "it may fill yet, so it is still held"
+    assert driver.state.unfilled_entry["status"] == NO_FILL
+    assert driver.state.unfilled_entry["order_id"] == "ord-9"
+
+    # The tick after it stops on the mismatch — with the order named, and NOT dropped: this one
+    # the history cannot settle either, but the position may genuinely exist.
     second = driver.on_bar_closed(frame.iloc[: need + 2], next_bar=bars[need + 2])
 
     assert second["action"] == "refused"
     assert "the broker is flat" in second["reason"], second["reason"]
-    assert "REFUSED" in second["reason"], "the refusal that caused it is named"
-    assert "insufficient buying power" in second["reason"], "in the broker's own words"
-    assert "state file" in second["reason"], "and what to do about it"
+    assert "ord-9" in second["reason"], "the order to go and look at is named"
+    assert driver.state.position is not None, "an unfilled entry is not a refusal"
 
 
-def test_a_filled_entry_leaves_no_refusal_to_explain(tmp_path):
-    """The note only survives while it is true: a real fill is not a refusal."""
+def test_a_position_written_by_an_older_run_is_dropped_rather_than_refused(tmp_path):
+    """A phantom already on disk is cleared, not refused for ever.
+
+    Runs before this one recorded the position and the refusal together, and the broker's history
+    can never settle it — there is no close to find for a position that was never opened. So when
+    the state's own record says the entry was REJECTED and the broker is verifiably flat, the
+    position is dropped, said out loud on the tick, and the strategy trades on.
+    """
+    # The file an older version wrote: the phantom position plus the refusal that explains it,
+    # under the name that version used for the note.
+    (tmp_path / "state.json").write_text(json.dumps({
+        "position": {
+            "entry_index": 1, "entry_price": 226.89, "raw_entry_price": 226.89, "short": False,
+            "stop": None, "take": None, "weight": 0.0001, "stop_pct": None,
+        },
+        "bar_index": 1,
+        "last_decided_bar": None,
+        "first_weight": 0.0001,
+        "weight_seen": True,
+        "refused_entry": {
+            "bar": "2026-09-23 10:12:00",
+            "status": "rejected",
+            "detail": "equity 100000.00 at weight 0.000 cannot afford one share of NVDA at 226.89 "
+                      "— entry skipped",
+            "order_id": None,
+            "client_order_id": "traider-NVDA-98d70ea5a5",
+        },
+    }), encoding="utf-8")
+
+    session = StubSession()
+    driver, frame, bars, need = _always_buy_driver(tmp_path, session)
+    assert driver.state.position is not None, "the file wrote a position, so the driver holds one"
+
+    # Flat at the broker, no closing order in the history — then a real entry that fills.
+    session.queue("GET", "/v2/positions/AAPL", StubResponse(404, {"message": "no position"}))
+    session.queue("GET", "/v2/orders", StubResponse(200, []))
+    session.queue("GET", "/v2/account", StubResponse(200, {"equity": "20000"}))
+    session.queue("POST", "/v2/orders", _filled(price="110.50", qty="90"))
+
+    report = driver.on_bar_closed(frame.iloc[: need + 1], next_bar=bars[need + 1])
+
+    assert report["action"] == "decided", report.get("reason")
+    assert "nothing was ever opened" in report["dropped"]["detail"]
+    assert "REFUSED" in report["dropped"]["detail"], "and why it was dropped"
+    assert report["dropped"]["order_id"] == "traider-NVDA-98d70ea5a5"
+    assert len(driver.ledger.legs) == 0, "no trade is invented for a position that never existed"
+    # Held again — by the entry THIS tick made, not by the one that was dropped.
+    assert driver.state.position is not None
+    assert driver.state.unfilled_entry is None
+
+
+def test_a_filled_entry_leaves_no_note_to_explain(tmp_path):
+    """The note only survives while it is true: a real fill is not an unfilled entry."""
     session = StubSession()
     driver, frame, bars, need = _always_buy_driver(tmp_path, session)
 
@@ -899,11 +1085,9 @@ def test_a_filled_entry_leaves_no_refusal_to_explain(tmp_path):
 
     assert report["action"] == "decided"
     assert driver.state.position is not None
-    assert driver.state.refused_entry is None, "a fill is not a refusal"
+    assert driver.state.unfilled_entry is None, "a fill is not an unfilled entry"
     # ...and it is not persisted either, so a restart does not resurrect it.
-    import json
-
-    assert json.loads((tmp_path / "state.json").read_text())["refused_entry"] is None
+    assert json.loads((tmp_path / "state.json").read_text())["unfilled_entry"] is None
 
 
 # ---------------------------------------------------------------------------

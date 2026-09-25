@@ -28,7 +28,7 @@ from src.config.trading_state import write_state
 from src.execution import credentials, positions
 from src.execution.alpaca_client import AlpacaError
 from src.web.app import app
-from src.web.services import trading_service
+from src.web.services import loop_control, trading_service
 
 PAPER_KEYS = {"alpaca_paper_api_key": "PK-PAPER", "alpaca_paper_api_secret": "S-PAPER"}
 LIVE_KEYS = {"alpaca_live_api_key": "PK-LIVE", "alpaca_live_api_secret": "S-LIVE"}
@@ -49,6 +49,21 @@ def _position(symbol="AAPL", qty="90", side="long"):
         "symbol": symbol, "qty": qty, "side": side,
         "avg_entry_price": "100.00", "market_value": "9000.00", "unrealized_pl": "12.00",
     }
+
+
+@pytest.fixture(autouse=True)
+def no_real_loop(monkeypatch):
+    """A test that arms the switch must not start a real trading process.
+
+    ``loop_control.start`` spawns ``python -m src.main`` with the REPO as its working directory:
+    the child is a separate interpreter on the real data root, so it ignored this test's temp
+    settings and wrote a tick into the real live tree — a phantom session for the strategy the
+    machine has active.
+    """
+    class _Process:
+        pid = 4242
+
+    monkeypatch.setattr(loop_control, "_spawn", lambda command, **kwargs: _Process())
 
 
 @pytest.fixture
@@ -262,9 +277,17 @@ def wired(tmp_path, state_file):
         app.dependency_overrides.clear()
 
 
-def test_the_three_orphan_prone_endpoints_refuse_while_a_position_is_open(wired, account):
+def test_the_orphan_prone_endpoints_refuse_while_a_position_is_open(wired, account):
+    """A position in a symbol none of these actions trades: refused, loudly, by name.
+
+    The select case is the interesting one now. The rule is not "nothing may change while
+    anything is open" but "nothing may change that would leave the position unmanaged" — so a
+    position in a symbol the strategy being selected does NOT trade still refuses, and the
+    message says which symbol it is, because "flatten first" is the right instruction only when
+    the thing in the way is yours to close.
+    """
     client, _ = wired
-    account["paper"] = [_position()]
+    account["paper"] = [_position("TSLA", qty="3")]
 
     for path, body in (
         ("/api/v1/rules/select", {"name": "beta"}),
@@ -274,8 +297,38 @@ def test_the_three_orphan_prone_endpoints_refuse_while_a_position_is_open(wired,
         response = client.post(path, json=body)
         assert response.status_code == 409, path
         detail = response.json()["detail"]
-        assert "90 AAPL" in detail, path
+        assert "3 TSLA" in detail, path
         assert "Flatten first" in detail, path
+
+
+def test_the_strategy_that_owns_the_position_can_be_selected(wired, account):
+    """The way out that KEEPS the position: hand the run to its own owner.
+
+    Without this, arming and selecting were both refused while anything was open, so an operator
+    whose position belonged to a strategy that was no longer active had exactly two options —
+    close it by hand, or leave it open with nothing managing it. Selecting the strategy that
+    trades the held symbol is not the accident the old rule was guarding against: that strategy
+    takes the position over on its next tick and can then only close it.
+    """
+    client, _ = wired
+    account["paper"] = [_position("AAPL", qty="90")]  # what these settings trade
+
+    response = client.post("/api/v1/rules/select", json={"name": "beta"})
+
+    assert response.status_code == 200, response.text
+
+
+def test_selecting_another_symbol_still_refuses_with_the_owners_name(wired, account):
+    """And the refusal points at the way through rather than only at the flatten button."""
+    client, _ = wired
+    account["paper"] = [_position("TSLA", qty="3")]
+
+    response = client.post("/api/v1/rules/select", json={"name": "beta"})
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert "not AAPL" in detail, "the instrument this strategy trades is named"
+    assert "select the strategy that owns it" in detail, "and what to do instead"
 
 
 def test_the_same_endpoints_go_through_when_nothing_is_open(wired, account):
@@ -323,11 +376,18 @@ def test_an_unreachable_broker_blocks_rather_than_permitting(wired, account):
 # ---------------------------------------------------------------------------
 # arming
 # ---------------------------------------------------------------------------
-def test_trading_cannot_be_armed_on_top_of_a_position(tmp_path, state_file, account, verified):
-    """The decision: refuse to arm while anything is open.
+def test_arming_is_allowed_on_top_of_a_position_in_the_account_it_trades(
+    tmp_path, state_file, account, verified
+):
+    """The decision REVERSED, on the operator's instruction: arming may start on top of a
+    position in the account it is about to trade.
 
-    It is what makes "only the active strategy trades" true of the POSITION as well as of
-    new entries — the bot will not start on top of something it did not open.
+    Refusing was the one state with no way out of it — waiting changes nothing, and the flatten
+    button closes the position rather than continuing the strategy with it. So the switch starts,
+    the loop ADOPTS the position (``LiveDriver.adopt_broker_position``), and because
+    ``StrategyEngine.step`` opens nothing while a position is held, the next order the armed bot
+    can send is an exit. The message names the position it just took on, because that is the half
+    of "trading is on" the operator did not already know.
     """
     settings = _s(tmp_path, **PAPER_KEYS)
     verified(settings, "paper")
@@ -335,11 +395,58 @@ def test_trading_cannot_be_armed_on_top_of_a_position(tmp_path, state_file, acco
 
     result = trading_service.turn_on(settings)
 
-    assert result["ok"] is False
-    assert result["needs_flatten"] is True
-    assert "90 AAPL" in result["message"]
-    assert trading_service.is_trading_on(settings) is False
-    assert not state_file.exists(), "a refused arming must leave no state behind"
+    assert result["ok"] is True
+    assert trading_service.is_trading_on(settings) is True
+    assert state_file.exists(), "the arming is written like any other"
+    assert "90 AAPL" in result["message"], "the position it is adopting is named"
+    assert "ADOPTS" in result["message"] and "CLOSED" in result["message"], \
+        "and what the bot will do with it"
+    assert result["holding"] and result["holding"][0]["positions"][0]["symbol"] == "AAPL", \
+        "carried as data too, not only as prose"
+
+
+def test_arming_is_allowed_with_a_position_in_ANOTHER_symbol_in_that_account(
+    tmp_path, state_file, account, verified
+):
+    """The case that made the rule too strict: arming the strategy you want to run while the
+    account happens to hold something else.
+
+    The run does not trade that symbol, so nothing about the position changes — it is exactly as
+    reachable as it was while trading was off, and this screen's own flatten button still closes
+    it (``stop_and_flatten`` works the account in play). Refusing here only stopped the operator
+    from running the strategy they had chosen, which is not what the gate is for.
+
+    So the arming succeeds and the message names the position AND its owner, because "select the
+    strategy that owns it" is how someone with one open position and the wrong strategy active
+    gets it managed.
+    """
+    settings = _s(tmp_path, **PAPER_KEYS)          # instrument AAPL
+    verified(settings, "paper")
+    account["paper"] = [_position("TSLA", qty="3")]
+
+    result = trading_service.turn_on(settings)
+
+    assert result["ok"] is True
+    assert state_file.exists()
+    assert "3 TSLA" in result["message"], "what is being left alone is named"
+    assert "left exactly as it is" in result["message"]
+    assert "Select the strategy that owns it" in result["message"], "and the way to hand it over"
+    assert "ADOPTS" not in result["message"], "it is NOT adopted — this run does not trade TSLA"
+    assert result["untouched"] and result["untouched"][0]["positions"][0]["symbol"] == "TSLA"
+    assert result["adopted"] == []
+
+
+def test_arming_with_nothing_open_says_nothing_about_adopting(tmp_path, state_file, account, verified):
+    """The note belongs to the case that earned it. An ordinary arming must stay a plain
+    "trading is on", or the one message that matters reads like every other one."""
+    settings = _s(tmp_path, **PAPER_KEYS)
+    verified(settings, "paper")
+
+    result = trading_service.turn_on(settings)
+
+    assert result["ok"] is True
+    assert result["holding"] == []
+    assert "ADOPTS" not in result["message"]
 
 
 def test_arming_stamps_which_strategy_it_armed(tmp_path, state_file, account, verified):

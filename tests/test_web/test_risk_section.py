@@ -38,15 +38,24 @@ def _function(source: str, name: str) -> str:
 # where it sits
 
 
-def test_the_section_sits_under_the_rules_in_the_other_slot_to_the_signals():
-    """The settings that change what the signals MEAN, read with the rules that use them.
+def test_the_section_has_the_right_hand_slot_to_itself():
+    """The two halves of the row balance: what the strategy would DO on the left (the rules,
+    with the signals they produce under them) and what it would RISK on the right.
 
-    The signals themselves live under the Trading panel, where the switch that acts on them is —
-    so this slot is the "why, and at what risk" one, and the risk boxes follow the rules.
+    Trading used to fill the left slot; it is on the Session monitor now, and the rules took its
+    place — so the risk boxes face the rules they change rather than following them.
     """
-    slot = INDEX[INDEX.index('class="strategy-slot"', INDEX.index('id="signals"')) :]
-    assert slot.index('id="strategy-rules"') < slot.index('id="strategy-risk"')
-    assert 'id="signals"' not in slot, "the signals are in the other slot now"
+    row = INDEX[INDEX.index('class="strategy-rules-row"') :]
+    row = row[: row.index("</div>\n    </div>")]
+    slots = row.split('class="strategy-slot"')
+    assert len(slots) == 3, "two slots, in order"
+    left, right = slots[1], slots[2]
+
+    assert 'id="strategy-rules"' in left and 'id="signals"' in left
+    assert 'id="signals"' not in right, "the signals are the left slot's"
+    assert 'id="strategy-risk"' in right and 'id="strategy-rules"' not in right
+    # The signals read the rules, so they follow them in the same column.
+    assert left.index('id="strategy-rules"') < left.index('id="signals"')
 
 
 def test_the_section_has_a_title_and_an_empty_host_of_its_own():
@@ -73,7 +82,7 @@ def test_the_boxes_are_the_same_tiles_every_other_panel_uses():
     """`.bt-stat` via ``liveTile``, in a grid of its own — the shared grid rule is scoped to
     ``#bt-metrics``, and this section sits in a half-width slot."""
     body = _function(APP_JS, "strategyRiskTiles")
-    assert 'liveTile(f.label, riskValue(f, value)' in body
+    assert 'statTile(f.label, riskValue(f, value)' in body
     assert ".risk-metrics {" in CSS and "display: grid" in CSS
     assert "repeat(auto-fill, minmax(" in CSS[CSS.index(".risk-metrics {") :][:200]
 

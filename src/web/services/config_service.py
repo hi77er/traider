@@ -163,7 +163,9 @@ _HINTS: Dict[str, str] = {
     # Every one of these says the same thing in its own terms: an empty box is a
     # decision (leave it out), and the example is the size of number the field wants.
     "MAX_EXPOSURE_PERCENT": "The most of the account one position may use (e.g. 90). "
-    "Default 100 = the whole account. Leave empty for the whole account.",
+    "Default 100 = the whole account. Leave empty for the whole account. A cap too small to "
+    "afford one whole share is sent as a fractional (notional) order, unless a stop and a "
+    "take-profit are configured — a bracket needs whole shares.",
     "RISK_LIMIT_PERCENT": "How much of the account a single trade may lose if it hits "
     "the stop (e.g. 2). Needs a stop loss to have a distance to divide by — "
     "leave empty to size by max exposure alone.",

@@ -141,6 +141,34 @@
     };
   }
 
+  /* "12:25 EDT" — the label a TABLE cell wants for a bar, as opposed to the axis.
+   *
+   * The same two corrections the axis needed, in a table's shorter form: the time is the
+   * market's own (a 12:25 New York bar is not 16:25 anywhere the reader happens to sit), the
+   * zone is named by its abbreviation rather than by an offset — "+00:00" says how the stamp is
+   * STORED, which is nobody's question about a bar — and the seconds are dropped, because a bar
+   * stamp is always on the minute and ":00" on every row is furniture.
+   */
+  function marketStamp(timeZone, date) {
+    var bits = formatter(timeZone, {
+      hour: "2-digit", minute: "2-digit", timeZoneName: "short",
+    }, "market").formatToParts(date);
+    var found = {};
+    for (var i = 0; i < bits.length; i++) found[bits[i].type] = bits[i].value;
+    return found.hour + ":" + found.minute + (found.timeZoneName ? " " + found.timeZoneName : "");
+  }
+
+  /* ``marketStamp`` for a bar the server handed over as an ISO stamp. Anything unparseable is
+   * returned as it came: a bar whose stamp cannot be read is worth showing as-is, since the
+   * thing it came from had a reason to write it that way. Empty is the dash every other empty
+   * cell on the page uses — NOT the epoch, which ``new Date(null)`` quietly is. */
+  function stampCell(value, timeZone) {
+    if (value === null || value === undefined || value === "") return "—";
+    var when = new Date(value);
+    if (Number.isNaN(when.getTime())) return String(value);
+    return marketStamp(timeZone || "UTC", when);
+  }
+
   /* `timeScale` options for a chart of `interval` bars stamped in `timeZone`.
    *
    * `timeVisible` is the switch that lets the axis show a time of day at all: with it
@@ -177,6 +205,8 @@
   global.ChartTime = {
     isIntraday: isIntraday,
     tickLabel: tickLabel,
+    marketStamp: marketStamp,
+    stampCell: stampCell,
     timeScaleOptions: timeScaleOptions,
     localizationOptions: localizationOptions,
     CALENDAR_BARS: CALENDAR_BARS,

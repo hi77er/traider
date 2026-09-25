@@ -223,12 +223,11 @@ def test_status_endpoint_returns_the_resolved_environment():
     assert body["env"] in ("paper", "live")
 
 
-def test_the_dashboard_shows_which_environment_orders_would_use():
-    """Both accounts look identical everywhere else, so the mode has to be on screen and named.
-
-    It is the Mode box in the Trading panel now — the header dropdown that both selected and
-    displayed it is gone, and the box reports it with the account word, the danger tint and the
-    blinking dot, which is more than a pill in the header ever said.
+def test_the_session_monitor_shows_which_environment_orders_would_use():
+    """Both accounts look identical everywhere else, so the mode has to be on screen and named —
+    on the ONE page that can trade. The Strategy lab not only lacks the box, it lacks every way of
+    changing the mode: a page that builds a strategy must not be able to point the bot at the live
+    account from the corner of a panel.
     """
     from pathlib import Path
 
@@ -238,16 +237,18 @@ def test_the_dashboard_shows_which_environment_orders_would_use():
     # Neither half of the old pill was left behind with it.
     assert 'id="exec-badge"' not in html
 
-    js = (root / "src" / "web" / "static" / "app.js").read_text(encoding="utf-8")
-    assert "async function loadTrading()" in js
-    assert "/api/v1/trading" in js
-    assert 'TraiderSwitch.envTile(mode, locked, "onModeBoxClick()")' in js, (
-        "the mode is a box in the Trading panel, built by the shared module"
+    lab = (root / "src" / "web" / "static" / "app.js").read_text(encoding="utf-8")
+    assert "TraiderSwitch.envTile(" not in lab, "the mode is not the lab's to show or move"
+    assert "TraiderSwitch.flipEnv(" not in lab, "nor to write"
+
+    monitor = (root / "src" / "web" / "static" / "log.js").read_text(encoding="utf-8")
+    assert 'TraiderSwitch.envTile(inPlay, !!trading.locked, "flipMode()")' in monitor, (
+        "the mode is a box in the Session monitor's Account card, built by the shared module"
     )
-    # Rendered at boot, and re-rendered after the account form is saved (the keys
-    # may have just changed, which decides whether trading may start at all).
-    assert js.count("loadTrading()") >= 2
-    assert js.count("await loadTrading()") >= 1
+    # Read at boot and after the account form is saved — the keys may have just changed, which
+    # decides whether trading may start at all — and re-read by the page's own poll.
+    assert "function loadStatus(" in monitor
+    assert "/api/v1/trading" in monitor
 
     css = (root / "src" / "web" / "static" / "style.css").read_text(encoding="utf-8")
     # Nothing is styled per state: the mode and the switch are boxes whose state is read in the

@@ -312,7 +312,7 @@ class Settings(BaseSettings):
     # Both halves are in ``config_service.RETIRED_STRATEGY_KEYS`` where it matters (a
     # stored strategy carrying them drops them on save rather than being rejected).
 
-    # ── Web Portal (dashboard: progress, charts, config, alerts) ─────
+    # ── Web Portal (Strategy lab + Session monitor: progress, charts, config, alerts) ─────
     # No host, port, enable switch or auth either, and the rest of this section is the
     # reason: the portal IS how this app is used, it is started by hand (uvicorn, or
     # scripts/run-dashboard.sh) with its address as an argument, and it listens on the

@@ -11,7 +11,8 @@ size and that provider's limits:
 | Bar size            | Periods (provider cap)                  |
 |---------------------|-----------------------------------------|
 | 1m                  | provider's own limit (yfinance: 6 days) |
-| 2m, 5m, 15m         | 30d (+ 60d on 5m/15m)                   |
+| 2m                  | 30d, 40d (60d is offered but never fits) |
+| 5m, 15m             | 30d, 60d                                |
 | 1h, 2h              | 1y, 2y                                  |
 | 4h, 8h, 12h         | 1y, 2y (3y dropped: fetched as 1h)       |
 | 1d                  | 2y, 3y, 4y, 5y                          |
@@ -57,7 +58,7 @@ BAR_SIZES: List[Tuple[str, str]] = [
 # ``allowed_periods`` against ``PROVIDER_MAX_DAYS``.
 PERIODS_BY_BAR_SIZE: Dict[str, Tuple[str, ...]] = {
     "1m": ("15d", "30d"),
-    "2m": ("30d", "60d"),
+    "2m": ("30d", "40d", "60d"),
     "5m": ("30d", "60d"),
     "15m": ("30d", "60d"),
     "1h": ("1y", "2y"),

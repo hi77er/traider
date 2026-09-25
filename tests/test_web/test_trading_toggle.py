@@ -9,10 +9,10 @@ one. Two things matter and neither is visible in a string assertion:
 * declining really writes nothing, and turning trading OFF never asks at all —
   stopping must always take one click.
 
-The decision itself lives in ``trading_switch.js``, because the trading log page carries
-the same control and one confirmation is enough for both. So the real module is lifted
-into the same script as the page's handler, and the assertions are about the calls that
-were made rather than about either file's text.
+The decision itself lives in ``trading_switch.js`` — the confirmation that stands between a
+click and real orders, and the only one there is. The Session monitor's handler is lifted into
+the same script as the module, and the assertions are about the calls that were made rather
+than about either file's text.
 """
 
 from __future__ import annotations
@@ -25,12 +25,11 @@ from pathlib import Path
 import pytest
 
 STATIC = Path(__file__).resolve().parents[2] / "src" / "web" / "static"
-APP_JS = STATIC / "app.js"
 LOG_JS = STATIC / "log.js"
 SWITCH_JS = STATIC / "trading_switch.js"
 
 START_MARKER = "async function toggleTrading() {"
-END_MARKER = "\nfunction renderTradingPanel("
+END_MARKER = "\n  /* Move the orders to the other account"
 
 pytestmark = pytest.mark.skipif(
     shutil.which("node") is None, reason="node is required to exercise the master switch"
@@ -47,10 +46,14 @@ LIVE = {
 
 
 def extract_toggle_block() -> str:
-    """The real toggle handler, lifted verbatim out of `app.js`."""
-    src = APP_JS.read_text(encoding="utf-8")
+    """The real toggle handler, lifted verbatim out of the Session monitor's ``log.js``.
+
+    It is the ONLY one: the Strategy lab has no switch, so the handler that acts on the master
+    switch is this one, and the module it calls is shared with nothing else that trades.
+    """
+    src = LOG_JS.read_text(encoding="utf-8")
     start = src.index(START_MARKER)
-    return src[start:src.index(END_MARKER, start)]
+    return src[start : src.index(END_MARKER, start)]
 
 
 def switch_module() -> str:
@@ -65,8 +68,11 @@ let confirmAnswer = true;
 
 function flashToast(text) { log.toasts.push(text); }
 function escapeHtml(s) { return String(s == null ? "" : s); }
-function renderStrategyBar() {}
-function loadTrading() { log.loads += 1; return Promise.resolve(); }
+// The Session monitor redraws its boxes and re-reads the loop's state; the arm is a SECOND read
+// a tick later (``FIRST_TICK_MS``), which is why ``loads`` counts what it counts.
+function renderBoxes() { log.boxes += 1; }
+function loadStatus() { log.loads += 1; return Promise.resolve(); }
+const FIRST_TICK_MS = 5000; // the page's own constant: one more read after the loop's first tick
 function api(path, opts) {
   log.api.push({ path: path, body: opts && opts.body ? JSON.parse(opts.body) : null });
   return Promise.resolve({ ok: true, message: "done" });
@@ -76,15 +82,15 @@ function confirmDialog(opts) {
   return Promise.resolve(confirmAnswer);
 }
 
-const state = { tradingState: {}, executionStatus: PAPER, rulesPayload: null };
-function reset() { log.api = []; log.dialogs = []; log.loads = 0; }
+const state = { trading: { trading: {}, execution: PAPER } };
+function reset() { log.api = []; log.dialogs = []; log.loads = 0; log.boxes = 0; }
 
 (async function () {
   const out = {};
 
   // 1. PAPER, turning ON: must ask, and the wording must not claim real money.
-  state.tradingState = { on: false };
-  state.executionStatus = PAPER;
+  state.trading.trading = { on: false };
+  state.trading.execution = PAPER;
   reset();
   confirmAnswer = true;
   await toggleTrading();
@@ -97,19 +103,20 @@ function reset() { log.api = []; log.dialogs = []; log.loads = 0; }
   out.paperOnDeclined = { dialogs: log.dialogs.length, api: log.api.length, loads: log.loads };
 
   // 3. LIVE, turning ON: asks too, and says what is at stake.
-  state.executionStatus = LIVE;
+  state.trading.execution = LIVE;
   reset();
   confirmAnswer = true;
   await toggleTrading();
   out.liveOn = { dialogs: log.dialogs, api: log.api, loads: log.loads };
 
   // 4. Turning OFF never asks — stopping is always one click.
-  state.tradingState = { on: true };
+  state.trading.trading = { on: true };
   reset();
   await toggleTrading();
   out.turningOff = { dialogs: log.dialogs.length, api: log.api, loads: log.loads };
 
   process.stdout.write(JSON.stringify(out));
+  process.exit(0); // the handler leaves a timer behind for the first tick; do not wait it out
 })();
 """
 

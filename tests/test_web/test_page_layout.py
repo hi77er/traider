@@ -1,12 +1,13 @@
-"""Where things sit on the dashboard, and what has to be true of the arrangement.
+"""Where things sit on the Strategy lab page, and what has to be true of the arrangement.
 
 Structural assertions on the template, which this project has no browser runner to do better
 for. They are worth having because the two failures they catch are silent: a panel that drifts
 into the wrong column is a panel nobody finds, and a duplicated id (from moving one) leaves two
 elements answering to the same name while every test that reads the file keeps passing.
 
-The move that prompted this: the Trading panel left the right-hand column for a place under the
-Backtest panel it belongs to.
+The subject is the strategy bar. Its row has been rearranged twice — the signals joined the rules
+they read, and the Trading panel that used to fill the left slot left the page altogether for the
+Session monitor — so where the halves sit is worth pinning rather than remembering.
 """
 
 from __future__ import annotations
@@ -19,18 +20,6 @@ HTML = (ROOT / "src" / "web" / "templates" / "index.html").read_text(encoding="u
 APP_JS = (ROOT / "src" / "web" / "static" / "app.js").read_text(encoding="utf-8")
 LOG_JS = (ROOT / "src" / "web" / "static" / "log.js").read_text(encoding="utf-8")
 CSS = (ROOT / "src" / "web" / "static" / "style.css").read_text(encoding="utf-8")
-
-
-def _column(needle: str) -> str:
-    """``left`` or ``right`` — which of the two columns ``needle`` appears in."""
-    left = HTML.index('<section class="left">')
-    aside = HTML.index('<aside class="right">')
-    end = HTML.index("</aside>")
-    at = HTML.index(needle)
-    assert left <= at, f"{needle} is before the split"
-    if at < aside:
-        return "left"
-    return "right" if at < end else "outside"
 
 
 def _function_of(source: str, name: str) -> str:
@@ -55,7 +44,7 @@ def test_the_tick_table_renders_a_bar_s_notes_with_a_warning_mark():
     read by nobody. The ⚠ and its own colour are what keep it distinguishable at a glance from
     the ordinary reason text beside it in the same row.
     """
-    assert "notesCell(tick.notes)" in LOG_JS, "the tick row renders the notes"
+    assert "notesCell(tick.notes, tick.at)" in LOG_JS, "the tick row renders the notes"
     assert '"notes"' in LOG_JS, "and the table declares the column"
 
     # Sliced to the NEXT function rather than to a character count. It used to be a fixed 700-char
@@ -65,118 +54,33 @@ def test_the_tick_table_renders_a_bar_s_notes_with_a_warning_mark():
     start = LOG_JS.index("function notesCell")
     helper = LOG_JS[start:LOG_JS.index("function money(", start)]
     assert "⚠" in helper, "marked, so it is not mistaken for the tick's reason"
-    assert 'class="warn"' in helper
-    assert "<td>—</td>" in helper, "an em dash when there is nothing to say, not a blank cell"
+    # Two classes, two jobs: ``warn`` is its colour, ``prose`` is what lets the sentence be opened
+    # instead of running off the panel (see test_log_page's prose-cell test). It goes through the
+    # shared helper rather than writing its own cell, so the notes open on the same click as every
+    # other sentence in these tables.
+    assert 'proseCell(`⚠ ${list.join("; ")}`' in helper
+    assert '<td>—</td>' in helper, "an em dash when there is nothing to say, not a blank cell"
     assert ".lg-table td.warn" in CSS, "the marker has its own colour (amber, not red)"
 
 
-def test_the_live_panel_says_when_arming_has_nothing_to_run_it():
-    """Two facts, one switch — so the panel has to join them.
-
-    Arming writes ``trading.json``; nothing ticks until a process runs the loop, and this
-    dashboard never starts one (that is the two-process split). The switch and the loop are two
-    different facts, so without a line joining the two, flipping the switch looks like it did
-    nothing — which is exactly how it was read.
-
-    A visible LINE rather than a ``title``: the embedded browser renders no native tooltip.
-    """
-    assert "Trading is armed, but no loop is running" in APP_JS
-    assert "python -m src.main" in APP_JS, "and it says what to start"
-
-    at = APP_JS.index("Trading is armed, but no loop is running")
-    assert "lines.push(" in APP_JS[at - 40:at], "rendered as a visible line, not a tooltip"
-
-    # The guard immediately above it has to require BOTH facts. Either one alone makes the note
-    # a lie in the other case: with the switch off there is nothing armed to warn about, and
-    # while the loop IS running there is nothing to alarm about.
-    guard = APP_JS[APP_JS.rindex("if (", 0, at):at].split("\n", 1)[0]
-    assert "armed" in guard, f"gated on the switch being ON: {guard}"
-    assert 'loop.state === "stopped"' in guard and 'loop.state === "never"' in guard, (
-        f"and on the loop not running: {guard}"
-    )
-
-
-def test_the_head_controls_obey_the_hidden_attribute():
-    """``display`` from a class beats the browser's ``[hidden] { display: none }``, so both
-    controls the JS hides with that attribute were visible whether or not they applied.
-
-    The same trap is already re-asserted for ``#rp-delete`` and ``#bt-report``; these two were
-    missed because the card holding them was hidden *with* them. Found by opening the page.
-    """
-    assert "#trading-off-btn[hidden]" in CSS
-    assert "#trading-flatten-btn[hidden]" in CSS
-
-
 # ---------------------------------------------------------------------------
-# the Trading panel moved
+# the strategy bar's row
 # ---------------------------------------------------------------------------
-def test_the_panels_are_named_uniquely_and_the_account_panel_is_trading():
-    """The panel that reports the account and the loop is titled "Trading" — and only one is.
+def test_the_signals_sit_under_the_rules_they_read():
+    """Asked for as the signals under the Rules section — the reading directly beneath the rules
+    that produce it, in the left half of the row.
 
-    There is no second card any more: the switch and the account share this one, so the name
-    has to be unique for the opposite reason it used to be. (The element ids stay ``live-*``:
-    they are internal, and renaming them would churn the CSS and the JS for nothing anyone can
-    see.)
+    A signal nobody can trace back to a rule is a curiosity, and the rule it came from must not be
+    on the other side of the row. So the signals are the SECOND child of the slot that holds the
+    rules, and the risk settings keep the other half. The Trading panel used to fill this slot
+    beside them; it and the switch left for the Session monitor, so what is left is one half about
+    what the strategy would do and one about what it would risk.
     """
-    headings = re.findall(r"<h2>([^<]*)</h2>", HTML)
-
-    assert headings.count("Trading") == 1, f"exactly one panel is 'Trading': {headings}"
-    assert "Live" not in headings, "the account panel is not called Live any more"
-    assert "Trading switch" not in headings, "and the switch is not a panel of its own"
-
-
-def test_both_panels_report_the_account_being_traded_and_not_the_others_faults():
-    """A 401 on the account this run never touches must not read like a fault in this run.
-
-    Both panels answer about the account the trading MODE points at. The switch panel still
-    lists the other account's POSITIONS — something open over there is real whatever mode we
-    are in, and it is what stops the bot being armed on top of it — but not its unreadability.
-    That verdict is not hidden: it stays on the credential badge, in the Account popup, and on
-    the credential badge and the Account popup — and no account's WORTH is shown anywhere but
-    the traded one's (see the log page's accounts panel).
-    """
-    assert "const traded = String((exec && exec.env)" in APP_JS
-    assert "account.known === false && (!traded || env === traded)" in APP_JS
-    assert "row.env === accounts.env || row.known" not in APP_JS, (
-        "the account panel must not warn about the other environment any more"
-    )
-
-
-def test_the_trading_panel_sits_in_the_strategy_bar():
-    """It moved into the bar's second row, in the slot the signals list used to have.
-
-    The bar is what the dashboard is about — the strategy, what it says now, what it will do and
-    whether it is trading — so the panel that reports the trading belongs beside the rules it
-    acts on rather than in a column under the chart. Two equal slots, so the move did not quietly
-    demote one of them: the trading panel leads, and the signals follow it in that same slot.
-    """
-    bar = HTML.index('id="strategy-bar"')
-    row = HTML.index('class="strategy-rules-row"')
-    trading = HTML.index('id="strategy-trading"')
-    live = HTML.index('id="live-card"')
-    signals = HTML.index('id="signals"')
-
-    assert bar < row < trading < live < signals, (
-        "the trading slot is the first child of the row, the panel inside it, then the signals"
-    )
-    assert HTML.count('class="strategy-slot"') == 2, "two slots, both taking half the row"
-
-
-def test_the_signals_sit_under_the_trading_panel_they_belong_to():
-    """Asked for as the signals under the Trading section.
-
-    The reading and the switch that acts on it are one subject: a signal nobody trades is a
-    curiosity, and a switch with its reason on the other side of the row makes the operator read
-    two places to answer one question. So the signals are the second child of the SAME slot as
-    the Trading panel, and the other slot keeps what the strategy will do about it — the rules
-    and the risk settings they are traded under, which are what the signal is worth knowing.
-    """
-    trading = HTML.index('class="strategy-slot"')
+    rules = HTML.index('id="strategy-rules-slot"')
     signals = HTML.index('id="signals"')
     other = HTML.index('class="strategy-slot"', signals)
 
-    assert trading < signals < other, "in the trading half of the row, not the rules' half"
-    assert HTML[trading:signals].index('id="live-card"') < signals, "under the panel, not above it"
+    assert rules < signals < other, "in the rules' half of the row, not the risk settings' half"
     # One element, one slot: a signals section left OUTSIDE the slot (after the row, say) would
     # still satisfy the index order above and read as a third column.
     assert '<section id="signals" class="strategy-signals"></section>' in HTML, (
@@ -189,10 +93,10 @@ def test_the_signals_sit_under_the_trading_panel_they_belong_to():
 def test_the_slot_separates_its_two_halves_with_a_hairline_and_owns_the_box():
     """One box per slot, a hairline between the things inside it.
 
-    The Trading panel is a card moved whole into a slot whose frame replaces its own border, so a
-    border per section would be a box inside a box. What separates the halves is a rule along the
-    top of the one BELOW — and the first child of either slot has to drop it, or the rule hangs a
-    few pixels under the slot's own edge with nothing above it to separate from.
+    The slot is the box: a section that brought its own border would be a box inside a box. What
+    separates the things inside it is a rule along the top of the one BELOW — and the first child
+    of either slot has to drop it, or the rule hangs a few pixels under the slot's own edge with
+    nothing above it to separate from.
     """
     assert ".strategy-slot {" in CSS, "the section box is the slot's"
     rule = CSS[CSS.index(".strategy-signals,\n.strategy-rules-section {") :]
@@ -228,22 +132,6 @@ def test_the_buy_and_the_sell_rules_are_separated_in_the_summary():
     assert ".strategy-rule-line { display: block; margin" not in CSS, (
         "and not baked into the line itself, which would space every rule from every other"
     )
-
-
-def test_the_live_panel_is_not_hidden_with_the_chart():
-    """It reports the loop, the accounts and the exchange — none of which need a stored
-    dataset. Inside ``#dashboard`` it would vanish with the chart when there is none, which is
-    exactly when someone is looking for why nothing is happening.
-
-    The bar sits above the whole two-column split, so the panel is now outside both the section
-    that hides with the chart and the column that holds it.
-    """
-    dashboard = HTML.index('id="dashboard"')
-    dashboard_end = HTML.index("</section>", dashboard)
-    live = HTML.index('id="live-card"')
-
-    assert not dashboard < live < dashboard_end, "not inside the section that hides with the chart"
-    assert live < HTML.index('class="split"'), "and not in the column that holds it"
 
 
 def test_the_two_signal_toggles_live_in_the_price_history_panel():
@@ -288,52 +176,12 @@ def test_the_strategy_combo_box_says_what_each_strategy_reads():
     assert "strategyOptionLabel(n," in APP_JS, "every option is labelled, not just the active one"
 
 
-def test_the_trading_panel_does_not_repeat_the_strategy_or_the_switch():
-    """Asked for: the "GPRO - 5m - 60d · paper" line goes (the bar above and the Mode box below
-    both say it), and no text in the panel says "trading is ON/OFF" any more.
-
-    The switch is a BOX now, so the words went: a state printed in a sentence as well as a box
-    reads as two facts. The tick line that used to explain a switch-sourced verdict has gone
-    entirely since — with it went the needs of that distinction.
-    """
-    state = _function_of(APP_JS, "renderLive")
-    panel = _function_of(APP_JS, "renderTradingPanel")
-
-    assert "loop.strategy" not in state and "loop.env" not in state, (
-        "the strategy bar names the strategy; the Mode box names the account"
-    )
-    assert "loop.last_action" not in state and "loop.last_reason" not in state, (
-        "what the last tick did is the log page's tick table"
-    )
-    assert "trading is OFF" not in panel and "trading is ON" not in panel
-    assert 'TraiderSwitch.tradeTile(state.tradingPayload, "toggleTrading()")' in APP_JS, (
-        "the box is what says it — built by the shared module, so the log page's reads the same"
-    )
-
-
 def test_every_id_in_the_page_appears_once():
     """A moved block is a duplicated block until the original goes, and two elements with one
     id fail silently: the browser resolves the first and the other is unreachable."""
     ids = re.findall(r'\bid="([^"]+)"', HTML)
     duplicates = sorted({name for name in ids if ids.count(name) > 1})
     assert duplicates == [], f"duplicated id(s): {duplicates}"
-
-
-def test_the_panel_link_is_in_the_header_next_to_the_refresh():
-    """Asked for at the top of the panel, to the right of the reload button — and no longer
-    buried in the footnote it used to be at the bottom of."""
-    head = HTML[HTML.index('id="live-card"'):HTML.index('id="live-body"')]
-    actions = head[head.index('class="settings-actions"'):]
-
-    assert "/log" in actions, "the link belongs in the header's action group"
-    assert actions.index('id="live-refresh"') < actions.index("/log"), "to the right of ↻"
-    # The reload used to be the glyph alone, which says nothing about what it does. Pressing it
-    # re-reads the loop's own records AND the broker, so the label names the action.
-    refresh = actions[actions.index('id="live-refresh"'):]
-    assert "↻ Refresh" in refresh[:refresh.index("</button>")]
-
-    body = HTML[HTML.index('id="live-body"'):HTML.index("</section>", HTML.index('id="live-body"'))]
-    assert "/log" not in body, "and only there, not in both places"
 
 
 def test_a_collapsed_panel_hides_every_control_but_its_toggle():
@@ -350,10 +198,10 @@ def test_a_collapsed_panel_hides_every_control_but_its_toggle():
     block = CSS[CSS.index(collapsed):]
     assert "display: none" in block[:block.index("}")], "hidden, not merely moved"
 
-    # The FOUR panels that carry header controls and fold on their own are all on that pattern,
+    # The FOUR cards that carry header controls and fold on their own are all on that pattern,
     # so the rule reaches every one of them: Configuration, Rules, Risk Management and Backtest.
-    # The Trading panel is deliberately not among them: it has no toggle, and the strategy bar's
-    # own toggle folds it together with the signals and the rules below the strategy line.
+    # The strategy bar folds a whole row instead of a card, and does it with its own toggle, so
+    # it is deliberately not one of these.
     for card in ("config-card", "rules-card", "risk-card", "backtest"):
         at = HTML.index(f'id="{card}"')
         tag = HTML[HTML.rindex("<", 0, at):HTML.index(">", at)]
@@ -363,9 +211,11 @@ def test_a_collapsed_panel_hides_every_control_but_its_toggle():
 def test_one_toggle_folds_the_whole_strategy_row():
     """Asked for as a toggle to the left of "Strategy", folding everything below that line.
 
-    One toggle per subject: the trading panel, the signals and the rules are three views of the
-    same strategy, so they fold together. The Trading panel's own toggle went with it — two
-    buttons hiding the same panel from different places is how a section ends up unfindable.
+    One toggle per subject: the rules, the signals they produce and the risk they are traded
+    under are three views of the same strategy, so they fold together. The Trading panel that
+    used to sit in this row had its own toggle once; that went when the row's toggle arrived —
+    two buttons hiding the same panel from different places is how a section ends up unfindable —
+    and the panel itself has since left the page for the Session monitor.
     """
     # To the LEFT of the label it folds from: same row, before the title.
     toggle = HTML.index('id="strategy-collapse"')
@@ -376,88 +226,13 @@ def test_one_toggle_folds_the_whole_strategy_row():
 
     row = HTML.index('id="strategy-body"')
     assert row > toggle, "and the row it folds is the one below"
-    assert not APP_JS.count("function toggleLivePanel"), "the panel's own toggle is gone"
+    assert not APP_JS.count("function toggleLivePanel"), "no second toggle hides the row"
     assert 'id="toggle-live"' not in HTML
 
     # The row is a flex container, so `[hidden]` alone would leave it on screen — the trap this
     # project has hit before, and the reason every other hidden-by-attribute element here has its
     # own rule.
     assert ".strategy-rules-row[hidden] { display: none; }" in CSS
-
-
-def test_folding_the_row_stops_the_broker_poll_and_unfolding_restarts_it():
-    """A folded row has no reader, which is the same case as the collapsed panel this replaced:
-    /api/v1/orders asks Alpaca, so the poll must not keep running behind it.
-
-    Unfolding goes through ``refreshLiveNow()``, which is the full read plus the restart of the
-    slow cadence — the same three effects this test pinned inline before they had a name.
-    """
-    body = APP_JS[APP_JS.index("function toggleStrategyBody("):]
-    body = body[:body.index("\n}")]
-
-    assert "stopLivePoll()" in body, "folding it stops the polling"
-    assert "refreshLiveNow()" in body, "opening it asks the broker, now and on a cadence"
-
-    helper = APP_JS[APP_JS.index("async function refreshLiveNow("):]
-    helper = helper[:helper.index("\n}")]
-    assert "loadLive(true)" in helper and "scheduleLivePoll()" in helper
-    assert "_livePoll.lastSlow = Date.now()" in helper, "and the cadence restarts from this read"
-
-    gate = APP_JS[APP_JS.index("function livePanelVisible("):]
-    gate = gate[:gate.index("\n}")]
-    assert "row.hidden" in gate, "and the gate the poll runs behind knows about the row"
-
-
-def test_the_trading_panel_keeps_its_state_and_log_reachable():
-    """Reading whether trading is on, and getting to the log, must not need anything opened first.
-
-    The panel has no toggle now, so its head is simply permanent: the reload and the link to the
-    log sit in it, plus the one control that is NOT the header's.
-
-    The panel's own "Turn trading off" button was asked for removal: the header's master switch
-    does that from outside every lock, and two buttons for one action made the panel look like it
-    had two owners. The flatten button stays — it closes what is open as well, which the switch
-    does not, and it is the only way to reach that once the switch is off.
-    """
-    head = HTML[HTML.index('id="live-card"'):HTML.index('id="live-body"')]
-    actions = head[head.index('class="settings-actions"'):]
-    actions = actions[:actions.index("</div>")]
-
-    for present in ('id="live-refresh"', 'href="/log"'):
-        assert present in actions, f"{present} belongs in the panel head"
-    assert 'id="trading-off-btn"' not in HTML, "the master switch is the only way to stop trading"
-    assert 'id="trading-off-btn"' not in APP_JS, "and nothing writes to an id that is gone"
-    at = actions.index('id="trading-flatten-btn"')
-    tag = actions[actions.rindex("<", 0, at):actions.index(">", at)]
-    assert "hidden" in tag, "shown only while there is something to flatten"
-    # `keep-visible` existed to keep a control on screen while its body was shut. Nothing shuts
-    # now, so the class would be a decoration that means nothing.
-    assert "keep-visible" not in head, "the head has no collapse to survive"
-
-
-def test_the_armed_row_is_not_edged_in_green():
-    """Asked for removal: the green edge on the trading section while trading is on.
-
-    It marked the whole slot for a state the panel's own Trading box already reports — and that
-    box pulses — so half the dashboard was outlined to say one word twice. ``body.trading-on``
-    survives as the lock's hook (the switch still sets it); nothing styles the slot by it.
-    """
-    assert "body.trading-on" not in CSS
-    assert ".strategy-slot > #live-card" in CSS, "the slot itself is still styled"
-
-
-def test_the_loop_chip_is_gone_from_the_trading_panel():
-    """Asked for removal: the little chip beside "Trading" that said "stopped".
-
-    It reported the loop's state as one more badge between the panel's title and its buttons — a
-    third reading of two facts the panel already carries, and "stopped" is what it said in the
-    state the panel is in almost all of the time. Gone from the markup, the script and the
-    stylesheet: an id nobody renders and a rule for an element that does not exist are how a
-    removal ends up half done.
-    """
-    assert 'id="live-chip"' not in HTML
-    assert "live-chip" not in APP_JS, "and nothing writes to the id that is gone"
-    assert "#live-chip" not in CSS
 
 
 def test_the_backtest_keeps_its_run_and_report_buttons_when_collapsed():
@@ -486,9 +261,9 @@ def test_the_backtest_panel_is_collapsible():
 def test_the_backtest_body_is_one_collapse_body():
     """``toggleCollapse`` finds the body with ``card.querySelector(".collapse-body")``, which
     takes the FIRST match — a second one inside the card would be toggled instead."""
-    # Sliced to the next card in the document. This used to be bounded by ``id="live-card"``,
-    # which now sits ABOVE the backtest in the file: a backwards slice is empty, and the count
-    # below would then have failed for the wrong reason — nothing found, rather than two found.
+    # Sliced to the next card in the document (the configuration card) rather than to a character
+    # count. A bounds element that moves ABOVE the backtest makes the slice empty, and the count
+    # below would then fail for the wrong reason — nothing found, rather than two found.
     card = HTML[HTML.index('id="backtest"'):HTML.index('id="config-card"')]
     assert card.count('class="collapse-body"') == 1
 
@@ -515,12 +290,17 @@ def test_running_a_backtest_opens_the_panel():
 
 
 # ---------------------------------------------------------------------------
-# a stale dashboard says so
+# a stale server says so
 # ---------------------------------------------------------------------------
 def test_a_missing_endpoint_explains_that_the_server_is_old():
-    """The page is served from disk on every request while the routes are frozen at import, so
-    a dashboard left running across a change answers 404 for endpoints the page was built
-    against. It happened, and "404: Not Found" said nothing about why."""
+    """The page is served from disk on every request while the routes are frozen at import, so a
+    server left running across a change answers 404 for endpoints the page was built against. It
+    happened, and "404: Not Found" said nothing about why.
+
+    Both scripts say it, and both blame the SERVER rather than the page: it is the process that is
+    running old code, and the reader is looking at it from a browser that has no idea which code
+    it is talking to.
+    """
     for source in (APP_JS, LOG_JS):
         assert "res.status === 404" in source
-        assert "running older code" in source
+        assert "the server is running older code than" in source

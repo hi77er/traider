@@ -165,3 +165,29 @@ def test_value_only_and_ref_only_conditions_are_valid():
     assert v.value == 30.0 and v.ref is None
     assert f.ref == "sma_50" and f.value is None
 
+
+
+# ---------------------------------------------------------------------------
+# the series a strategy's rules test (what the chart offers a control for)
+# ---------------------------------------------------------------------------
+def test_referenced_series_is_the_feature_vocabulary_the_rules_use():
+    rs = R.default_ruleset("AAPL")
+    assert R.referenced_series(rs) == ["close", "sma_50", "rsi_14", "sma_20"]
+
+
+def test_referenced_series_drops_disabled_rules_and_keeps_order_of_first_use():
+    rs = R.default_ruleset("AAPL")
+    rs.rules[0].conditions.append(R.RuleCondition(feature="macd_hist_12_26_9", op=">", value=0.0))
+    rs.rules[0].conditions.append(R.RuleCondition(feature="close", op=">", ref="sma_50"))
+    rs.rules.append(R.Rule(side="SELL", mode="any", enabled=False,
+                           conditions=[R.RuleCondition(feature="atr_14", op=">", value=1.0)]))
+    names = R.referenced_series(rs)
+
+    assert names == ["close", "sma_50", "rsi_14", "macd_hist_12_26_9", "sma_20"], (
+        "first use wins, in the order the rules read")
+    assert "atr_14" not in names, "a switched-off rule is not trading"
+
+
+def test_referenced_series_of_a_strategy_with_no_rules_is_empty():
+    assert R.referenced_series(R.empty_strategy("quiet")) == []
+

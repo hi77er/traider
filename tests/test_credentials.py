@@ -473,8 +473,16 @@ def test_the_verify_endpoint_works_even_while_trading_is_on(tmp_path, monkeypatc
     discoverable rather than hidden behind the lock."""
     settings = _s(tmp_path, **PAPER)
     monkeypatch.setattr(credentials, "probe", lambda *a, **k: {"ok": True, "message": "ok", "account_number": "A1", "status": "ACTIVE"})
-    from src.web.services import trading_service
+    from src.web.services import loop_control, trading_service
 
+    # Arming starts a REAL ``python -m src.main`` (its own interpreter, the repo as its working
+    # directory), which ignores this test's temp settings and writes a tick into the real live
+    # tree — a phantom session for whatever strategy the machine has selected. Only the process is
+    # stubbed: the switch, the credential check and the lock are all still exercised.
+    class _Process:
+        pid = 4242
+
+    monkeypatch.setattr(loop_control, "_spawn", lambda command, **kwargs: _Process())
     credentials.verify(settings, "paper", force=True)
     trading_service.turn_on(settings)
     try:

@@ -112,6 +112,36 @@ def test_the_window_is_closed_at_the_weekend(tmp_path):
     assert bar_in_trading_window(s, pd.Timestamp("2026-09-19 12:00")) is False
 
 
+def test_the_session_stamp_separates_the_two_halves_of_one_day(tmp_path):
+    """Which session a moment belongs to, and the reason the two halves are DIFFERENT sessions:
+    the screener's numbers are the last completed regular session's, so a list screened before the
+    bell is not the list the session trades on, however fresh its timestamp looks.
+
+    The date is the exchange's own, so the same instant is one session and not two depending on
+    where the reader is sitting.
+    """
+    s = _settings(tmp_path)
+    tz = ZoneInfo(NY)
+    tuesday = date(2026, 9, 15)
+
+    before = session.stamp(s, datetime(tuesday.year, tuesday.month, tuesday.day, 8, 0, tzinfo=tz))
+    inside = session.stamp(s, datetime(tuesday.year, tuesday.month, tuesday.day, 11, 0, tzinfo=tz))
+    after = session.stamp(s, datetime(tuesday.year, tuesday.month, tuesday.day, 17, 0, tzinfo=tz))
+
+    assert before == "2026-09-15 out of session"
+    assert inside == "2026-09-15 in session"
+    assert after == "2026-09-15 out of session"
+    assert before != inside, "the morning's screen is a different session from the morning"
+
+    # The stamp says which half it is, so a reader can be told its numbers are the last close's
+    # without keeping a second copy of the same fact.
+    assert session.is_in_session(inside) is True
+    assert session.is_in_session(before) is False
+    assert session.is_in_session(after) is False
+    assert session.is_in_session(None) is False
+    assert session.is_in_session("") is False
+
+
 def test_a_window_that_crosses_midnight_is_not_read_as_closed(tmp_path):
     """Unlikely for equities, but a session whose end is before its start would
     otherwise be permanently shut."""

@@ -1,20 +1,25 @@
 """What the loop is doing, what the account holds, and which orders are working.
 
-Three read-only endpoints for the header pill, the Trading panel and the trading log page:
+Read-only endpoints for the Session monitor — the Account card, the loop and gates panel and
+the day's tables — all of which the Strategy lab reads too except the broker half:
 
 ``GET /api/v1/loop``       -> the loop's own state: holder, next wake, last tick, last refusal
 ``GET /api/v1/clock``      -> whether the exchange is open, and when it next changes
 ``GET /api/v1/accounts``   -> what each account is worth: equity, the day's change, cash
+``GET /api/v1/accounts/history`` -> the account's own equity curve for the session
 ``GET /api/v1/positions``  -> what the account holds (both environments)
 ``GET /api/v1/orders``     -> open orders, the resting exit legs, and recent fills
+``GET /api/v1/trades``     -> the round trips the loop has closed
 
-Nothing here writes, and nothing here can place, amend or cancel an order. The trading
-endpoints are separate (``routes/trading.py``) precisely so that "the page that shows you the
-bot" cannot be the page that changes it — and so a read route can never need the trading lock.
+Nothing here writes except ``/loop/ensure`` — and what that writes is a PROCESS, never trading:
+it starts the loop an armed switch is waiting for, which is the one thing a page cannot do for
+itself. It is a POST for exactly that reason. The trading endpoints are separate
+(``routes/trading.py``) precisely so that "the page that shows you the bot" cannot be the page
+that changes it — and so a read route can never need the trading lock.
 
 Every route degrades instead of failing. An unconfigured account, a broker that is down or a
-log that has never been written all produce a 200 with an explanation, because the dashboard
-that reports the problem must be the one that keeps working: a 500 here would blank the panel
+log that has never been written all produce a 200 with an explanation, because the page that
+reports the problem must be the one that keeps working: a 500 here would blank the panel
 exactly when it has something to say.
 """
 
@@ -69,6 +74,18 @@ def get_loop(settings=Depends(get_effective_settings_dep)) -> dict:
     return loop_service.status(settings)
 
 
+@router.post("/loop/ensure")
+def ensure_loop(settings=Depends(get_effective_settings_dep)) -> dict:
+    """Put the loop back when trading is ON and nothing is running it.
+
+    The READ above deliberately does not do this: it is polled, it is a GET, and a read that
+    forks a process is a read nobody can trust. This one says what it does. It never arms
+    anything — trading was switched on already, and a restored loop reads that switch itself —
+    and the service throttles repeated asks, so a polling page cannot storm it.
+    """
+    return loop_service.ensure_running(settings)
+
+
 @router.get("/clock")
 def get_clock(settings=Depends(get_effective_settings_dep)) -> dict:
     """Whether the exchange is open, and when it next opens or closes.
@@ -86,9 +103,9 @@ def get_accounts(settings=Depends(get_effective_settings_dep)) -> dict:
 
     Both environments, like ``/positions`` and for the same reason — a strategy trades one at
     a time, but a person can be wrong about which. ``env`` says which one is being traded, and
-    the panels that show worth (this one on the dashboard, and the log page's accounts panel)
-    render THAT ONE only: an idle account's balance beside the traded one's is a number waiting
-    to be read as the wrong account's. The numbers are projected and the account number is masked
+    the panels that show worth (the Session monitor's Account card, and its equity pane) render
+    THAT ONE only: an idle account's balance beside the traded one's is a number waiting to be
+    read as the wrong account's. The numbers are projected and the account number is masked
     (see ``src/execution/accounts``); the broker's payload is never proxied.
     """
     rows = accounts.snapshots(settings)
@@ -97,6 +114,28 @@ def get_accounts(settings=Depends(get_effective_settings_dep)) -> dict:
         "env": str(getattr(settings, "execution_env", "paper") or "paper").lower(),
         "accounts": [row.as_dict() for row in rows],
     }
+
+
+@router.get("/accounts/history")
+def get_accounts_history(
+    env: Optional[str] = Query(
+        default=None, description="Which account (paper/live); defaults to the one in play"
+    ),
+    period: str = Query(default="1D", description="Alpaca's own window, e.g. 1D, 1W, 1M"),
+    timeframe: str = Query(default="5Min", description="One point per timeframe"),
+    settings=Depends(get_effective_settings_dep),
+) -> dict:
+    """The traded account's equity THROUGH the session, as the broker recorded it.
+
+    Its own endpoint rather than a field on ``/accounts``: that one answers "what is it worth
+    now" from a cached read, and this one is a series the broker keeps — a curve drawn beside
+    the price chart, which would be lying if it came from a cache.
+
+    Defaults to the account IN PLAY, not to both: the curve belongs to the account being
+    traded, and two curves under one price chart would be read as one line with two names.
+    """
+    chosen = str(env or getattr(settings, "execution_env", "paper") or "paper").strip().lower()
+    return accounts.history(settings, chosen, period=period, timeframe=timeframe)
 
 
 @router.get("/positions")
@@ -172,6 +211,7 @@ def get_orders(
 
 @router.get("/trades")
 def get_trades(
+    day: Optional[str] = Query(None, description="YYYY-MM-DD in the market's timezone"),
     limit: Optional[int] = Query(None, ge=1, le=500, description="how many closed trades to return"),
     settings=Depends(get_effective_settings_dep),
 ) -> dict:
@@ -181,11 +221,15 @@ def get_trades(
     only the loop knows which bar, which signal and which stop produced each entry and exit.
     A deleted local log therefore degrades to an empty list rather than an error — which is
     the case the log page has to survive.
+
+    ``day`` narrows it to ONE session, which is what the monitor asks for: the page draws a
+    day, and a round trip from last week under today's heading is a row about the wrong
+    session. Without it every closed trade is returned, which is what the Strategy lab wants.
     """
     from src.execution import store
 
     name = loop_service.status(settings)["strategy"]
-    rows = store.read_trades(settings, name, limit=limit)
+    rows = store.read_trades(settings, name, when=day, limit=limit)
     return {"ok": True, "strategy": name, "count": len(rows), "trades": list(reversed(rows))}
 
 
@@ -210,8 +254,20 @@ def get_log(
 
     name = loop_service.status(settings)["strategy"]
     index = store.load_index(settings, name)
-    chosen = day or (index[-1].get("day") if index else store.trading_day(settings))
+    today = store.trading_day(settings)
+    # The day being SHOWN is the exchange's today unless one is asked for. A new day's session
+    # starts empty, and a page that fell back to the newest day with a log would open on
+    # yesterday's candles, ticks and orders under today's date.
+    chosen = day or today
     ticks = store.read_ticks(settings, name, when=chosen, limit=limit)
+    # The menu: today first — it is the day being watched, whether or not the loop has run in it
+    # yet — then every day it has, newest first. The index is what makes listing the days cheap;
+    # it is read rather than the tick logs, which grow without bound.
+    menu = [today] + [
+        str(entry.get("day"))
+        for entry in reversed(index)
+        if entry.get("day") and str(entry.get("day")) != today
+    ]
     return {
         "ok": True,
         "strategy": name,
@@ -221,10 +277,11 @@ def get_log(
         # exchange's date, not the reader's: on a machine seven hours ahead of New York the
         # two disagree for most of the evening, and the page would sit there refreshing a
         # day that has already closed.
-        "today": store.trading_day(settings),
-        # The day menu comes from the index, which exists so that listing the days a strategy
-        # ran never has to read the tick logs — they grow without bound.
-        "days": [entry.get("day") for entry in reversed(index)][:120],
+        "today": today,
+        "days": menu[:120],
         "ticks": list(reversed(ticks)),
-        "orders": list(reversed(store.read_orders(settings, name, limit=limit))),
+        # The day's own orders: the file is one log for the strategy, and every row carries the
+        # day it was submitted, so the same read that filters them is the one that keeps
+        # yesterday's orders off today's page.
+        "orders": list(reversed(store.read_orders(settings, name, when=chosen, limit=limit))),
     }

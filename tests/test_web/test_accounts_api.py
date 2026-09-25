@@ -187,6 +187,53 @@ def test_an_unreadable_account_is_unknown_with_its_reason(tmp_path, monkeypatch)
     assert "could not be read" in row["reason"] and "unauthorized" in row["reason"]
 
 
+def test_a_broker_timeout_is_not_a_credential_problem(tmp_path, monkeypatch):
+    """Alpaca's gateway times out (504 [50410000] request timed out) from time to time, and the
+    panel beside the reason prints an instruction. The instruction it has is "add the key pair",
+    which is only true when the KEY is what is wrong — so a broker that simply failed to answer
+    must be reported as the broker's doing, or an operator goes and re-enters keys they have
+    already entered, over a blip that clears by itself."""
+    timed_out = AlpacaError(
+        "Alpaca refused the request with 504 [50410000] request timed out (X-Request-ID abc123)",
+        status_code=504,
+        code="50410000",
+        request_id="abc123",
+    )
+    assert timed_out.retryable is True and timed_out.rejected is False, "a 504 is the broker"
+
+    _account(monkeypatch, {"paper": timed_out, "live": PAYLOAD})
+    row = accounts.snapshot(_settings(tmp_path, **PAPER_KEYS, **LIVE_KEYS), "paper").as_dict()
+
+    assert row["known"] is False and row["equity"] is None
+    assert row["fix"] == "broker", "not the reader's to fix"
+    assert "504" in row["reason"] and "abc123" in row["reason"], "the broker's own words survive"
+
+
+def test_a_refused_key_is_the_credential_s_problem(tmp_path, monkeypatch):
+    """401/403 is the broker saying no to THIS key: retrying cannot help and the reader has to
+    change something."""
+    _account(monkeypatch, {"paper": AlpacaError("unauthorized", status_code=401)})
+    row = accounts.snapshot(_settings(tmp_path, **PAPER_KEYS), "paper").as_dict()
+
+    assert row["fix"] == "credentials"
+
+
+def test_a_transport_failure_is_the_broker_s_and_not_the_credential_s(tmp_path, monkeypatch):
+    """A dropped connection is not a verdict on the key either — nothing here knows what it was,
+    and the panel must not pretend it does."""
+    _account(monkeypatch, {"paper": OSError("connection reset by peer")})
+    row = accounts.snapshot(_settings(tmp_path, **PAPER_KEYS), "paper").as_dict()
+
+    assert row["fix"] == "broker"
+
+
+def test_an_account_with_no_keys_at_all_says_the_credentials_are_the_fix(tmp_path, monkeypatch):
+    _account(monkeypatch, {"paper": PAYLOAD})
+    row = accounts.snapshot(_settings(tmp_path, **PAPER_KEYS), "live").as_dict()
+
+    assert row["fix"] == "credentials" and "no live credentials" in row["reason"]
+
+
 def test_an_account_with_no_credentials_is_unknown_and_costs_no_call(tmp_path, monkeypatch):
     """A paper-only install must not report a live balance of zero, and must not ask."""
     calls = []

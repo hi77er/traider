@@ -47,9 +47,12 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "AlpacaBroker",
+    "MIN_NOTIONAL",
+    "authorised_notional",
     "broker_position",
     "closing_fill_from_history",
     "exit_leg_level",
+    "minimum_exposure_percent",
     "shares_for",
 ]
 
@@ -114,6 +117,10 @@ def shares_for(weight: float, price: float, equity: float) -> int:
     Whole shares rather than fractional because a bracket requires them, because
     ``risk.position_sizing.size_position`` produces them, and because a fractional
     remainder is a position the strategy does not know it has when it reconciles.
+
+    Zero is not a refusal on its own — it is the caller's cue to send the SAME weight as a
+    notional order instead (``authorised_notional``), which is what a fraction of an account
+    smaller than one share has always meant.
     """
     price = float(price or 0.0)
     equity = float(equity or 0.0)
@@ -121,6 +128,37 @@ def shares_for(weight: float, price: float, equity: float) -> int:
         return 0
     weight = min(max(float(weight or 0.0), 0.0), 1.0)
     return int(math.floor(equity * weight / price))
+
+
+#: Alpaca's own floor for a fractional order. Below it there is nothing to send, and the
+#: refusal quotes the exposure that would fix it rather than leaving the arithmetic to the
+#: reader. Checked here as a courtesy; if the broker's minimum is higher, its error says so.
+MIN_NOTIONAL = 1.0
+
+
+def authorised_notional(weight: float, equity: float) -> float:
+    """The dollars a weight authorises, to the cent.
+
+    ``weight`` is the fraction of equity the risk layer sized (``StrategyConfig.deploy_weight``),
+    so this is the size the strategy ASKED for — and the same unit a notional order is placed
+    in, which is why the two are one decision rather than a conversion. Capped at the whole
+    account for the reason ``shares_for`` caps the weight: a weight above 1 is a caller's
+    arithmetic error, not an instruction to overdraw.
+    """
+    weight = min(max(float(weight or 0.0), 0.0), 1.0)
+    return round(max(0.0, float(equity or 0.0)) * weight, 2)
+
+
+def minimum_exposure_percent(price: float, equity: float) -> float:
+    """The smallest ``MAX_EXPOSURE_PERCENT`` that affords ONE whole share.
+
+    Quoted in the refusal so the setting that would fix it is on screen: at $100,000 of equity
+    and NVDA at $226.89 this is 0.23%. A cap under it can only be traded as a fractional order.
+    """
+    equity = float(equity or 0.0)
+    if equity <= 0:
+        return 0.0
+    return float(price or 0.0) / equity * 100.0
 
 
 def closing_fill_from_history(orders, *, symbol: str, short: bool) -> Optional[ClosingFill]:
@@ -311,6 +349,30 @@ class AlpacaBroker:
             )
         return report
 
+    def resting_levels(self) -> Dict[str, Optional[float]]:
+        """The levels the broker's own exit legs sit at. Never raises.
+
+        Read when a position is adopted, and the reason it is the broker's answer rather
+        than the configuration's: the orders are what actually protect the position, and a
+        stop placed before a settings edit must keep the level it was sized for. A leg whose
+        level cannot be read is left ``None``, which the panel reports as uncovered rather
+        than as protected.
+        """
+        levels: Dict[str, Optional[float]] = {"stop": None, "take": None}
+        try:
+            legs = self.executor.resting_exits(self.symbol)
+        except (AlpacaError, OrderRefused) as exc:
+            logger.warning("%s could not read the resting exits: %s", self.label, exc)
+            return levels
+        for leg in legs or ():
+            pair = exit_leg_level(leg)
+            if not pair:
+                continue
+            kind, level = pair
+            if levels.get(kind) is None:
+                levels[kind] = float(level)
+        return levels
+
     # -- entries and exits -------------------------------------------------
     def _open(self, intent: Intent, *, client_order_id: Optional[str] = None) -> Fill:
         # Every refusal below carries ``client_order_id``. Nothing was sent, so our own name
@@ -332,20 +394,6 @@ class AlpacaBroker:
                 client_order_id=client_order_id,
             )
 
-        quantity = shares_for(intent.weight, price, equity)
-        if quantity < 1:
-            # A real live condition, not a bug: at this equity one share is unaffordable.
-            # Reported rather than rounded up, because rounding up would risk more than
-            # the strategy sized for.
-            return Fill(
-                status=REJECTED,
-                detail=(
-                    f"equity {equity:.2f} at weight {float(intent.weight):.3f} cannot afford one "
-                    f"share of {self.symbol} at {price:.2f} — entry skipped"
-                ),
-                client_order_id=client_order_id,
-            )
-
         # The bracket carries the protection to the broker, where it survives this
         # process. Without both levels there is nothing to bracket, and sending one leg
         # alone would leave the other exit non-existent.
@@ -353,16 +401,73 @@ class AlpacaBroker:
         take = _to_float(intent.take)
         bracket = bool(stop and take)
 
-        result = self.executor.place_order(
-            self.symbol,
-            "SELL" if intent.short else "BUY",
-            quantity,
-            stop_loss_price=stop if bracket else None,
-            take_profit_price=take if bracket else None,
-            reference_price=price,
-            client_order_id=client_order_id,
+        quantity = shares_for(intent.weight, price, equity)
+        notional: Optional[float] = None
+        if quantity < 1:
+            # THE CAP IS THE ORDER, and the cap is a FRACTION of equity, not a share count. When
+            # one whole share costs more than the strategy is allowed to deploy, the authorised
+            # amount still goes in — as a NOTIONAL order the broker fills with fractional shares
+            # — instead of the entry being refused. This is the size the backtest has always
+            # traded (it carries a weight, never a share count), so refusing here made live and
+            # simulated disagree at exactly the equities and prices where the cap is smallest.
+            notional = authorised_notional(intent.weight, equity)
+            if notional < MIN_NOTIONAL:
+                # Below the broker's own floor there is no order to send, and the useful answer
+                # is the setting that would fix it.
+                return Fill(
+                    status=REJECTED,
+                    detail=(
+                        f"equity {equity:.2f} at weight {float(intent.weight):.3f} authorises "
+                        f"${notional:.2f} of {self.symbol}, under Alpaca's ${MIN_NOTIONAL:.2f} "
+                        f"minimum for a fractional order — raise Max exposure to at least "
+                        f"{minimum_exposure_percent(price, equity):.2f}% to afford one share "
+                        f"${price:.2f}"
+                    ),
+                    client_order_id=client_order_id,
+                )
+            if bracket:
+                # A fractional order cannot carry a bracket, and an unprotected entry is worse
+                # than none — so this refusal names both ways out rather than sending the entry
+                # without its stop.
+                return Fill(
+                    status=REJECTED,
+                    detail=(
+                        f"equity {equity:.2f} at weight {float(intent.weight):.3f} affords "
+                        f"${notional:.2f} of {self.symbol} at {price:.2f}, less than one share "
+                        f"— and a fractional order cannot carry a stop/take bracket. Raise Max "
+                        f"exposure to at least {minimum_exposure_percent(price, equity):.2f}% "
+                        f"to afford a whole share, or configure no stop and no take-profit to "
+                        f"trade the fraction"
+                    ),
+                    client_order_id=client_order_id,
+                )
+
+        if notional is None:
+            result = self.executor.place_order(
+                self.symbol,
+                "SELL" if intent.short else "BUY",
+                quantity,
+                stop_loss_price=stop if bracket else None,
+                take_profit_price=take if bracket else None,
+                reference_price=price,
+                client_order_id=client_order_id,
+            )
+        else:
+            result = self.executor.place_order(
+                self.symbol,
+                "SELL" if intent.short else "BUY",
+                notional=notional,
+                reference_price=price,
+                client_order_id=client_order_id,
+            )
+        return self._record(
+            result,
+            side="SHORT" if intent.short else "LONG",
+            # The size the order asked for. The FILLED quantity comes back from the broker and is
+            # what the record books; this is the fallback for an order still working.
+            quantity=quantity if notional is None else 0.0,
+            notional=notional,
         )
-        return self._record(result, side="SHORT" if intent.short else "LONG", quantity=quantity)
 
     def _close(self, intent: Intent) -> Fill:
         return self._flatten(intent.reason or "exit")
@@ -382,17 +487,25 @@ class AlpacaBroker:
             )
         return self._record(result, side="EXIT", quantity=0.0)
 
-    def _record(self, result: dict, *, side: str, quantity: float) -> Fill:
+    def _record(self, result: dict, *, side: str, quantity: float,
+                notional: Optional[float] = None) -> Fill:
         """Turn an order summary into a :class:`Fill`, honestly.
 
         An order that is live at the broker but not filled yet is NOT a fill: the driver
         would otherwise book a price it never got. It comes back as ``NO_FILL`` with the
         real status, and the next reconciliation sees the position once it exists.
+
+        ``quantity`` is the size that was ASKED for and is only a fallback: a filled order's
+        quantity is the broker's own ``filled_qty``, which for a notional order is a fraction.
         """
         status = str(result.get("status") or "")
         price = _to_float(result.get("filled_avg_price"))
         filled_qty = _to_float(result.get("filled_qty")) or 0.0
         detail = f"{self.label} {side} {self.symbol} {status}"
+        if notional is not None:
+            # The order was sent as dollars, and the fill will be a fraction of a share: the
+            # summary says which so the two are not read as a rounding difference.
+            detail += f" (${float(notional):.2f} notional)"
         # The broker's ids travel with the fill whatever its status: an order that is
         # still working has one too, and it is what the log is joined on.
         ids = {

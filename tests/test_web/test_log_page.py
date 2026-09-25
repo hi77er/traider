@@ -9,6 +9,7 @@ is wanted. So the absent-file behaviour is pinned here rather than assumed.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -67,14 +68,107 @@ def _tick(settings, *, action="decided", reason="", when=None, order_ids=None, n
 # ---------------------------------------------------------------------------
 # the endpoint
 # ---------------------------------------------------------------------------
+def test_the_page_says_which_strategy_it_is_showing():
+    """There is no strategy picker on this page — it follows the lab — so the sidebar has to
+    name the strategy every panel below it belongs to. Without that line the reader has to work
+    out whose session the ticks, orders, trades and roadmap are, which is how a page ended up
+    being read as the previous strategy's."""
+    assert 'id="lg-strategy-name"' in client.get("/log").text
+
+    body = LOG_JS.read_text(encoding="utf-8")
+    assert "Strategy: ${name}" in body, "and it is filled from the payload's own name"
+    assert "lg-strategy-name" in body
+    # The empty roadmap names the strategy too: "nothing has ticked yet" over a panel that
+    # belongs to a named strategy is a sentence about the wrong thing.
+    assert "${name} has not ticked yet" in body
+
+
 def test_a_log_that_was_never_written_renders_as_an_empty_day(api_settings):
-    """The never-run case: an empty day, not a 404 and not an error."""
+    """The never-run case: an empty day, not a 404 and not an error.\n
+    The day it is empty FOR is the exchange's today, and today is in the menu whether or not the
+    loop has ever run: a new session starts empty, and a page that opened on the newest day with
+    a log would show yesterday's session under today's date.
+    """
     body = client.get("/api/v1/log").json()
 
     assert body["ok"] is True
     assert body["strategy"] == "Alpha"
-    assert body["day"], "a day is always named, even with nothing in it"
-    assert body["ticks"] == [] and body["orders"] == [] and body["days"] == []
+    assert body["day"] == body["today"], "a day is always named, and it is today"
+    assert body["ticks"] == [] and body["orders"] == []
+    assert body["days"] == [body["today"]], "today is selectable even with nothing in it"
+
+
+def test_the_log_follows_the_active_strategy_and_not_the_one_that_last_ran(tmp_path, monkeypatch):
+    """The page is scoped to ONE strategy, and it is the strategy the lab has selected.
+
+    The switch's stamp records which strategy the LAST run belonged to, and that is what the
+    monitor used to read — so after the operator moved on to another strategy the page kept
+    showing the previous one's day (its ticks, orders, trades and roadmap) beside the NEW
+    strategy's charts and account. Half a page belonging to something else cannot be read at all.
+
+    Trading is OFF here, which is exactly when the two can disagree: while it is on, the picker is
+    locked and the stamp and the active strategy are the same one by construction.
+    """
+    from src.model import rules as rules_mod
+
+    monkeypatch.setattr("src.config.trading_state.active_strategy_name", lambda: None)
+    settings = _settings(tmp_path, strategy_rules_file=str(tmp_path / "store.json"))
+    write_state(settings, {"on": False, "strategy": "Alpha", "env": "paper"})
+    ran = _tick(settings, action="decided", name="Alpha")      # the day that ran
+
+    def store(active, names):
+        rules_mod.save_store(settings, rules_mod.StrategyStore(
+            active=active,
+            strategies={n: rules_mod.RuleSet(name=n) for n in names},
+        ))
+
+    app.dependency_overrides[get_effective_settings_dep] = lambda: settings
+    try:
+        store("Beta", ["Alpha", "Beta"])                       # Beta is selected, never ran
+        beta = client.get("/api/v1/log").json()
+        beta_trades = client.get("/api/v1/trades").json()
+
+        store("Alpha", ["Alpha", "Beta"])                      # back to the one that ran
+        alpha = client.get("/api/v1/log").json()
+        alpha_trades = client.get("/api/v1/trades").json()
+    finally:
+        app.dependency_overrides.clear()
+
+    assert beta["strategy"] == "Beta"
+    assert beta["ticks"] == [], "Beta has no session to show"
+    assert beta["days"] == [beta["today"]], "and its menu is today, the day being shown"
+    assert beta["day"] == beta["today"], "and still names a day, so the page has something to draw"
+    assert beta_trades["strategy"] == "Beta" and beta_trades["trades"] == []
+
+    assert alpha["strategy"] == "Alpha"
+    assert [t["action"] for t in alpha["ticks"]] == ["decided"], "the old session comes back"
+    assert alpha["days"] == [ran["day"]], "and its day is listed again"
+    assert alpha_trades["strategy"] == "Alpha"
+
+
+def test_trading_on_keeps_the_monitor_on_the_ARMED_strategy(tmp_path, monkeypatch):
+    """While trading is on, the log belongs to the RUN, so the switch's stamp wins.
+
+    The store can be edited behind the switch's back (nothing stops a hand-edited file), and a
+    monitor that followed such an edit would show an empty page for a strategy that is trading.
+    """
+    from src.model import rules as rules_mod
+
+    monkeypatch.setattr("src.config.trading_state.active_strategy_name", lambda: None)
+    settings = _settings(tmp_path, strategy_rules_file=str(tmp_path / "store.json"))
+    write_state(settings, {"on": True, "strategy": "Alpha", "env": "paper"})
+    _tick(settings, action="decided", name="Alpha")
+    rules_mod.save_store(settings, rules_mod.StrategyStore(
+        active="Beta", strategies={n: rules_mod.RuleSet(name=n) for n in ("Alpha", "Beta")}))
+
+    app.dependency_overrides[get_effective_settings_dep] = lambda: settings
+    try:
+        body = client.get("/api/v1/log").json()
+    finally:
+        app.dependency_overrides.clear()
+
+    assert body["strategy"] == "Alpha", "what is running is what its log is about"
+    assert [t["action"] for t in body["ticks"]] == ["decided"]
 
 
 def test_a_log_that_was_DELETED_renders_as_an_empty_day(api_settings):
@@ -92,7 +186,8 @@ def test_a_log_that_was_DELETED_renders_as_an_empty_day(api_settings):
     body = client.get("/api/v1/log").json()
 
     assert body["ok"] is True
-    assert body["ticks"] == [] and body["days"] == []
+    assert body["ticks"] == []
+    assert body["days"] == [body["today"]], "still a menu, with the day being shown in it"
     assert body["day"], "still names a day, so the picker has something to show"
 
 
@@ -103,7 +198,8 @@ def test_the_day_returns_ticks_newest_first(api_settings):
     _tick(settings, action="refused", reason="stale bar", when=early)
     _tick(settings, action="decided", when=late)
 
-    body = client.get("/api/v1/log").json()
+    # Asked for BY NAME: the page opens on today, so a day that is not today has to be named.
+    body = client.get("/api/v1/log?day=2026-09-17").json()
 
     assert [tick["action"] for tick in body["ticks"]] == ["decided", "refused"], "newest first"
     assert body["day"] == "2026-09-17"
@@ -164,7 +260,8 @@ def test_another_day_can_be_asked_for(api_settings):
 
     assert body["day"] == "2026-09-16"
     assert [tick["action"] for tick in body["ticks"]] == ["off"]
-    assert body["days"] == ["2026-09-17", "2026-09-16"], "the day menu, newest first"
+    # The menu: today first (the day the page opens on, session or not), then the days it has.
+    assert body["days"] == [body["today"], "2026-09-17", "2026-09-16"]
 
 
 def test_the_log_endpoint_never_fails_on_a_strategy_with_no_files(api_settings, monkeypatch):
@@ -224,8 +321,9 @@ def test_the_ticks_table_says_which_account_each_tick_ran_for_and_shows_only_one
     assert '"account"' in body, "the column exists"
     assert "accountCell(tick.env)" in body, "and it comes from the record, not the mode in play"
     assert "all.filter(mine)" in body, "the rows are the in-play account's"
-    assert "table(\n      [\"when\", \"account\"" in body and "      ticks," in body, (
-        "and the filter is what the table renders, not a count beside it"
+    assert '["when", "account", "action"' in body, "the columns are named"
+    assert "ticks.slice(from, from + TICKS_PER_PAGE)" in body, (
+        "and what the table renders is a page of those filtered rows, not a count beside them"
     )
     assert "otherEnv()" in body, "and the empty line names whose rows were dropped"
     assert "nothing for the ${inPlayEnv()} account on this day" in body
@@ -364,6 +462,108 @@ def scoping(tmp_path_factory) -> dict:
     return json.loads(proc.stdout)
 
 
+# ---------------------------------------------------------------------------
+# a prose cell: ONE line, and open until the reader says otherwise
+# ---------------------------------------------------------------------------
+# The helpers from ``esc`` down to the account scoping, which is everything ``proseCell`` and
+# ``toggleProse`` touch and nothing that needs the page. Run in node for the reason the scoping
+# harness exists: "which cells are open" is a fact about a Set and a render in sequence, and a
+# source check cannot tell whether the second render remembers the first click.
+PROSE_START = "const esc ="
+PROSE_END = "/* The account this PAGE is about"
+
+PROSE_HARNESS = r"""
+// The three things toggleProse touches, and nothing else: the key it reads, the class it flips
+// and the closest() it climbs to find the cell. ONE cell per key, as the DOM has: a second click
+// lands on the cell the first one already opened, not on a fresh one.
+const cells = {};
+function fakeCell(key) {
+  if (cells[key]) return cells[key];
+  const classes = new Set();
+  const cell = {
+    dataset: { prose: key },
+    classList: {
+      contains: (name) => classes.has(name),
+      toggle: (name) => (classes.has(name) ? (classes.delete(name), false) : (classes.add(name), true)),
+    },
+    closest: () => cell,
+  };
+  cells[key] = cell;
+  return cell;
+}
+
+const out = {};
+out.collapsed = proseCell("a reason that runs on and on and on", "tick:A:reason");
+// A click on that cell, then the SAME row rendered again — which is what a poll does.
+out.toggled = toggleProse(fakeCell("tick:A:reason"));
+out.after_a_re_render = proseCell("a reason that runs on and on and on", "tick:A:reason");
+out.another_row = proseCell("another row's reason", "tick:B:reason");
+// A second click shuts it again.
+toggleProse(fakeCell("tick:A:reason"));
+out.after_a_second_click = proseCell("a reason that runs on and on and on", "tick:A:reason");
+out.notes = notesCell(["the bar has a volume of 0", "and a high under its low"], "C");
+out.no_notes = notesCell([], "C");
+out.escaped = proseCell("<script>alert(1)</script>", "order:x");
+// A click that lands somewhere else entirely: the page is full of them.
+out.elsewhere = toggleProse({ closest: () => null });
+
+process.stdout.write(JSON.stringify(out));
+"""
+
+
+@pytest.fixture(scope="module")
+def prose(tmp_path_factory) -> dict:
+    source = LOG_JS.read_text(encoding="utf-8")
+    start = source.index(PROSE_START)
+    script = tmp_path_factory.mktemp("prose") / "prose.js"
+    script.write_text(source[start:source.index(PROSE_END, start)] + PROSE_HARNESS,
+                      encoding="utf-8")
+    proc = subprocess.run(
+        ["node", str(script)], capture_output=True, text=True, timeout=60, check=False
+    )
+    if proc.returncode != 0 or not proc.stdout.strip():
+        raise AssertionError(
+            "prose harness failed\n"
+            f"exit={proc.returncode}\nstdout={proc.stdout}\nstderr={proc.stderr}"
+        )
+    return json.loads(proc.stdout)
+
+
+def test_a_prose_cell_renders_collapsed_and_opens_ON_ITS_ROW(prose):
+    """The cell the reader clicks, as it actually renders.
+
+    Collapsed is a ``td.prose`` with the sentence in a span the CSS clips to one line and ends
+    with the browser's ellipsis; open adds the ``open`` class. The KEY is what makes the state
+    survive: the tables are rebuilt whenever a poll brings a row, and an expansion held only in the
+    DOM would shut while it was being read.
+    """
+    collapsed = prose["collapsed"]
+    assert collapsed.startswith('<td class="prose" data-prose="tick:A:reason">')
+    assert '<span class="prose-text" tabindex="0">' in collapsed, "focusable, so the keyboard reaches it"
+    assert "a reason that runs on and on and on" in collapsed
+
+    assert prose["toggled"] is True
+    opened = prose["after_a_re_render"]
+    assert opened.startswith('<td class="prose open" data-prose="tick:A:reason">'), (
+        "the row is still open after being rendered again"
+    )
+    # ...and ONLY that row: the other rows of the same table are untouched.
+    assert prose["another_row"].startswith('<td class="prose" data-prose="tick:B:reason">')
+    # A second click shuts it, or a cell could be opened and never closed.
+    assert prose["after_a_second_click"].startswith('<td class="prose" data-prose="tick:A:reason">')
+
+
+def test_the_notes_ride_in_the_same_cell_and_are_escaped(prose):
+    """The loop's notes are prose too, so they open the same way — and every sentence is escaped
+    on the way in, whatever the broker or the provider put in it."""
+    notes = prose["notes"]
+    assert notes.startswith('<td class="prose warn" data-prose="tick:C:notes">')
+    assert "⚠" in notes and "the bar has a volume of 0" in notes
+    assert prose["no_notes"] == "<td>—</td>", "an em dash when there is nothing to say"
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in prose["escaped"]
+    assert prose["elsewhere"] is False, "a click on anything else is not a click on a cell"
+
+
 def test_the_live_page_shows_only_live_data(scoping):
     """The rule, run: with live in play, not one row of the paper account's reaches the page —
     not its equity, not a position, not a tick, not an order, not a trade.
@@ -377,7 +577,10 @@ def test_the_live_page_shows_only_live_data(scoping):
     live = scoping["live"]
 
     assert live["env"] == "live · GPRO", "the header names the account the page is scoped to"
-    assert "****LIVE" in live["accounts"] and "****PAPR" not in live["accounts"]
+    # The FIGURES say which account is on the panel now that the name line above them is gone —
+    # and they are the thing that must not be mixed: the idle account's equity is a number waiting
+    # to be read as the traded one's, which is the failure this whole group exists for.
+    assert "25000.00" in live["accounts"] and "100000.00" not in live["accounts"]
     assert "LIVECO" in live["positions"] and "PAPERCO" not in live["positions"]
     assert "live tick" in live["ticks"] and "paper tick" not in live["ticks"]
     assert "c-live" in live["orders"] and "c-paper" not in live["orders"]
@@ -395,12 +598,230 @@ def test_the_paper_page_shows_only_paper_data(scoping):
     paper = scoping["paper"]
 
     assert paper["env"] == "paper · GPRO"
-    assert "****PAPR" in paper["accounts"] and "****LIVE" not in paper["accounts"]
+    assert "100000.00" in paper["accounts"] and "25000.00" not in paper["accounts"]
     assert "PAPERCO" in paper["positions"] and "LIVECO" not in paper["positions"]
     assert "paper tick" in paper["ticks"] and "live tick" not in paper["ticks"]
     assert "c-paper" in paper["orders"] and "c-live" not in paper["orders"]
     assert "paper trade" in paper["trades"], "this account's own trade is the one that IS shown"
     assert "from the live account" not in paper["trades"], "no note about a filter that dropped none"
+
+
+def test_the_page_script_never_declares_a_function_twice():
+    """Two functions with one name, in one scope, is a silent overwrite — and the LAST one wins.
+
+    Found the hard way: a helper added for the screener lists was called ``clockText``, which
+    the countdown already used for its face. Function declarations hoist, so the new one took
+    over EVERY call site above it, and the tick timer started printing an hour and minute read
+    off a millisecond count instead of ``00:12:34``. Nothing in a browser console says so; the
+    only symptom is a number that is quietly wrong.
+
+    So the whole script is checked, not the two names: the same mistake with any other helper
+    would be just as invisible.
+    """
+    import collections
+    import re
+
+    scripts = {
+        "log.js": LOG_JS,
+        "app.js": Path(__file__).resolve().parents[2] / "src" / "web" / "static" / "app.js",
+    }
+    for name, path in scripts.items():
+        text = path.read_text(encoding="utf-8")
+        declared = re.findall(r"^\s*(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(", text, re.M)
+        twice = [key for key, count in collections.Counter(declared).items() if count > 1]
+        assert twice == [], f"{name} declares these functions more than once: {twice}"
+        assert declared, f"{name}: the pattern found no functions at all, so it proves nothing"
+
+
+def test_the_days_two_lists_sit_under_the_days_as_collapsible_references(api_settings):
+    """The day's tape, under the day menu: the biggest gainers, and the small caps doing the most
+    volume — the same two screens the Market page shows as panels.
+
+    They are REFERENCE — nothing on this page screens anything to trade — so the only control each
+    carries is the ↻ that screens it again, wearing the icon alone and sitting UNDER the title
+    rather than beside it: the column is 240px wide and the table beside it is wider, so the head is
+    the title and nothing else. The ↻ names the panel it screens, because two lists sit here and one
+    handler has to know which of them was pressed.
+    """
+    html = client.get("/log").text
+
+    menu = html.index('class="card report-menu"')
+    days = html.index('id="lg-days"')
+    gainers = html.index('id="lg-gainers-card"')
+    smallcaps = html.index('id="lg-smallcaps-card"')
+    assert menu < days < gainers < smallcaps, "in the day menu, gainers first, small caps under it"
+
+    for card, body, title, key in (
+        ("lg-gainers-card", "lg-gainers-body", "Top 10 gainers", "top_gainers"),
+        ("lg-smallcaps-card", "lg-smallcaps-body", "Small caps by volume", "small_cap_volume"),
+    ):
+        head = html[html.index(f'id="{card}"') : html.index(f'id="{body}"')]
+        assert f"<h2>{title}</h2>" in head
+        assert 'onclick="toggleCard(event)"' in head, "collapsible, the way every panel here folds"
+        assert "refreshMarketList" not in head, "the ↻ is below the title, not in the head"
+
+        # ...and the controls come before the table, under that title.
+        whole = html[html.index(f'id="{card}"') :]
+        whole = whole[: whole.index("</section>")]
+        slot = body.replace("-body", "")
+        assert f'id="{slot}-refresh"' in whole and f'id="{slot}-at"' in whole
+        assert whole.index(f'id="{slot}-refresh"') < whole.index(f'id="{slot}-at"')
+        assert whole.index(f'id="{slot}-at"') < whole.index(f'id="{slot}-list"')
+        assert 'class="muted note"' not in whole, "no description line above the table"
+
+        # The ↻, and NOTHING else in it: the button's own text is the arrow, and its title carries
+        # the sentence a caption would have needed.
+        button = re.search(rf'id="{slot}-refresh"[^>]*>([^<]*)</button>', html, re.S)
+        assert button is not None
+        assert button.group(1).strip() == "↻", "the icon alone, no caption"
+        assert "title=" in button.group(0), "so the title says what the arrow does"
+        assert f"refreshMarketList('{key}')" in button.group(0), "and which of the two it screens"
+
+    # Read-only on this page: nothing here trades from either list, and nothing edits one.
+    for gone in ("screen-order", "screen-save", "tradeScreen", "saveScreen"):
+        assert gone not in html, gone
+
+
+def test_each_list_carries_the_market_panels_columns_behind_a_sideways_scroll():
+    """The lists ARE the Market page's panels, so they carry the columns those panels rank by: the
+    day's change and the volume, plus the cap that says how big whatever did it is.
+
+    Three numbers and a rank fit a 240px menu only sideways — the column is scrolled to the reader's
+    window, not narrowed to it — and the name, the price and the exchange, which there is no room
+    for here, ride in each row's tooltip. The rows are in the screener's own order, which IS the
+    ranking, so nothing on this page sorts them.
+    """
+    js = LOG_JS.read_text(encoding="utf-8")
+    body = js[js.index("function renderScreen(list) {") :]
+    body = body[: body.index("\n  }")]
+
+    for column in ('<th class="num">chg %</th>', '<th class="num">volume</th>',
+                   '<th class="num">cap</th>', "<th>symbol</th>"):
+        assert column in body, column
+    for cell in ("percentText(row.change_percent)", "compactNumber(row.volume)",
+                 "compactNumber(row.market_cap)"):
+        assert cell in body, cell
+    assert "row.name" in body, "the name rides in the row's tooltip"
+    assert "row.exchange_name" in body, "and so does the exchange"
+    assert "index === 0" in body, "the first row is the leader, so it is marked"
+    assert ".sort(" not in body, "the screener's order is the ranking; this page does not sort"
+
+    css = (Path(__file__).resolve().parents[2] / "src" / "web" / "static"
+           / "style.css").read_text(encoding="utf-8")
+    rule = css[css.index(".lg-screen-list {") :]
+    rule = rule[: rule.index("}")]
+    assert "overflow: auto" in rule, "both ways: bounded vertically, scrolled sideways"
+    assert "min-width: 340px" in css[css.index(".lg-screen-list .lg-table {"):][:120], \
+        "a table that is allowed to be wider than the column it sits in"
+
+
+def test_each_list_is_the_market_screeners_panel_read_once_and_never_edited():
+    """The page reads each list from the Market page's own endpoint, so the two pages cannot
+    disagree about what is up today — and it reads it ONCE: a panel reaches the provider, and a
+    reload that re-screened every list would be provider traffic for numbers that only change when
+    the session does. The ↻ is the one thing that reads again, and the label beside it is when that
+    read happened rather than an age that would have to be re-rendered to stay honest.
+
+    The numbers are the screener's, and it reports the last COMPLETED regular session, so the
+    tooltip says which print this is — a list from this morning read at four in the afternoon must
+    not read as the live tape. A failed read leaves the table standing: an emptied table would say
+    "nothing matched", which is the one thing this page must not invent.
+    """
+    js = LOG_JS.read_text(encoding="utf-8")
+
+    assert 'api(`/api/v1/market/panel/${list.key}?size=${SCREEN_WINDOW}`)' in js, "the market panel"
+    assert "screenRows(payload)" in js and "slice(0, SCREEN_ROWS)" in js, \
+        "the panel's order cut to ten, because the screener's own filters can shorten the window"
+    assert 'key: "top_gainers"' in js and 'key: "small_cap_volume"' in js, "both panels, named"
+    assert "loadScreens();" in js, "read on the page's ordinary reload"
+    assert "if (readScreen(list)) renderScreenLabel(list);" in js, \
+        "and a list already on screen is only re-stamped, never re-screened"
+    assert "window.refreshMarketList = refreshMarketList;" in js, "the ↻, from the markup"
+    assert "/api/v1/automation" not in js, "the automation's list is the lab's, not this page's"
+
+    read = js[js.index("async function screenAgain(list) {") :]
+    read = read[: read.index("\n  }")]
+    assert "if (!host.innerHTML)" in read, "a failure says so only where there is no table yet"
+    assert "state.screens[list.key] = { payload, at: Date.now() }" in read, \
+        "what was read, and when — the label is that clock reading"
+
+    label = js[js.index("function renderScreenLabel(list) {") :]
+    label = label[: label.index("\n  }")]
+    assert "readTime(entry.at)" in label, "when this page read it"
+    assert "last COMPLETED regular session" in label, "and what print the numbers are"
+
+    # The ↻ wears the working state while it screens and says a failure out loud; a successful one
+    # goes through the same single read, so both paths leave the same entry behind.
+    refresh = js[js.index("async function refreshMarketList(key) {") :]
+    refresh = refresh[: refresh.index("\n  }")]
+    assert "button.disabled = true" in refresh, "the screener reaches the provider, so it shows"
+    assert 'at.textContent = "screening…"' in refresh
+    assert "screening failed" in refresh, "and a failure is said out loud"
+    assert "await screenAgain(list)" in refresh, "the one read, told which list to read"
+
+
+def test_a_sentence_in_these_tables_is_ONE_LINE_until_it_is_opened(api_settings):
+    """The cells that answer a QUESTION show their first line, and open on a click.
+
+    The refusal the broker wrote is the reason someone opens this table — "equity 100000.00 at
+    weight 0.001 affords $10.00 of NVDA at 226.89, less than one share — and a fractional order
+    cannot carry a stop/take bracket …" runs past 150 characters. Wrapping it in place was the
+    first fix and it was not enough: three lines of it under EVERY row is a table nobody can read
+    across, and the question the cell answers is only asked sometimes. So the cell shows one line,
+    the browser's own ellipsis says there is more, and a click opens it.
+
+    The three parts are all load-bearing: the COLLAPSE (one line, clipped), the OPEN state
+    (wrapped, in the same column), and the memory of WHICH cells are open — the tables are rebuilt
+    whenever a poll brings a new row, and an expansion that lived only in the DOM would snap shut
+    while it was being read. Anything the CSS gets wrong here is invisible to a source check, so
+    what is pinned is the arrangement: the ellipsis on the collapsed state, no clipping on the open
+    one, and nothing setting a minimum width, which is what pushed the table past the panel.
+    """
+    js = LOG_JS.read_text(encoding="utf-8")
+
+    assert "function proseCell(" in js, "one helper, so a prose cell is the same everywhere"
+    assert "proseCell(detail" in js, "the broker's refusal"
+    assert "proseCell(tick.reason" in js, "and a tick's reason"
+    assert "proseCell(trade.reason" in js, "and why a round trip closed"
+    assert "proseCell(`⚠" in js, "and the loop's notes"
+    assert 'class="warn">⚠' not in js and '${cell(tick.reason)}' not in js, "no nowrap leftovers"
+    # The row KEY travels with every cell, or an opened paragraph shuts on the next poll.
+    assert "openProse.has(key)" in js and "openProse.add(cell.dataset.prose)" in js
+    assert "data-prose=" in js and "cell.classList.toggle(\"open\")" in js
+    assert "tick:${tick.at}:reason" in js and "order:${key}" in js, (
+        "keys are namespaced: a trade is booked at the tick's own moment, so a bare timestamp "
+        "would let a click on one table open a cell in the other"
+    )
+    assert "window.getSelection" in js, "a click that ends a selection is not a click on the cell"
+
+    css = (Path(__file__).resolve().parents[2] / "src" / "web" / "static"
+           / "style.css").read_text(encoding="utf-8")
+    prose = css[css.index(".lg-table td.prose {"):]
+    prose = prose[: prose.index("}")]
+    assert "white-space: normal" in prose
+    assert "overflow-wrap: anywhere" in prose, "a long token still has to break"
+    assert "max-width: 46ch" in prose, "the column, not the text, decides how wide this is"
+    assert "min-width" not in prose, "no floor: the column takes what the numbers leave"
+    assert "vertical-align: top" in prose
+
+    collapsed = css[css.index(".lg-table td.prose .prose-text {"):]
+    collapsed = collapsed[: collapsed.index("}")]
+    assert "white-space: nowrap" in collapsed, "the whole point: one line"
+    assert "overflow: hidden" in collapsed and "text-overflow: ellipsis" in collapsed, (
+        "and the ellipsis has to be the browser's, so only a cell that really overflows shows one"
+    )
+    assert "cursor: pointer" in collapsed, "it is a control while it is clipped"
+
+    opened = css[css.index(".lg-table td.prose.open .prose-text {"):]
+    opened = opened[: opened.index("}")]
+    assert "white-space: normal" in opened, "opened, the sentence wraps in the same column"
+    assert "overflow: visible" in opened, "and is not clipped by the rule that made it collapsible"
+
+    nowrap = css.index(".lg-table td.bad, .lg-table td:first-child { white-space: nowrap; }")
+    assert nowrap < css.index(".lg-table td.prose {"), "declared after what it has to beat"
+
+    # And nothing is silently cut when even that does not fit: the panel scrolls.
+    assert "#lg-orders, #lg-ticks, #lg-trades { overflow-x: auto; }" in css
 
 
 def test_the_way_back_sits_at_the_top_of_the_day_menu(api_settings):
@@ -412,7 +833,7 @@ def test_the_way_back_sits_at_the_top_of_the_day_menu(api_settings):
     html = client.get("/log").text
 
     menu = html.index('class="card report-menu"')
-    back = html.index('href="/">← Back to dashboard')
+    back = html.index('href="/">← Back to the Strategy lab')
     assert menu < back < html.index("<h2>Days</h2>"), "at the top of the menu, above the days"
     assert back < html.index('id="lg-days"'), "and before the list it belongs to"
 

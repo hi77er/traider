@@ -429,8 +429,24 @@ def read_ticks(settings, name: str, when: Any = None, limit: Optional[int] = Non
     return read_lines(tick_log_path(settings, name, when), limit=limit)
 
 
-def read_orders(settings, name: str, limit: Optional[int] = None) -> List[Dict[str, Any]]:
-    return read_lines(orders_path(settings, name), limit=limit)
+def read_orders(
+    settings, name: str, when: Any = None, limit: Optional[int] = None
+) -> List[Dict[str, Any]]:
+    """The submitted orders, oldest first. ``when`` narrows it to one trading day.
+
+    The day filter lives here for the same reason it does in ``read_trades``: the monitor draws
+    ONE session, and the last day's orders under today's heading read as today's activity. A row
+    with no ``day`` at all is left out of a filtered read rather than guessed at.
+    """
+    if when is None:
+        return read_lines(orders_path(settings, name), limit=limit)
+    day = trading_day(settings, when)
+    rows = [
+        row
+        for row in read_lines(orders_path(settings, name))
+        if str(row.get("day")) == day
+    ]
+    return rows if limit is None else rows[-int(limit):]
 
 
 def read_trades(

@@ -34,6 +34,7 @@ from src.config.settings import Settings
 from src.execution import credentials
 from src.execution.config import LIVE_BASE_URL, PAPER_BASE_URL
 from src.web.app import app
+from src.web.services import loop_control
 from src.web.services import config_service, rules_service, trading_service
 
 client = TestClient(app)
@@ -52,6 +53,32 @@ def _s(tmp_path, **kwargs) -> Settings:
         strategy_rules_file=str(tmp_path / "active.json"),
         **kwargs,
     )
+
+
+@pytest.fixture(autouse=True)
+def no_real_loop(monkeypatch):
+    """Turning trading on starts a REAL ``python -m src.main`` process.
+
+    That process is its own interpreter against the real data root, whatever temp settings the
+    test passed in — so it read the repo's real switch (off), wrote an "action: off" tick into
+    the live tree of the machine's ACTIVE strategy, and exited. Every suite run therefore left a
+    session behind for the selected strategy: the Session monitor showed a tick nobody ran, and a
+    strategy that had never ticked looked as if it had.
+
+    ``loop_control._spawn`` is stubbed, so the switch's own behaviour is still exercised in full
+    (the state file, the credential re-check, the refusals) and only the process is not started.
+    """
+    calls = []
+
+    class _Process:
+        pid = 4242
+
+    def spawn(command, **kwargs):
+        calls.append(command)
+        return _Process()
+
+    monkeypatch.setattr(loop_control, "_spawn", spawn)
+    return calls
 
 
 @pytest.fixture
@@ -575,52 +602,63 @@ def test_a_retired_key_is_dropped_not_rejected(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# the dashboard wiring (static: the ids the JS binds to must exist)
+# the wiring (static: the ids the JS binds to must exist, and the ones that
+# must NOT exist are the point)
 # ---------------------------------------------------------------------------
-def test_the_trading_switch_and_its_lock_are_wired_into_the_dashboard():
+def test_the_lab_has_no_trading_controls_at_all():
+    """The Strategy lab builds a strategy; the Session monitor trades one.
+
+    The Trading panel — the mode, the master switch, the flatten button, the account's boxes and
+    the working orders — was removed from this page WHOLE, so everything it owned must be gone
+    from the markup AND from the script: an id the JS still binds to is a page that breaks, and a
+    write path left behind is a second button on the switch that nobody can see.
+
+    Pinned as a list because this is exactly the kind of removal that half-happens: the panel
+    goes, and the handler that armed the account stays reachable from somewhere else.
+    """
     html = (ROOT / "src" / "web" / "templates" / "index.html").read_text(encoding="utf-8")
-    assert 'id="trading-toggle"' not in html, "the master switch is a box in the panel now"
-    # ONE panel for everything about trading. It used to be two — a switch card under the chart
-    # and the account panel under the backtest — and the same facts were printed in both, which
-    # is how a note claiming the Alpaca executor was unimplemented survived in one of them.
-    assert 'id="trading-panel"' not in html, "the separate switch card is gone"
-    live = html.index('id="live-card"')
-    body = html.index('id="live-body"')
-    # The flatten control lives in the HEAD, because it is the one action that is not the switch's
-    # and it has to stay reachable.
-    at = html.index('id="trading-flatten-btn"')
-    assert live < at < body, "the flatten control goes in the head"
-    assert 'id="trading-off-btn"' not in html, "the Trading box is the only way to stop trading"
-    assert html.index('id="trading-facts"') > body, "trading-facts is panel body content"
-    # The Execution panel is gone: the header carries the state, and the armed
-    # panel under the chart carries the resolved target.
-    for gone in ("execution-card", "exec-state-line", "exec-msg", "exec-facts", "exec-lock-note"):
-        assert f'id="{gone}"' not in html, f"{gone} belongs to the removed Execution panel"
-    # ...and its renderer went with it, so nothing writes to ids that do not exist.
     js = (ROOT / "src" / "web" / "static" / "app.js").read_text(encoding="utf-8")
-    assert "renderExecutionPanel" not in js
-    assert "exec-lock-note" not in js and "exec-facts" not in js
-    # The armed sentence above the boxes — "PAPER account · alpaca · since 08:52 UTC on
-    # 2026-09-21" — is gone too: the Mode box names the account and the Trading box says whether
-    # it is armed, so the line was both facts a second time, in the long form.
-    assert 'id="trading-msg"' not in html
-    assert "trading-msg" not in js, "and nothing writes to the id that is gone"
+
+    for gone in ("live-card", "live-body", "live-state", "live-protection", "live-metrics",
+                 "live-refresh", "trading-facts", "trading-flatten-btn", "trading-toggle",
+                 "trading-panel", "trading-msg", "open-count", "exec-env"):
+        assert f'id="{gone}"' not in html, f"#{gone} belonged to the removed Trading panel"
+    for gone in ("renderTradingPanel", "renderLiveDetail", "stopAndFlatten", "onModeBoxClick",
+                 "toggleTrading", "liveTile", "scheduleLivePoll", "runLivePoll", "loadLive",
+                 "livePanelVisible", "execRow", "TraiderSwitch.flip("):
+        assert gone not in js, f"{gone} is dead code from the removed panel"
+    # The panel's styles went with it.
+    css = (ROOT / "src" / "web" / "static" / "style.css").read_text(encoding="utf-8")
+    for gone in ("#live-state", "#live-protection", "#live-metrics", ".live-metrics",
+                 ".strategy-slot > #live-card", "#trading-flatten-btn"):
+        assert gone not in css, f"{gone} styled the removed panel"
+
+    # The Session monitor carries all of it now — the same boxes, built by the shared module.
+    log_html = (ROOT / "src" / "web" / "templates" / "log.html").read_text(encoding="utf-8")
+    log_js = (ROOT / "src" / "web" / "static" / "log.js").read_text(encoding="utf-8")
+    assert 'id="lg-accounts"' in log_html
+    assert "TraiderSwitch.envTile(" in log_js and "TraiderSwitch.tradeTile(" in log_js
+    assert '"toggleTrading()"' in log_js, "the Trading box calls the master switch"
+
+
+def test_the_lab_still_reads_the_lock_that_freezes_its_configuration():
+    """Trading ON freezes every configuration surface, and that is the ONE fact this page still
+    borrows from trading: the server refuses a write with a 409, and the page mirrors it so nothing
+    is clickable that would be refused. Read it, never act on it — the lab cannot arm anything."""
+    js = (ROOT / "src" / "web" / "static" / "app.js").read_text(encoding="utf-8")
 
     assert "function applyConfigLock()" in js
-    # The lock is applied from ONE place, over one shared list of buttons.
     assert "!!state.tradingLocked" in js
+    assert 'api("/api/v1/trading")' in js, "the lock comes from the trading read"
+    assert "/api/v1/trading/on" not in js and "/api/v1/trading/off" not in js
     for key in ("account-save", "save-pconfig", "save-rules", "save-risk"):
         assert f'"{key}"' in js
-    # The box that IS the switch is what stops trading, and a box is never disabled — a disabled
-    # switch could not be turned off, which is the one control that has to survive every lock.
-    assert '"toggleTrading()"' in js, "the Trading box calls the master switch"
+    assert "classList.toggle(\"trading-on\"" in js
 
     css = (ROOT / "src" / "web" / "static" / "style.css").read_text(encoding="utf-8")
-    assert ".exec-state" not in css, "the removed panel's styles should not linger"
-    # ``body.trading-on`` survives as the lock's hook (the switch still sets it) but nothing is
-    # styled by it any more: the green edge it drew around the trading section is gone, because
-    # the panel's own Trading box reports that state — and pulses.
-    assert "classList.toggle(\"trading-on\"" in js
+    assert ".exec-state" not in css, "the removed Execution panel's styles should not linger"
+    # ``body.trading-on`` survives as the lock's hook (applyConfigLock still sets it) but nothing
+    # is styled by it any more: the green edge it drew is gone.
     assert "body.trading-on" not in css
 
 
@@ -638,7 +676,7 @@ def test_the_header_carries_no_trading_controls_at_all():
 
     for gone in ("exec-env", "trading-toggle", "open-count"):
         assert f'id="{gone}"' not in head, f"{gone} belongs to the Trading panel now"
-    assert "📈 TRAIDER" in head, "the identity stays"
+    assert ">TRAIDER<" in head, "the identity stays"
     for el in ("open-account-settings",):
         assert html.index(el) > actions, f"{el} must stay in the right group"
     # The global (.env) settings form is gone: infrastructure settings are edited in
@@ -648,7 +686,7 @@ def test_the_header_carries_no_trading_controls_at_all():
     assert "global-settings-backdrop" not in html
     # The logo is the product name, not the page name.
     assert "TRAIDER Dashboard" not in html
-    assert "📈 TRAIDER<" in html
+    assert "<h1>TRAIDER</h1>" in html
 
 
 def test_the_boxes_are_never_styled_per_state():
