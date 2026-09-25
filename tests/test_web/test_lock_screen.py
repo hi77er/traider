@@ -524,6 +524,7 @@ out.createMode = {
   mode: Auth.state.mode, step: Auth.state.step, showing: showed(),
   sub: find(card(), ".lock-sub").textContent,
   hint: find(card(), ".lock-hint").textContent,
+  note: find(card(), ".lock-note").textContent,
   enter: enterKey().textContent,
   links: find(card(), ".lock-links").children.map((child) => child.textContent),
 };
@@ -567,6 +568,7 @@ await Auth.start({ page: true });
 out.unlockMode = {
   mode: Auth.state.mode, enter: enterKey().textContent,
   links: find(card(), ".lock-links").children.map((c) => c.textContent),
+  note: find(card(), ".lock-note").textContent,
 };
 calls.length = 0;
 replies["/api/v1/auth/login"] = { status: 200, body: { ok: true, signed_in: true } };
@@ -579,7 +581,10 @@ out.unlocked = {
 
 // 6. Change: the current PIN is checked WHERE IT IS TYPED, so a wrong one is answered there.
 Auth.open("change");
-out.changeAsksFirst = { mode: Auth.state.mode, step: Auth.state.step, sub: find(card(), ".lock-sub").textContent };
+out.changeAsksFirst = {
+  mode: Auth.state.mode, step: Auth.state.step, sub: find(card(), ".lock-sub").textContent,
+  note: find(card(), ".lock-note").textContent,
+};
 calls.length = 0;
 replies["/api/v1/auth/login"] = { status: 401, body: { ok: false, reason: "wrong PIN — 4 attempt(s) left" } };
 await enterPin("0000");
@@ -715,6 +720,29 @@ def test_setting_the_pin_signs_you_in_and_takes_the_card_away(modes):
     assert modes["createDone"]["showing"] is False
     assert modes["createDone"]["unlocked"] == 1
     assert "PIN is set" in modes["createDone"]["toast"]
+
+
+def test_the_create_card_says_what_a_pin_may_be(modes):
+    """Asked for in as many words: somebody choosing a PIN should not have to guess its length."""
+    note = modes["createMode"]["note"]
+    assert "4-12 digits" in note
+    assert "longer is better" in note
+    assert "one digit repeated" in note and "1234" in note
+    assert "never shown again" in note, "and what will happen to it"
+
+
+def test_the_change_card_says_what_the_change_costs(modes):
+    note = modes["changeAsksFirst"]["note"]
+    assert "4-12 digits" in note
+    assert "every OTHER session" in note, "which is the consequence worth knowing before you do it"
+
+
+def test_the_unlock_card_says_where_a_forgotten_pin_is_reset(modes):
+    """Text, not a button: running it needs the machine, so naming it helps only the operator."""
+    note = modes["unlockMode"]["note"]
+    assert "auth reset" in note
+    assert "data/" in note, "and where that command has to be run from"
+    assert modes["unlockMode"]["links"] == ["Change PIN"], "no reset button, then"
 
 
 def test_a_confirmation_that_does_not_match_sends_nothing(modes):

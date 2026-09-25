@@ -171,6 +171,16 @@
 
 .lock-hint.empty { display: none; }
 
+/* What a PIN may be, and how to recover a forgotten one. Deliberately the quietest line on the
+ * card: it is a caption for the keypad, not something to read before typing four digits. */
+.lock-note {
+  margin: 12px 0 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--muted);
+  opacity: 0.7;
+}
+
 /* The other things the card can do — change the PIN, go back, reach the dashboard. Text buttons
  * rather than controls: they sit under the keypad, and the keypad is the thing to press. */
 .lock-links {

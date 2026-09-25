@@ -93,6 +93,7 @@
     const dots = el("div", "lock-dots empty");
     const keys = el("div", "lock-keys");
     const message = el("p", "lock-message");
+    const note = el("p", "lock-note");
     const links = el("div", "lock-links");
 
     KEYPAD.forEach((key) => {
@@ -130,10 +131,11 @@
     card.appendChild(dots);
     card.appendChild(keys);
     card.appendChild(message);
+    card.appendChild(note);
     card.appendChild(links);
     card.appendChild(el("div", "lock-foot", "Local portal · the bot keeps running while locked"));
 
-    card._parts = { sub, hint, dots, message, keys, links, card };
+    card._parts = { sub, hint, dots, message, note, keys, links, card };
     return card;
   }
 
@@ -191,13 +193,31 @@
     return links;
   }
 
+  /* The two things somebody looking at this card would otherwise have to guess: what a PIN may be,
+   * and what to do when it has been forgotten. The second one is TEXT and not a button on purpose —
+   * a "reset it" button on a public page is the bypass the CLI exists to avoid, while a line naming
+   * the command is no help at all to anybody who cannot already run it. */
+  function noteText() {
+    if (state.mode === "unlock") {
+      return "Forgotten it? On the machine that runs the bot — the one with data/ beside it — run "
+        + ".venv/bin/python -m src.web.auth reset";
+    }
+    if (state.mode === "create") {
+      return "4-12 digits, and longer is better. Not one digit repeated, and not 1234 or 123456. "
+        + "Stored salted and hashed, and never shown again.";
+    }
+    return "4-12 digits, and longer is better. Not one digit repeated, and not 1234 or 123456. "
+      + "Changing it signs out every OTHER session, so this one stays signed in.";
+  }
+
   function paint() {
     if (!state.overlay) return;
-    const { sub, hint, dots, message, keys, links, card } = state.overlay._parts;
+    const { sub, hint, dots, message, note, keys, links, card } = state.overlay._parts;
     sub.textContent = subText();
     const hint_ = hintText();
     hint.textContent = hint_;
     hint.className = "lock-hint" + (hint_ ? "" : " empty");
+    note.textContent = noteText();
     dots.className = "lock-dots" + (state.pin ? "" : " empty");
     dots.replaceChildren(...[...state.pin].map(() => el("span", "lock-dot")));
     keys.querySelectorAll("button").forEach((button) => {
