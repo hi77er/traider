@@ -53,3 +53,26 @@ def _no_http(monkeypatch):
         )
 
     monkeypatch.setattr(requests.Session, "request", refuse, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _no_pin(monkeypatch, tmp_path_factory):
+    """No test may see a REAL ``data/auth.json`` — the lock must never leak into the suite.
+
+    The gate reads the store at the path the settings name, and the settings are the machine's: if
+    the portal's owner runs the CLI on this checkout, every test would start answering 401 and the
+    failure would look like a broken endpoint. Pointing the gate at a throwaway directory makes
+    that impossible; a test that wants the lock ON turns it on deliberately (see
+    ``test_web/test_auth_gate.py``).
+    """
+    from src.config.settings import Settings
+    from src.web import middleware
+
+    store = tmp_path_factory.mktemp("auth-guard")
+    settings = Settings(
+        _env_file=None,
+        data_dir=str(store),
+        historical_data_dir=str(store / "historical"),
+    )
+    monkeypatch.setattr(middleware, "get_settings", lambda: settings)
+    yield

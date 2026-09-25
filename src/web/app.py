@@ -19,7 +19,9 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
+from src.web import middleware as auth_middleware
 from src.web.routes import account as account_routes
+from src.web.routes import auth as auth_routes
 from src.web.routes import automation as automation_routes
 from src.web.routes import chart as chart_routes
 from src.web.routes import backtest as backtest_routes
@@ -66,6 +68,8 @@ async def no_store_dashboard(request, call_next):
 
 
 app.mount("/static", StaticFiles(directory=_STATIC), name="static")
+app.include_router(auth_routes.page_router)
+app.include_router(auth_routes.router)
 app.include_router(page_routes.router)
 app.include_router(log_routes.router)
 app.include_router(dataset_routes.router)
@@ -81,6 +85,11 @@ app.include_router(automation_routes.router)
 app.include_router(signal_routes.router)
 app.include_router(backtest_routes.router)
 app.include_router(report_routes.router)
+
+# The gate goes on LAST, which makes it the OUTERMOST middleware: a request that has no session is
+# refused before any route — or any other middleware — gets to see it. It does nothing at all until
+# ``data/auth.json`` exists, so an install that has never run the CLI is unchanged.
+auth_middleware.install(app)
 
 
 if __name__ == "__main__":

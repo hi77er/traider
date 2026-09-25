@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>TRAIDER — locked</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/auth.css">
+</head>
+<body class="lock-page">
+  <!-- The card is built by auth.js, the same component the pages raise over themselves: a cold
+       start and an expired session must look and behave identically, and one copy is how. -->
+  <div id="lock-root"></div>
+
+  <script src="/static/auth.js"></script>
+  <script>
+    (function () {
+      const next = new URLSearchParams(window.location.search).get("next");
+      Auth.start({
+        onUnlock: function () {
+          // Straight back to whatever was asked for: a session that ended mid-read should not
+          // cost the reader their page as well.
+          window.location.replace(next && next.startsWith("/") ? next : "/");
+        },
+      });
+    })();
+  </script>
+</body>
+</html>

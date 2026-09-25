@@ -8,6 +8,7 @@ Where to look, and what each document is for.
 | [`QUICKSTART.md`](QUICKSTART.md) | Setup from a clean checkout, and the two commands that start the dashboard and the bot |
 | [`TRAIDER_PLAN.md`](TRAIDER_PLAN.md) | The phase plan, the file tree, and the full settings reference |
 | [`docs/execution-loop.md`](docs/execution-loop.md) | The live loop: agreed design, the tick order, the gate policy, and its build order |
+| [`docs/portal-auth.md`](docs/portal-auth.md) | The portal's PIN lock: why the loop is unaffected by it, the store shape, the idle auto-lock, and how the PIN is changed or reset (planned, not built) |
 | [`DEPENDENCY_GRAPH.md`](DEPENDENCY_GRAPH.md) | What has to exist before what, and which pieces block which |
 | [`CHECKLIST.md`](CHECKLIST.md) | Task tracker, with what is done and what is deferred |
 | [`SUMMARY.txt`](SUMMARY.txt) | One-page overview for a reader who wants the shape of the project |
