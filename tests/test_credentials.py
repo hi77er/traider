@@ -45,7 +45,7 @@ def _s(tmp_path, **kwargs) -> Settings:
 @pytest.fixture(autouse=True)
 def store_in_tmp(tmp_path, monkeypatch):
     """No test may write into the repo's real data directory."""
-    monkeypatch.setattr(state_files, "state_path", lambda s, name: tmp_path / name)
+    monkeypatch.setattr(state_files, "state_path", lambda s, name, folder="": tmp_path / folder / name)
     return tmp_path
 
 

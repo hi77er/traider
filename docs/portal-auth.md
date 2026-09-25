@@ -57,7 +57,7 @@ Decisions already fixed, and the reasons they matter:
   stops the rest — another local port is a different origin on the same site, which is the realistic
   attack on a localhost dashboard. A request with no `Origin` is not a browser, and gains nothing by
   lying, because without the cookie it has no session.
-- **Auth is enabled only when `data/auth.json` exists.** A fresh checkout and the 1400-test suite
+- **Auth is enabled only when `data/auth/auth.json` exists.** A fresh checkout and the 1400-test suite
   are unaffected; `disable` turns it off again.
 - **The session carries two clocks** — a sliding `last_seen` and a hard `exp` — and the middleware
   enforces the idle window from them (see stage 3). Stage 1 slides `last_seen` on any authenticated
@@ -232,7 +232,7 @@ Minutes`, 1-30 whole minutes, default 15. It lives in `data/account/account.json
 places that care: the middleware refusing a stale session, the login that tells the browser the
 window, `GET /api/v1/auth/status`, which is what the Security card prints, and the heartbeat's own
 answer. The bounds come from the field's own pydantic constraints, so the form's `min`/`max` and the
-server's validation cannot drift. `data/auth.json` still carries an `idle_seconds` from when it was
+server's validation cannot drift. `data/auth/auth.json` still carries an `idle_seconds` from when it was
 created, and it is only the fallback for an object without the setting.
 
 **A change reaches the browser, not just the server.** The browser is the half that raises the card,
@@ -295,7 +295,7 @@ no part of it reads or writes `data/trading.json`.
    `GET /api/v1/auth/status` so the window has one source of truth rather than a 15 hard-coded in
    the browser. **The heartbeat is the only slide** — the middleware's slide-on-any-request is gone,
    and the browser's interval is derived from the window.
-9. The CLI's `idle <minutes>` verb (stored beside the KDF params in `auth.json`) and the docs.
+9. The CLI's `idle <minutes>` verb (stored beside the KDF params in `auth/auth.json`) and the docs.
 
 ### What remains, exactly
 

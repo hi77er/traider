@@ -602,7 +602,7 @@ def test_a_switch_ends_the_tick_at_its_own_gate(tmp_path, monkeypatch):
     it: the next boundary re-reads the store and trades the new symbol."""
     from src.config.trading_state import write_state as arm_state
 
-    monkeypatch.setattr(state_files, "state_path", lambda s, name: tmp_path / name)
+    monkeypatch.setattr(state_files, "state_path", lambda s, name, folder="": tmp_path / folder / name)
     monkeypatch.setattr(orchestrator, "active_strategy_name", lambda: "Alpha")
     settings = _settings(tmp_path)
     arm_state(settings, {"on": True, "since": "2024-01-05T13:00:00+00:00",
@@ -629,7 +629,7 @@ def test_a_switch_that_could_not_be_made_does_not_stop_the_tick(tmp_path, monkey
     was due, not made, and the bot still has something it can trade."""
     from src.config.trading_state import write_state as arm_state
 
-    monkeypatch.setattr(state_files, "state_path", lambda s, name: tmp_path / name)
+    monkeypatch.setattr(state_files, "state_path", lambda s, name, folder="": tmp_path / folder / name)
     monkeypatch.setattr(orchestrator, "active_strategy_name", lambda: "Alpha")
     monkeypatch.setattr(orchestrator, "execution_status", lambda s: {"ok": True})
     settings = _settings(tmp_path)

@@ -89,7 +89,7 @@ def state_file(tmp_path, monkeypatch):
     `state_files.state_path`, so patching it there covers the switch AND the
     credential verdicts — no test may touch the repo's real data directory.
     """
-    monkeypatch.setattr(state_files, "state_path", lambda s, name: tmp_path / name)
+    monkeypatch.setattr(state_files, "state_path", lambda s, name, folder="": tmp_path / folder / name)
     return tmp_path / "trading.json"
 
 

@@ -303,7 +303,7 @@ def test_same_origin_posts_still_work(client, locked):
 def test_the_lock_never_touches_the_trading_switch(client, settings, locked):
     """The invariant the whole design rests on: the loop reads that file, and never this module."""
     trading_state.write_state(settings, {"on": True, "strategy": "NVDA", "env": "paper"})
-    switch = auth_service.store_path(settings).parent / "trading.json"
+    switch = trading_state.state_path(settings)
     before = switch.read_text(encoding="utf-8")
 
     client.get("/log")                                     # refused

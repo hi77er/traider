@@ -133,7 +133,7 @@ def armed(tmp_path, monkeypatch):
     ``active_strategy_name`` is patched because it reads the real strategy store; the loop
     only needs the two answers "which strategy is active" and "which one was stamped".
     """
-    monkeypatch.setattr(state_files, "state_path", lambda s, name: tmp_path / name)
+    monkeypatch.setattr(state_files, "state_path", lambda s, name, folder="": tmp_path / folder / name)
     monkeypatch.setattr(orchestrator, "active_strategy_name", lambda: STRATEGY)
 
     def build(**kw):
@@ -168,7 +168,7 @@ class Calls:
 # the switch, first
 # ---------------------------------------------------------------------------
 def test_nothing_happens_at_all_while_trading_is_off(tmp_path, monkeypatch, armed):
-    monkeypatch.setattr(state_files, "state_path", lambda s, name: tmp_path / name)
+    monkeypatch.setattr(state_files, "state_path", lambda s, name, folder="": tmp_path / folder / name)
     settings = _settings(tmp_path)
     save_dataset(settings, _frame(SESSION), "AAPL", "1h")
     calls = Calls()

@@ -25,9 +25,16 @@ from typing import Any, Dict
 logger = logging.getLogger(__name__)
 
 
-def state_path(settings, filename: str) -> Path:
-    """``<data root>/<filename>`` — beside ``historical/`` and ``backtest_results/``."""
-    return Path(settings.historical_data_dir).resolve().parent / filename
+def state_path(settings, filename: str, folder: str = "") -> Path:
+    """``<data root>/[<folder>/]<filename>`` — beside ``historical/`` and ``backtest_results/``.
+
+    Runtime state gets a folder of its own under the data root — ``auth/``, ``trading/``,
+    ``account/``, ``strategies/automation/`` — so the root reads as a list of folders rather than a
+    pile of loose files whose owners have to be remembered. ``write_json`` creates whatever is
+    missing, so a caller names the folder and nothing else.
+    """
+    root = Path(settings.historical_data_dir).resolve().parent
+    return root / folder / filename if folder else root / filename
 
 
 def read_json(path: Path, default: Dict[str, Any]) -> Dict[str, Any]:

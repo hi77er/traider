@@ -18,7 +18,7 @@ import pytest
 
 from src.config.settings import Settings
 from src.config import account as account_mod
-from src.config.trading_state import write_state
+from src.config import trading_state
 from src.web.services import auth_service
 
 PIN = "4821"
@@ -73,13 +73,13 @@ def test_the_pin_is_not_readable_from_what_is_stored(armed):
     assert len(_store(armed)["secret"]) == 64, "the cookie-signing key is per-install"
 
 
-def test_the_store_lands_beside_the_switch_and_not_on_it(armed):
-    """Trading state and lock state must never be the same file."""
+def test_the_store_lands_in_its_own_folder_and_not_on_the_switch(armed):
+    """Trading state and lock state must never be the same file — or even the same folder."""
     path = auth_service.store_path(armed)
 
     assert path.name == "auth.json"
-    assert path.parent.name == "data"
-    assert path != (path.parent / "trading.json"), "the switch is a different file entirely"
+    assert path.parent.name == "auth", "runtime state gets a folder of its own"
+    assert path != trading_state.state_path(armed), "the switch is a different file entirely"
 
 
 def test_a_second_set_refuses_rather_than_overwrites(armed):
@@ -263,8 +263,8 @@ def test_a_pin_change_leaves_the_machine_token_alone(armed):
 
 def test_none_of_this_touches_the_trading_switch(settings):
     """The invariant the whole design rests on: the loop reads that file, and not this module."""
-    write_state(settings, {"on": True, "strategy": "NVDA", "env": "paper"})
-    switch = auth_service.store_path(settings).parent / "trading.json"
+    trading_state.write_state(settings, {"on": True, "strategy": "NVDA", "env": "paper"})
+    switch = trading_state.state_path(settings)
     before = switch.read_text(encoding="utf-8")
 
     auth_service.create(settings, PIN, at=_at())

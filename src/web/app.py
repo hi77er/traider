@@ -88,7 +88,7 @@ app.include_router(report_routes.router)
 
 # The gate goes on LAST, which makes it the OUTERMOST middleware: a request that has no session is
 # refused before any route — or any other middleware — gets to see it. It does nothing at all until
-# ``data/auth.json`` exists, so an install that has never run the CLI is unchanged.
+# ``data/auth/auth.json`` exists, so an install that has never run the CLI is unchanged.
 auth_middleware.install(app)
 
 

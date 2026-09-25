@@ -8,7 +8,8 @@ Two rules the rest of the system depends on:
 * **This is web-app state, and only that.** It never reads or writes ``trading.json`` — a lockout, a
   sign-out or a PIN change must not be able to stop, start or alter a trading run. The loop is a
   separate process that reads files and does not know this module exists.
-* **"Enabled" means the store exists.** No ``data/auth.json``, no enforcement: a fresh checkout and
+* **"Enabled" means the store exists.** No ``data/auth/auth.json``, no enforcement: a fresh
+  checkout and
   the whole test suite behave exactly as before until someone deliberately creates it, with the CLI.
 
 The PIN is never stored or logged. What is stored is scrypt over it with a per-install salt, with
@@ -33,6 +34,7 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "AUTH_FILENAME",
+    "AUTH_FOLDER",
     "DEFAULT_ABSOLUTE_SECONDS",
     "DEFAULT_IDLE_SECONDS",
     "KDF",
@@ -56,9 +58,10 @@ __all__ = [
     "verify",
 ]
 
-#: Beside ``trading.json`` and ``loop.lock`` — runtime state, never in git (the root-anchored
+#: In a folder of its own under the data root: runtime state, never in git (the root-anchored
 #: ``/data/`` ignore rule covers it), and never the same file as the trading switch.
 AUTH_FILENAME = "auth.json"
+AUTH_FOLDER = "auth"
 
 #: How the PIN is stretched. PBKDF2-HMAC-SHA256 rather than scrypt, and not by preference: this
 #: project runs the system Python 3.9.6, which links LibreSSL 2.8.3 — ``hashlib.scrypt`` does not
@@ -97,8 +100,8 @@ WEAK_PINS = ("1234", "123456", "12345678", "87654321")
 # the store
 # ---------------------------------------------------------------------------
 def store_path(settings) -> Path:
-    """``<data root>/auth.json`` — the presence of which is the whole on/off switch."""
-    return state_files.state_path(settings, AUTH_FILENAME)
+    """``<data root>/auth/auth.json`` — the presence of which is the whole on/off switch."""
+    return state_files.state_path(settings, AUTH_FILENAME, AUTH_FOLDER)
 
 
 def load(settings) -> Optional[Dict[str, Any]]:

@@ -68,7 +68,7 @@ def no_real_loop(monkeypatch):
 
 @pytest.fixture
 def state_file(tmp_path, monkeypatch):
-    monkeypatch.setattr(state_files, "state_path", lambda s, name: tmp_path / name)
+    monkeypatch.setattr(state_files, "state_path", lambda s, name, folder="": tmp_path / folder / name)
     return tmp_path / "trading.json"
 
 
