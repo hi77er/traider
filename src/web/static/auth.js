@@ -306,6 +306,21 @@
     shake();
   }
 
+  /* Why a request failed, in words that name the cause. A 404 is worth calling out by name: it
+   * means the running dashboard is OLDER CODE than this page — no endpoint for the request — and
+   * without this it arrives as "that was refused", which reads exactly like a rejected PIN and
+   * sends the operator hunting for a problem with what they typed. */
+  function refusalText(answer, fallback) {
+    const payload = answer && answer.payload;
+    if (payload && payload.reason) return payload.reason;
+    const status = answer && answer.status;
+    if (status === 404 || status === 405) {
+      return "the dashboard has no such request — it is running older code than this page. "
+        + "Restart the dashboard and try again.";
+    }
+    return status ? fallback + " (the portal answered " + status + ")" : fallback;
+  }
+
   /* Move to the next entry of the flow: same card, different question. */
   function stepTo(role) {
     state.step = FLOWS[state.mode].indexOf(role);
@@ -335,7 +350,7 @@
         return refuse("could not reach the portal (" + err.message + ")");
       }
       if (!answer.payload || !answer.payload.ok) {
-        return refuse((answer.payload && answer.payload.reason) || "that PIN was refused");
+        return refuse(refusalText(answer, "that PIN was refused"));
       }
       state.currentPin = state.pin;
       state.busy = false;
@@ -373,7 +388,7 @@
       unlock();
       return;
     }
-    refuse((answer.payload && answer.payload.reason) || "that PIN was refused");
+    refuse(refusalText(answer, "that PIN was refused"));
   }
 
   async function sendNew(pin) {
@@ -391,7 +406,7 @@
     }
     state.busy = false;
     if (!answer.payload || !answer.payload.ok) {
-      return refuse((answer.payload && answer.payload.reason) || "that was refused");
+      return refuse(refusalText(answer, "that was refused"));
     }
     const unchanged = Boolean(answer.payload.unchanged);
     state.pin = "";

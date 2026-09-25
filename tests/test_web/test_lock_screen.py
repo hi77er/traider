@@ -559,6 +559,19 @@ Auth.open("create");
 await enterPin("1234");
 out.createWeak = { calls: calls.length, step: Auth.state.step, reason: Auth.state.reason };
 
+// 4b. A 404 from the server is NOT a refused PIN, however alike the two look, and the card has to
+// say which one it is: it means the dashboard is running code older than this page.
+calls.length = 0;
+Auth.open("create");
+replies["/api/v1/auth/setup"] = { status: 404, body: { detail: "Not Found" } };
+await enterPin("482482");
+await enterPin("482482");
+out.createStaleDashboard = {
+  step: Auth.state.step, reason: Auth.state.reason, showing: showed(),
+  posted: calls.map((call) => call.path),
+};
+delete replies["/api/v1/auth/setup"];
+
 // 5. A PIN exists and the session is gone: the card is a keypad, and the keypad opens it.
 // A page load starts from an unlocked component, so the harness stands the card down first: a
 // single instance driven through every flow in turn is not the same thing as five page loads.
@@ -756,6 +769,14 @@ def test_a_pin_the_server_would_refuse_is_answered_without_a_round_trip(modes):
     assert modes["createWeak"]["calls"] == 0
     assert modes["createWeak"]["step"] == 0
     assert "first PIN anyone tries" in modes["createWeak"]["reason"]
+
+
+def test_a_stale_dashboard_is_named_as_such_and_not_as_a_refused_pin(modes):
+    """The trap this was found by: a 404 and a rejected PIN produced the same words."""
+    assert modes["createStaleDashboard"]["posted"] == ["/api/v1/auth/setup"], "it did ask"
+    assert "Restart the dashboard" in modes["createStaleDashboard"]["reason"]
+    assert "refused" not in modes["createStaleDashboard"]["reason"]
+    assert modes["createStaleDashboard"]["showing"] is True, "and the PIN is still there to retry"
 
 
 def test_unlock_still_asks_for_the_pin_and_offers_the_change(modes):
