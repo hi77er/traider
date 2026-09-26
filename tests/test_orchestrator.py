@@ -28,7 +28,7 @@ from src.data.dataset import save_dataset
 from src.execution.accounts import EnvAccount
 from src.scheduler import lease as lease_mod
 from src.scheduler import orchestrator
-from src.strategy.broker import SimulatedBroker
+from src.strategy.broker import BrokerPosition, ClosingFill, SimulatedBroker
 from src.strategy.config import StrategyConfig
 from src.strategy.engine import StrategyEngine
 from src.strategy.live import LiveDriver
@@ -622,6 +622,41 @@ def test_a_closed_position_records_the_money_it_made(tmp_path, armed):
     # And the size is on the ORDER row too, which is where a reader asks what an exit sold.
     orders = orchestrator.store.read_orders(settings, STRATEGY)
     assert [o["filled_qty"] for o in orders] == [1.0, 1.0], orders
+
+
+def test_an_exit_the_broker_made_records_the_money_it_made(tmp_path, armed):
+    """The other way a live position ends: a resting exit fires between two ticks.
+
+    The loop never placed that order, so there is no order row to read a size off — until the
+    driver started reporting the size on the tick, the trade row carried no quantity and the
+    P/L column was a dash for a round trip the broker had priced exactly.
+    """
+    settings = armed()
+
+    class _TookUsOut(SimulatedBroker):
+        """Flat at the broker, with the leg that did it on record."""
+
+        def position(self):
+            return BrokerPosition()
+
+        def closing_fill(self, short):
+            return ClosingFill(price=97.25, reason="stop", order_id="leg-stop", quantity=1.0)
+
+    broker = _TookUsOut()
+    generator = _SellAfterBuy()
+    first = _driver(settings, broker)
+    first.generator = generator
+    orchestrator.tick(settings, now=_at("2024-01-05 14:05"), sync_call=lambda: {},
+                      clock_call=Calls().clock, driver=first)
+    second = _driver(settings, broker)
+    second.generator = generator
+    orchestrator.tick(settings, now=_at("2024-01-05 15:05"), sync_call=lambda: {},
+                      clock_call=Calls().clock, driver=second)
+
+    (trade,) = orchestrator.store.read_trades(settings, STRATEGY)
+    assert trade["reason"] == "stop", "booked from the broker's own leg"
+    assert trade["qty"] == 1.0, "the shares the broker's exit filled"
+    assert trade["pnl"] == pytest.approx(round((97.25 - trade["entry_price"]) * 1.0, 2))
 
 
 # ---------------------------------------------------------------------------

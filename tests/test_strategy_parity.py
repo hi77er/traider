@@ -541,7 +541,8 @@ def test_an_exit_the_broker_made_is_adopted_rather_than_refused(tmp_path):
         def closing_fill(self, short):
             if not self._proof:
                 return None
-            return ClosingFill(price=self._price, reason=self._reason, order_id="leg-stop")
+            return ClosingFill(price=self._price, reason=self._reason, order_id="leg-stop",
+                               quantity=10.0)
 
     df = _zigzag(40)
     settings = _settings(tmp_path)
@@ -558,6 +559,10 @@ def test_an_exit_the_broker_made_is_adopted_rather_than_refused(tmp_path):
     assert result["action"] == "decided", "an adoption is not a refusal"
     assert result["adopted"]["price"] == 97.25
     assert result["adopted"]["reason"] == STOP
+    assert result["closed_qty"] == 10.0, (
+        "the size the broker's exit filled goes on the tick, or the round trip it closed has "
+        "no money on it"
+    )
     assert len(driver.ledger.legs) == trades + 1, "the adopted exit is one closed trade"
     booked = driver.ledger.legs[-1]
     assert booked["exit_price"] == 97.25, "at the broker's price, not a local guess"

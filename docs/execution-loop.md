@@ -313,9 +313,12 @@ data/live_results/<strategy-slug>/
   two prices from the row itself (so the column agrees with the entry, exit and return beside it)
   and the size from the broker's fill. That size is the one input the strategy's own record cannot
   supply — `weight` is a fraction of a notional nobody wrote down — so the loop reads it from the
-  closing fill it just made and writes `qty`/`pnl` onto the row. A row without it (every row
-  written before this existed) carries `pnl: null`, which the panel shows as a dash: a guess at
-  somebody's profit is worse than nothing.
+  closing fill it just made and writes `qty`/`pnl` onto the row. When the broker closed the position
+  itself (a resting stop or take-profit firing between two ticks), there is no order of ours to read
+  a size off: the driver reports the size on the tick (`closed_qty`, from the closing leg's
+  `filled_qty`) and the loop writes it down the same way. A row without a size — every row written
+  before this existed — carries `pnl: null`, which the panel shows as a dash: a guess at somebody's
+  profit is worse than nothing.
 
 - **State is keyed by (strategy, env), and both halves matter.** The environment because
   paper and live are different ACCOUNTS — a shared file reconciles a paper position against

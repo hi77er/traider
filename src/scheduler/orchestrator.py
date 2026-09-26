@@ -309,6 +309,7 @@ def tick(
         logged: bool = False,
         index_fields: Optional[Dict[str, Any]] = None,
         orders: Optional[List[Dict[str, Any]]] = None,
+        closed_qty: Optional[float] = None,
         **extra,
     ) -> Dict[str, Any]:
         record_ = store.tick_record(
@@ -335,14 +336,15 @@ def tick(
                     # The size this tick's CLOSE filled, if it closed anything: a return on a price
                     # is not a profit until it is multiplied by the shares that were held, and the
                     # broker's fill is the only place that number exists (see
-                    # ``trade_record``'s ``qty``).
-                    closed_qty = _filled_size(orders)
+                    # ``trade_record``'s ``qty``). An exit the broker made while the loop slept is
+                    # not an order row, so the driver reports its size on the tick instead.
+                    size = _filled_size(orders) if closed_qty is None else closed_qty
                     for leg in record_["trades"]:
                         store.append_trade(
                             settings, strategy,
                             store.trade_record(
                                 settings=settings, strategy=strategy, env=env,
-                                at=at, bar=record_["bar"], leg=leg, qty=closed_qty,
+                                at=at, bar=record_["bar"], leg=leg, qty=size,
                             ),
                         )
                     _bump_day(
@@ -501,6 +503,7 @@ def tick(
             stage="decide",
             bar=result.get("bar"),
             index_fields={"trades": len(legs)} if legs else None,
+            closed_qty=result.get("closed_qty"),
             trades=legs,
         )
 
@@ -545,6 +548,7 @@ def tick(
         logged=True,
         index_fields={"decided": 1, "orders": len(orders), "trades": len(legs)},
         orders=orders,
+        closed_qty=result.get("closed_qty"),
         bar=result.get("bar"),
         signal=result.get("signal"),
         intents=intents,
@@ -560,7 +564,8 @@ def _filled_size(orders: Optional[List[Dict[str, Any]]]) -> Optional[float]:
 
     Read from the tick's own order rows rather than from the broker: the rows were just built
     from the fills, and asking again would be a second read of the same answer — with a window
-    in which the position no longer exists.
+    in which the position no longer exists. An exit the BROKER made has no row here at all; the
+    driver reports that one's size on the tick, which the caller passes in instead.
     """
     size: Optional[float] = None
     for row in orders or []:

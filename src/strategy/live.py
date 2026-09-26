@@ -230,6 +230,10 @@ class LiveDriver:
             "price": closing.price,
             "bar": str(bar.time),
             "order_id": closing.order_id,
+            # The size the broker's exit filled. No order row exists for it — the loop did not
+            # place it — so this report is the only place the loop can learn the shares that
+            # turn the round trip's return into money (see ``orchestrator._filled_size``).
+            "filled_qty": closing.quantity,
             "detail": closing.detail or "the position was closed at the broker",
         }
         logger.warning(
@@ -469,6 +473,9 @@ class LiveDriver:
         # bars. Adopt it BEFORE reconciling: the mismatch it creates is not drift, and
         # leaving it unbooked would refuse every future tick for ever.
         adopted = self.adopt_broker_exit(fill_bar)
+        # The size that exit filled, carried on the tick: an exit the broker made has no order
+        # row behind it, so without this the round trip it closed would have no money on it.
+        adopted_size = (adopted or {}).get("filled_qty")
         # ...and a position the LOCAL state does not know about is taken on for the same reason,
         # from the other side: arming on top of one is an allowed decision, and a driver that
         # refused every bar over it would be armed and idle with no way out. Adopted, it is the
@@ -488,6 +495,7 @@ class LiveDriver:
                 "reason": mismatch,
                 "bar": bar_key,
                 "trades": self._booked_since(booked_before),
+                "closed_qty": adopted_size,
             }
 
         intents = self.engine.step(self.state, fill_bar, act, veto=str(self.halt or ""))
@@ -515,6 +523,7 @@ class LiveDriver:
             report["trades"] = booked
         if adopted is not None:
             report["adopted"] = adopted
+            report["closed_qty"] = adopted_size
         if taken_on is not None:
             report["adopted_position"] = taken_on
         if dropped is not None:
