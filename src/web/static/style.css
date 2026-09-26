@@ -947,6 +947,10 @@ button.primary.small:disabled, button.ghost.small:disabled {
   white-space: nowrap;
 }
 
+/* The bar's own status line: progress in the muted grey it inherits, a REFUSAL tinted, because
+   the picker beside it has just snapped back and this is the only thing that says why. */
+#strategy-msg.warn { color: #ffd28a; }
+
 .strategy-bar select, .strategy-new-row input {
   background: var(--bg);
   color: var(--text);

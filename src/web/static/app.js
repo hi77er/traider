@@ -2339,9 +2339,28 @@ function setRiskMsg(text) {
   if (m) m.textContent = text || "";
 }
 
-function setStrategyMsg(text) {
+function setStrategyMsg(text, kind) {
   const m = $("strategy-msg");
-  if (m) m.textContent = text || "";
+  if (!m) return;
+  m.textContent = text || "";
+  // Grey by default; a REFUSAL is tinted, because by then the picker above has already snapped
+  // back to the active strategy and this line is the only thing that says why.
+  m.classList.toggle("warn", !!text && kind === "warn");
+}
+
+/* A refused strategy action, said out loud.
+ *
+ * The line in the bar is small, grey and the only trace of the refusal: the picker returns to
+ * the active strategy, so the page looks like it ignored the choice — which is how "switching
+ * strategy stopped working" gets reported when the truth is an open position the new strategy
+ * could not manage (see ``flat_blocker``: the server refuses, and says what to do). So a
+ * refusal also raises the toast, which is not missable, and the reason is shown without the
+ * ``409: `` the API helper prefixes to it. */
+function strategyRefused(what, reason) {
+  const said = String((reason && reason.message) || reason || "").replace(/^\d{3}:\s*/, "");
+  const line = said || "no reason given";
+  setStrategyMsg(`${what} — ${line}`, "warn");
+  flashToast(`${what} — ${line}`, "warn");
 }
 
 function setActionButtonsDisabled(disabled) {
@@ -2538,12 +2557,12 @@ async function onStrategySelect() {
       // Full reload: every panel re-renders in the new strategy's context.
       window.location.reload();
     } else {
-      setStrategyMsg(r.message || "Could not switch strategy.");
       renderStrategyBar();
+      strategyRefused("Could not switch strategy", r.message);
     }
   } catch (err) {
-    setStrategyMsg(`Switch failed: ${err.message}`);
     renderStrategyBar();
+    strategyRefused("Could not switch strategy", err);
   }
 }
 
@@ -2606,11 +2625,11 @@ async function renameTopStrategy() {
       // Full reload: the strategy (and its context) now live under the new name.
       window.location.reload();
     } else {
-      setStrategyMsg(r.message || "Could not rename strategy.");
       if (input) input.focus();
+      strategyRefused("Could not rename strategy", r.message);
     }
   } catch (err) {
-    setStrategyMsg(`Rename failed: ${err.message}`);
+    strategyRefused("Could not rename strategy", err);
   }
 }
 
@@ -2628,10 +2647,10 @@ async function createTopStrategy() {
     if (r.ok) {
       window.location.reload();
     } else {
-      setStrategyMsg(r.message || "Could not create strategy.");
+      strategyRefused("Could not create strategy", r.message);
     }
   } catch (err) {
-    setStrategyMsg(`Create failed: ${err.message}`);
+    strategyRefused("Could not create strategy", err);
   }
 }
 
