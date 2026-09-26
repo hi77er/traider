@@ -2638,20 +2638,20 @@ function switchMessage(wanted, held) {
   const next = strategyTarget(wanted);
   const mine = held.symbols.filter((symbol) => symbol === next.instrument);
   const theirs = held.symbols.filter((symbol) => symbol !== next.instrument);
-  let html = `You hold ${escapeHtml(held.said)}. “${escapeHtml(wanted)}” trades `
+  // The account only when it is NOT the one the position is in: that is the case where the
+  // position leaves this page's reach, and saying it every time would be noise.
+  const elsewhere = next.env && held.envs.length && held.envs.indexOf(next.env) === -1;
+  let html = `You hold <b>${escapeHtml(held.said)}</b>. “${escapeHtml(wanted)}” trades `
     + `<b>${escapeHtml(next.instrument || "one instrument")}</b>`
-    + (next.env ? ` on the ${escapeHtml(next.env)} account` : "") + ". ";
+    + (elsewhere ? ` on the ${escapeHtml(next.env)} account` : "");
   if (mine.length) {
-    html += `${escapeHtml(mine.join(", "))} is that instrument, so the position becomes ITS `
-      + "position on its next tick: it closes it when its own rules say so, and opens nothing "
-      + "new until it is gone. ";
+    html += " too — it takes the position over and closes it when its own rules say so.";
   }
   if (theirs.length) {
-    html += `${escapeHtml(theirs.join(", "))} is not the instrument it trades, so it will ignore `
-      + "it: that position stays open and untouched until you flatten it from the Session "
-      + "monitor. ";
+    html += (mine.length ? " Anything else" : ", so it will ignore that position")
+      + " stays open until you flatten it.";
   }
-  return html + "Nothing is done to either of them until trading is on again.";
+  return html;
 }
 
 function toggleTopNew() {

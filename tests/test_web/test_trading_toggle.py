@@ -203,6 +203,7 @@ def test_starting_on_the_live_account_says_what_is_at_stake(toggle_results):
     dialog = got["dialogs"][0]
     assert dialog["title"] == "Start trading with REAL money?"
     assert dialog["confirmText"] == "Start live trading"
+    assert "real money" in dialog["messageHtml"], "and the account the orders go to"
     assert dialog["kind"] == "danger", "real money is the one dialog that is not a question"
     # The live flag is what makes the SERVER require the acknowledgement too.
     assert got["api"] == [{"path": "/api/v1/trading/on", "body": {"confirm_live": True}}]
@@ -222,8 +223,10 @@ def test_stopping_with_a_position_open_asks_first(toggle_results):
     assert len(got["dialogs"]) == 1
     dialog = got["dialogs"][0]
     assert dialog["title"] == "Turn trading off with a position still open?"
-    assert "does <b>not</b> close anything" in dialog["messageHtml"]
-    assert "4 NVDA in the paper account" in dialog["messageHtml"], "what is left is named"
+    assert "closes nothing" in dialog["messageHtml"], "the one thing OFF does not do"
+    assert "Still open: <b>4 NVDA in the paper account</b>" in dialog["messageHtml"], (
+        "what is left is named, in one line rather than a paragraph"
+    )
     assert "Stop trading &amp; flatten" in dialog["messageHtml"], "and the way to close it is given"
     assert dialog["confirmText"] == "Turn trading off"
     assert dialog["kind"] == "warn", "it has to LOOK like the warning it is"

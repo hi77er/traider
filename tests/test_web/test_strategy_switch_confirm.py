@@ -205,7 +205,7 @@ def test_the_same_instrument_is_said_to_be_taken_over(switch_results):
     dialog = got["dialogs"][0]
     assert dialog["title"] == "Switch to \u201cbeta\u201d with a position still open?"
     assert "4 NVDA in the paper account" in dialog["messageHtml"], "what is open is named"
-    assert "becomes ITS position" in dialog["messageHtml"]
+    assert "takes the position over" in dialog["messageHtml"]
     assert "closes it when its own rules say so" in dialog["messageHtml"]
     assert dialog["confirmText"] == "Switch strategy"
     assert dialog["kind"] == "warn", "a switch that leaves a position open is a warning"
@@ -220,10 +220,9 @@ def test_another_instrument_is_said_to_be_ignored(switch_results):
     assert len(got["dialogs"]) == 1
     message = got["dialogs"][0]["messageHtml"]
     assert "trades <b>GPRO</b>" in message, "the instrument it WILL trade is named"
-    assert "NVDA is not the instrument it trades" in message
-    assert "stays open and untouched" in message
-    assert "until you flatten it from the Session monitor" in message, "and the way to close it"
-    assert "becomes ITS position" not in message, "the other case must not be described here"
+    assert "will ignore that position" in message
+    assert "stays open until you flatten it" in message, "and that it is left alone, not closed"
+    assert "takes the position over" not in message, "the other case must not be described here"
     assert writes == [{"path": "/api/v1/rules/select", "body": {"name": "gamma"}}]
 
 

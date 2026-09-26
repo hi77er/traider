@@ -120,11 +120,10 @@
     const ok = await confirmDialog({
       title: "Delete this report?",
       messageHtml:
-        `<p>This permanently removes the stored run <code>${esc(runId)}</code> for ` +
+        `<p>This removes the stored run <code>${esc(runId)}</code> for ` +
         `<b>${esc(state.strategy || "this strategy")}</b> from disk.</p>` +
-        `<p class="muted">The run file, its entry in the run menu and any report ` +
-        `output are deleted. Re-running the same backtest regenerates the file, but ` +
-        `the stored numbers are gone.</p>`,
+        `<p class="muted">Re-running the backtest recreates the file; the stored numbers are ` +
+        `gone.</p>`,
       confirmText: "Delete report",
       cancelText: "Cancel",
       kind: "danger",

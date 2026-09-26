@@ -83,10 +83,8 @@ const TraiderSwitch = (function () {
             ? "Turn trading off with a position still open?"
             : `Turn trading off with ${held.count} positions still open?`,
           messageHtml:
-            `Turning trading off does <b>not</b> close anything: ${esc(held.said)}. The loop ` +
-            "stops, so nothing manages it until trading is on again — use " +
-            "<b>Stop trading &amp; flatten</b> instead if you want it closed, or confirm to stop " +
-            "and keep it.",
+            `Trading off closes nothing. Still open: <b>${esc(held.said)}</b> — use ` +
+            "<b>Stop trading &amp; flatten</b> to close it.",
           confirmText: "Turn trading off",
           // Off leaves the position behind, so this is a warning rather than a question.
           kind: "warn",
@@ -98,9 +96,7 @@ const TraiderSwitch = (function () {
       const ok = await confirmDialog(exec.live
         ? {
             title: "Start trading with REAL money?",
-            messageHtml:
-              `Orders will go to your live Alpaca account (<code>${target}</code>). ` +
-              "You can stop at any time with <b>Turn trading off</b>.",
+            messageHtml: `Orders go to your live Alpaca account (<code>${target}</code>) — real money.`,
             confirmText: "Start live trading",
             // Real money: the one dialog that is a danger rather than a question.
             kind: "danger",
@@ -108,8 +104,7 @@ const TraiderSwitch = (function () {
         : {
             title: "Start trading on the paper account?",
             messageHtml:
-              `Orders will be simulated — no real money. They go to <code>${target}</code>, ` +
-              "and every configuration panel locks until you turn trading off.",
+              `Orders are simulated — no real money. Configuration locks until you stop.`,
             confirmText: "Start paper trading",
           });
       if (!ok) return { wrote: false };
@@ -324,9 +319,7 @@ async function flipEnv(deps) {
     if (env === "live") {
       const ok = await confirmDialog({
         title: "Route orders to the LIVE account?",
-        messageHtml:
-          "Every order for this strategy will go to your <b>real</b> Alpaca account. " +
-          "Nothing is sent until you turn trading on.",
+        messageHtml: "Every order for this strategy goes to your <b>real</b> Alpaca account.",
         confirmText: "Use the live account",
         kind: "danger",
       });
