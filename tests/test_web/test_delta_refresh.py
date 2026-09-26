@@ -89,10 +89,17 @@ def _function_body(src: str, header: str) -> str:
 
 
 def test_load_chart_records_the_size_of_the_copy_it_caches():
-    """Without this the cache cannot know the file has grown."""
+    """Without this the cache cannot know the file has grown.
+
+    The recorded size is the FILE's own count (``total``, what ``/dataset/status``
+    reports) rather than the length of the payload: the chart's bars include a filled
+    bar for every session slot nobody traded in, and comparing that against the status
+    endpoint's count would reload the page on every poll, forever.
+    """
     body = _function_body(APP_JS.read_text(encoding="utf-8"), "async function loadChart()")
     assert "state.datasetRows = d.rows" in body
     assert "state.chartRows" in body, "the cached copy must record its own size"
+    assert "d.total" in body, "counted from the file, not from the filled payload"
 
 
 def test_a_row_count_change_drops_the_cached_copy():

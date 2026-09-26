@@ -126,6 +126,73 @@ def test_get_rows_intraday_has_unique_times(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# service: the chart gets a bar for every slot of the session
+# ---------------------------------------------------------------------------
+# A provider publishes no bar for an interval nobody traded in, so a thin instrument's file
+# is not a grid and the chart drew a break where the market was merely quiet. The chart's
+# payload (limit=0) fills the session's empty slots; the table's pages do not.
+_TWO_SESSIONS = [
+    "2024-01-04 09:30", "2024-01-04 09:35", "2024-01-04 09:40", "2024-01-04 09:45",
+    "2024-01-05 09:30", "2024-01-05 09:35", "2024-01-05 09:45",  # 09:40 absent
+]
+
+
+def _intraday_settings(tmp_path) -> Settings:
+    return Settings(
+        historical_data_dir=str(tmp_path),
+        instrument="AAPL",
+        historical_bar_size="5m",
+        market_timezone="America/New_York",
+    )
+
+
+def _intraday_rows(stamps) -> pd.DataFrame:
+    idx = pd.DatetimeIndex([pd.Timestamp(s) for s in stamps])
+    n = len(idx)
+    return pd.DataFrame(
+        {
+            "open": [100.0 + i for i in range(n)],
+            "high": [101.0 + i for i in range(n)],
+            "low": [99.0 + i for i in range(n)],
+            "close": [100.5 + i for i in range(n)],
+            "volume": [1000 + i for i in range(n)],
+        },
+        index=idx,
+    )
+
+
+def test_the_chart_payload_has_a_bar_for_every_slot(tmp_path):
+    """The chart is read as a picture of the session, so a stretch nobody traded in is a
+    bar with no trade in it rather than a hole in the day."""
+    st = _intraday_settings(tmp_path)
+    save_dataset(st, _intraday_rows(_TWO_SESSIONS), "AAPL", "5m")
+
+    page = dataset_service.get_rows(st, limit=0)
+    assert [r["datetime"] for r in page["rows"]] == [
+        "2024-01-04 09:30", "2024-01-04 09:35", "2024-01-04 09:40", "2024-01-04 09:45",
+        "2024-01-05 09:30", "2024-01-05 09:35", "2024-01-05 09:40", "2024-01-05 09:45",
+    ]
+    gap = page["rows"][6]
+    assert gap["volume"] == 0
+    assert gap["open"] == gap["high"] == gap["low"] == gap["close"]
+    # `total` stays the FILE's own count: it is what /dataset/status reports, and what the
+    # page compares its cached copy against to notice that the file has moved on.
+    assert page["total"] == len(_TWO_SESSIONS)
+
+
+def test_the_table_pages_the_rows_the_file_holds(tmp_path):
+    """A page of bars invented for a table of what the file holds would be a different
+    claim, and would not add up to the footer's total."""
+    st = _intraday_settings(tmp_path)
+    save_dataset(st, _intraday_rows(_TWO_SESSIONS), "AAPL", "5m")
+
+    page = dataset_service.get_rows(st, limit=100, offset=0)
+    assert page["total"] == len(_TWO_SESSIONS)
+    assert len(page["rows"]) == len(_TWO_SESSIONS)
+    assert "2024-01-05 09:40" not in [r["datetime"] for r in page["rows"]]
+
+
+# ---------------------------------------------------------------------------
 # service: backfill (async, persists to dataset)
 # ---------------------------------------------------------------------------
 def _persisting_fetch(n: int, delay: float = 0.0):

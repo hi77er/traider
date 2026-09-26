@@ -206,7 +206,7 @@ Endpoints:
   is working (plus the resting exit legs), and the round trips that closed- `GET /api/v1/log?day=YYYY-MM-DD` — one day of ticks + submitted orders, from the live store,
   plus the exchange's own `today` so the page knows whether it is worth refreshing
 - `GET /api/v1/dataset/status` — dataset summary + backfill job state
-- `GET /api/v1/dataset/data?start=&end=&limit=&offset=` — paginated OHLCV rows (`limit=0` = all for the chart)
+- `GET /api/v1/dataset/data?start=&end=&limit=&offset=` — paginated OHLCV rows (`limit=0` = all for the chart, with the session's empty slots filled)
 - `POST /api/v1/dataset/backfill` — start the background initial download
 - `GET  /api/v1/chart/indicators` — overlay-ready indicator series (price SMA/EMA/Bollinger overlays + MACD/RSI/ATR/momentum/volatility oscillator panes); memoized server-side
 - `GET  /api/v1/delta/status` — dataset sync state (missing completed days + last 5 bars)
@@ -359,6 +359,11 @@ trading off is always allowed: it is the only action that releases the lock.
 The **Daily Delta** panel (left, shown once a dataset exists) checks the Parquet for missing
 completed days. When synced it shows "All data synced" + the last 5 bars; when days are missing
 it lists them and offers **Fetch missing days** (writes them into the dataset).
+
+The chart draws every slot of a session, including the ones no provider has a bar for: an
+interval nobody traded in is drawn at the price last seen with a volume of 0. That is display
+only — the dataset keeps the provider's own bars (and the delta panel still lists the empty
+slots, as `no trades`).
 
 Daily schedule (all HH:MM in `MARKET_TIMEZONE`): `DATA_DELTA_PULL_TIME` pulls the
 completed bar into the dataset, shortly after the close. Decisions are not on a

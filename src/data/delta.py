@@ -17,7 +17,7 @@ from __future__ import annotations
 import logging
 import threading
 import time as _time
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, timedelta
 from typing import List, NamedTuple, Optional
 from zoneinfo import ZoneInfo
 
@@ -547,40 +547,11 @@ def _recent_rows(df: pd.DataFrame, interval: str) -> List[dict]:
     return rows
 
 
-def _grid_times(df: pd.DataFrame, interval: str) -> List[time]:
-    """The times of day a NORMAL session has, read off the file's own sessions.
-
-    A slot counts as part of the grid when at least half the sessions in the file
-    have it. That tolerates the odd anomaly — a single pre-market or late print does
-    not become an expected slot on every other day — while still catching a bar that
-    only SOME sessions are missing, which a "busiest day" grid silently forgives
-    (drop 12:30 from Monday AND Tuesday and there is no longer a day that has it).
-
-    Taken from the data rather than stepped from the session open, because a
-    resampled bar size is binned from midnight (a 4h bar lands at 08:00/12:00, not
-    09:30/13:30) and stepping the session would invent slots no provider serves. A
-    bar missing from EVERY session in the same place is invisible here, which is the
-    direction to be wrong in: it under-reports rather than inventing gaps.
-
-    Empty for a calendar bar size: there a bar IS its session, so the day-level
-    answer is already the bar-level answer.
-    """
-    if not dataset.is_intraday(interval):
-        return []
-    by_day: dict = {}
-    for ts in df.index:
-        t = pd.Timestamp(ts)
-        by_day.setdefault(t.date(), set()).add(t.time())
-    if not by_day:
-        return []
-    counts: dict = {}
-    for times in by_day.values():
-        for slot in times:
-            counts[slot] = counts.get(slot, 0) + 1
-    need = max(1, (len(by_day) + 1) // 2)
-    return sorted(slot for slot, seen in counts.items() if seen >= need)
-
-
+# The grid itself lives in ``dataset.session_grid`` — the file's own shape, read off its
+# sessions. It is shared with the CHART, which fills the grid's empty slots so a quiet
+# stretch is drawn rather than left as a hole, and the two answers have to come from one
+# definition or the panel would call a bar missing that the chart is drawing.
+#
 # Why a bar the grid expects is not in the file. Three genuinely different things, and
 # the file alone cannot tell them apart — which is why a thin symbol used to report
 # hundreds of "missing" bars that do not exist anywhere, and blocked a backtest on
@@ -737,7 +708,7 @@ def _missing_bar_rows(
     #    (a holiday) is not in either set, or every holiday would be reported as a
     #    session's worth of missing bars.
     if intraday:
-        grid = _grid_times(df, interval)
+        grid = dataset.session_grid(df, interval)
         close_at = session.window(settings)[1]
         for day in sorted(set(present) | absent):
             times = present.get(day, set())

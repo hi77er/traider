@@ -273,9 +273,10 @@ async function loadChart() {
     if (!state.datasetRows) {
       const d = await api("/api/v1/dataset/data?limit=0"); // all rows for the chart
       state.datasetRows = d.rows;
-      // Record what the cached copy is a copy OF, so a later render can tell that the
-      // file has moved on (see forgetDatasetRows).
-      state.chartRows = (d.rows || []).length;
+      // `total` is the rows the FILE holds, which is what the status endpoint reports and
+      // what this is compared against (see forgetDatasetRows) — not `rows.length`, since
+      // the payload also carries a bar for every session slot nobody traded in.
+      state.chartRows = typeof d.total === "number" ? d.total : d.rows.length;
     }
     // A dataset with no usable bars has nothing to draw, and a blank pane is
     // indistinguishable from a broken chart — so say what is actually wrong

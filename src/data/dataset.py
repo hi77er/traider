@@ -15,9 +15,9 @@ and compressed, and is trivially appendable with dedupe.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -93,6 +93,40 @@ def interval_minutes(interval: Optional[str]) -> Optional[int]:
     if unit not in _INTERVAL_UNITS or not number.isdigit():
         return None
     return int(number) * _INTERVAL_UNITS[unit]
+
+
+def session_grid(df: pd.DataFrame, interval: Optional[str]) -> List[time]:
+    """The times of day a NORMAL session has, read off the file's own sessions.
+
+    A slot counts as part of the grid when at least half the sessions in the file
+    have it. That tolerates the odd anomaly — a single pre-market or late print does
+    not become an expected slot on every other day — while still catching a bar that
+    only SOME sessions are missing, which a "busiest day" grid silently forgives
+    (drop 12:30 from Monday AND Tuesday and there is no longer a day that has it).
+
+    Taken from the data rather than stepped from the session open, because a
+    resampled bar size is binned from midnight (a 4h bar lands at 08:00/12:00, not
+    09:30/13:30) and stepping the session would invent slots no provider serves. A
+    bar missing from EVERY session in the same place is invisible here, which is the
+    direction to be wrong in: it under-reports rather than inventing gaps.
+
+    Empty for a calendar bar size: there a bar IS its session, so the day-level
+    answer is already the bar-level answer.
+    """
+    if not is_intraday(interval):
+        return []
+    by_day: dict = {}
+    for ts in df.index:
+        t = pd.Timestamp(ts)
+        by_day.setdefault(t.date(), set()).add(t.time())
+    if not by_day:
+        return []
+    counts: dict = {}
+    for times in by_day.values():
+        for slot in times:
+            counts[slot] = counts.get(slot, 0) + 1
+    need = max(1, (len(by_day) + 1) // 2)
+    return sorted(slot for slot, seen in counts.items() if seen >= need)
 
 
 def bar_stamp(settings: Settings, ts) -> pd.Timestamp:
@@ -337,6 +371,55 @@ def load_dataset(
         df = df[df.index <= pd.Timestamp(end)]
     logger.info("Loaded %s rows from dataset %s", len(df), path)
     return df
+
+
+def fill_session_gaps(settings: Settings, df: pd.DataFrame) -> pd.DataFrame:
+    """Give every slot of the session grid a bar — a hole in the file is not a hole in the day.
+
+    A provider publishes no bar for an interval nobody traded in, so a thin instrument's
+    file is not a grid: read straight, a chart draws a break where the market was merely
+    quiet, and a quiet stretch the size of a session reads as missing data. Each absent
+    slot is given the price last seen (open = high = low = close) and a volume of 0 —
+    which is what the market did in it.
+
+    Only the span the file already covers: the newest bar is the newest thing anybody
+    knows and the slots after it are not a gap but the future, so a session still forming
+    is left alone (that is what it is, every trading day). A calendar bar size is
+    untouched for the same reason the grid is empty for one.
+
+    Display only — the file keeps the bars the provider published, and ``load_dataset``
+    hands the engine exactly those, so the chart and the strategy still agree on every
+    bar they share.
+    """
+    interval = settings.historical_bar_size
+    if df is None or df.empty or not is_intraday(interval):
+        return df
+    grid = session_grid(df, interval)
+    if not grid:
+        return df
+    days = sorted({pd.Timestamp(ts).date() for ts in df.index})
+    slots = pd.DatetimeIndex(
+        [pd.Timestamp(datetime.combine(day, slot)) for day in days for slot in grid]
+    )
+    if df.index.tz is not None:
+        # Slots have to be comparable with the stamps they sit beside, in whatever
+        # convention the provider wrote the file in.
+        slots = slots.tz_localize(df.index.tz)
+    slots = slots[(slots >= df.index.min()) & (slots <= df.index.max())]
+    absent = slots.difference(df.index)
+    if absent.empty:
+        return df
+
+    out = df.reindex(df.index.union(absent)).sort_index()
+    # A filled bar opens and closes where the price was left: the reindex above already
+    # put the empty slots in place, as NaN, and one forward fill is what they get.
+    last_close = out["close"].ffill()
+    for column in PRICE_COLUMNS:
+        out[column] = out[column].fillna(last_close)
+    out["volume"] = out["volume"].fillna(0.0)
+    out.index.name = df.index.name
+    logger.info("Filled %d empty session slot(s) for %s", len(absent), settings.instrument)
+    return out
 
 
 def delete_dataset(settings: Settings, symbol: str, interval: str) -> bool:

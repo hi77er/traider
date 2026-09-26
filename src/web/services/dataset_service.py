@@ -20,6 +20,7 @@ from src.data.dataset import (
     bar_label,
     chart_time,
     dataset_path,
+    fill_session_gaps,
     load_dataset,
     save_dataset,
 )
@@ -75,8 +76,12 @@ def get_rows(
     """Return dataset rows as JSON-ready records with pagination metadata.
 
     ``limit=0`` returns all rows ascending (used by the chart, which needs
-    chronological order). Otherwise the table is paginated NEWEST-first: the
-    most recent bar is row #1 (offset 0) and later pages walk back in time.
+    chronological order), with the session's empty slots filled in so that a stretch
+    nobody traded in is still drawn (see ``fill_session_gaps``). Otherwise the table is
+    paginated NEWEST-first and shows the file's own rows: the most recent bar is row #1
+    (offset 0) and later pages walk back in time — a page of bars invented for a table
+    of what the file holds would be a different claim, and would not add up to
+    ``total``, which counts stored rows either way.
     Each row carries ``date`` (date-only), ``time`` (lightweight-charts key:
     date string for daily bars, unix seconds for intraday) and ``datetime``
     (human label, date+time for intraday).
@@ -90,6 +95,8 @@ def get_rows(
     if limit and limit > 0:
         # Reverse so page 1 shows the newest bars; offset counts from the newest.
         df = df.iloc[::-1].iloc[offset : offset + limit]
+    else:
+        df = fill_session_gaps(settings, df)
     rows: List[dict] = [
         {
             "date": str(idx.date()),
