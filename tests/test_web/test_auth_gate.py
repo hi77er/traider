@@ -36,8 +36,8 @@ COOKIE = middleware.COOKIE_NAME
 #: ``setup`` and ``change`` have to be here and that is the point of the pin: they are the two ways
 #: IN to a portal nobody is signed in to yet. What guards them is not a session — it is the refusal
 #: to overwrite an existing PIN (409) and the current PIN, counted by the same five failures that
-#: lock ``login``. ``sign-out-everywhere`` reads the session itself, in the route, because the
-#: middleware lets this whole prefix through.
+#: lock ``login``. ``sign-out-everywhere`` and ``lock`` read the session themselves, in the route,
+#: because the middleware lets this whole prefix through.
 EXPECTED_PUBLIC = {
     "/login",
     "/api/v1/health",
@@ -48,6 +48,7 @@ EXPECTED_PUBLIC = {
     "/api/v1/auth/sign-out-everywhere",
     "/api/v1/auth/logout",
     "/api/v1/auth/heartbeat",
+    "/api/v1/auth/lock",
 }
 
 
@@ -194,6 +195,43 @@ def test_the_cookie_is_locked_down(client, locked):
     assert "HttpOnly" in header, "no script may read it"
     assert "samesite=strict" in header.lower(), "and no other site may cause it to be sent"
     assert "Secure" not in header, "not over plain HTTP, or the browser would drop it"
+
+
+def test_locking_revokes_the_session_and_nothing_is_served_until_the_pin(client, locked):
+    """The reported bug: the screen locked, the page was refreshed, and the page loaded.
+
+    It loaded because the lock was an OVERLAY — the cookie was still valid (the server's idle clock
+    is measured from the last heartbeat, which sits comfortably inside the window), so a reload
+    walked straight back in. Locking is a state of the SERVER here: the session is revoked, so
+    every page and every endpoint is refused until the PIN is typed again, and the answer that
+    types it is the only thing that hands out a new cookie.
+    """
+    client.post("/api/v1/auth/login", json={"pin": PIN})
+    assert client.get("/monitor").status_code == 200, "signed in to begin with"
+
+    locked_out = client.post("/api/v1/auth/lock")
+    assert locked_out.status_code == 200 and locked_out.json()["signed_in"] is False
+
+    page = client.get("/monitor")
+    assert page.status_code == 303, "no page is served while locked"
+    assert page.headers["location"].startswith("/login")
+    assert client.get("/api/v1/loop").status_code == 401, "and no endpoint is"
+    assert client.get("/api/v1/positions").status_code == 401
+    assert client.get("/").status_code == 303
+
+    # The PIN is the only way back — and it works, which is the half that must not be broken.
+    assert client.post("/api/v1/auth/login", json={"pin": PIN}).status_code == 200
+    assert client.get("/monitor").status_code == 200
+    assert client.get("/api/v1/loop").status_code == 200
+
+
+def test_a_lock_with_nobody_signed_in_is_answered_rather_than_refused(client, locked):
+    """The page may be locking because its session already expired, which is not an error: there is
+    nothing to revoke, and the cookie is cleared anyway."""
+    response = client.post("/api/v1/auth/lock")
+
+    assert response.status_code == 200
+    assert response.json()["already"] is True and response.json()["signed_in"] is False
 
 
 def test_a_cookie_that_is_not_yours_gets_you_nothing(client, locked):

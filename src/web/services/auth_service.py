@@ -49,6 +49,7 @@ __all__ = [
     "enabled",
     "issue",
     "load",
+    "lock",
     "machine_ok",
     "pin_problem",
     "read",
@@ -408,7 +409,9 @@ def change_pin(
     return {"ok": True, "unchanged": False, **(_rewrite_pin(settings, record, user, new, moment))}
 
 
-def sign_out_others(settings, *, at: Optional[datetime] = None) -> Dict[str, Any]:
+def sign_out_others(
+    settings, *, at: Optional[datetime] = None, why: str = "Signed out everywhere"
+) -> Dict[str, Any]:
     """Keep the PIN, expire every session; the caller hands itself a fresh cookie afterwards.
 
     For the session the header's own "Sign out" cannot reach: another browser, another tab, another
@@ -419,8 +422,25 @@ def sign_out_others(settings, *, at: Optional[datetime] = None) -> Dict[str, Any
     user = _user(record)
     if user is None:
         return {"ok": False, "reason": "no PIN is set for this portal"}
-    _rotate_sessions(settings, record, user, moment, why="Signed out everywhere")
+    _rotate_sessions(settings, record, user, moment, why=why)
     return {"ok": True, **describe(settings)}
+
+
+def lock(settings, *, at: Optional[datetime] = None) -> Dict[str, Any]:
+    """Invalidate every session, because the portal LOCKED.
+
+    The lock is server-side state, not an overlay: the moment the screen goes up, the token the
+    browser is holding stops being accepted, so a refresh finds what any expired session finds —
+    the lock screen, and no page or endpoint behind it. Without this, "locked" was only true of the
+    tab it happened in: the idle clock had not run out on the SERVER yet (the last heartbeat was
+    seconds inside the window), so reloading the page walked straight back in with the cookie it
+    still had.
+
+    The same mechanism as ``sign_out_others`` — both mean "every cookie that exists is now dead" —
+    with different words in the log, because "locked" and "signed out everywhere" are not the same
+    event to the person reading it. The PIN is kept: this is not a way to lose it.
+    """
+    return sign_out_others(settings, at=at, why="The portal was locked")
 
 
 def reset(settings, pin: str, *, at: Optional[datetime] = None) -> Dict[str, Any]:

@@ -199,6 +199,46 @@ def logout() -> JSONResponse:
     return response
 
 
+@router.post("/lock")
+def lock(request: Request) -> JSONResponse:
+    """The portal is locking: every session dies with it, this browser's cookie included.
+
+    Called by the lock screen the moment it comes up — idle timeout, another tab locking, or a 401
+    — because a lock drawn over a live session is not a lock. The session it revokes is what makes
+    a REFRESH honest: the page cannot be served and no endpoint can be called until the PIN is
+    typed again, and the answer that types it is the only thing that issues a new cookie.
+
+    A session of its own is required, and that is the whole of its protection: without one this
+    would be a public "sign the operator out" button for anybody who can reach the port. The caller
+    is the page that just locked, so it holds one; a page whose session has already expired needs
+    nothing done to it, and is answered `already` rather than refused. That is also why it does not
+    ask for the PIN: the person is not there — that is the whole premise — and the PIN is what
+    brings them back.
+
+    The cookie is cleared as well as revoked: the browser must stop presenting a token that no
+    longer means anything, and a dead cookie on every later request is noise in the log.
+    """
+    settings = get_settings()
+    live = auth_service.read(settings, request.cookies.get(middleware.COOKIE_NAME)) is not None
+    result: Dict[str, Any] = {"ok": True, "already": True}
+    if live:
+        result = auth_service.lock(settings)
+        logger.warning("The portal locked — every session is refused until the PIN is typed")
+    response = JSONResponse(
+        {
+            "ok": bool(result.get("ok")),
+            "enabled": auth_service.enabled(settings),
+            "signed_in": False,
+            "locked": True,
+            "already": bool(result.get("already")),
+            "reason": result.get("reason") or "",
+        },
+        status_code=200,
+    )
+    middleware.clear_cookie(response)
+    return response
+
+
 @router.post("/heartbeat")
 def heartbeat(request: Request) -> JSONResponse:
     """One request per few minutes, and only while the page can see a person at the keyboard.

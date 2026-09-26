@@ -51,10 +51,16 @@ global.localStorage = {
 
 const calls = [];
 let reply = { status: 200, body: { ok: true } };
+// The lock endpoint answers the way the real one does, whatever the case is doing: a lock that was
+// already revoked, or a wrong PIN's 401 — which is not a lock, and must not be answered with a 401
+// of its own, or this harness's "every request gets the same reply" would have the fetch wrapper
+// re-lock over the answer it was meant to show.
+let replyByPath = { "/api/v1/auth/lock": { status: 200, body: { ok: true, locked: true } } };
 global.fetch = (path) => {
   calls.push(path);
+  const answer = replyByPath[path] || reply;
   return Promise.resolve({
-    status: reply.status, json: () => Promise.resolve(reply.body),
+    status: answer.status, json: () => Promise.resolve(answer.body),
   });
 };
 
@@ -123,6 +129,18 @@ Auth.state.pin = "4821";
 reply = { status: 200, body: { ok: true } };
 await Auth.submit();
 out.afterRightPin = { locked: Auth.isLocked(), posted: calls.slice() };
+
+// 7b. LOCKING tells the server: the session ends there, not only here. That is what makes a
+//     refresh honest — the page cannot be served, and no endpoint can be called, until the PIN is
+//     typed again — and it is the half a screen drawn over a live session never had.
+calls.length = 0;
+Auth.lock("Locked after 15 minutes idle.");
+await new Promise((resolve) => setImmediate(resolve));
+out.onLock = {
+  calls: calls.slice(), locked: Auth.isLocked(), stored: localStorage.getItem("traider.lock"),
+};
+Auth.unlock();
+out.afterUnlockStored = localStorage.getItem("traider.lock");
 
 // 8. A busy page DOES slide the session: that half is what keeps a working session alive.
 Auth.beginIdleWatch(900);
@@ -277,7 +295,16 @@ def test_a_wrong_pin_keeps_the_card_up_and_says_why(lock):
 
 def test_the_right_pin_lifts_it(lock):
     assert lock["afterRightPin"]["locked"] is False
-    assert lock["afterRightPin"]["posted"][-1] == "/api/v1/auth/login"
+    assert "/api/v1/auth/login" in lock["afterRightPin"]["posted"], "the PIN was checked"
+
+
+def test_locking_revokes_the_session_on_the_server(lock):
+    """The lock is not an overlay: the browser tells the server, and every cookie that exists is
+    dead from that moment — so a refresh finds the lock screen instead of the page it left."""
+    assert "/api/v1/auth/lock" in lock["onLock"]["calls"]
+    assert lock["onLock"]["locked"] is True
+    assert lock["onLock"]["stored"] == "1", "and this browser remembers it across a refresh"
+    assert lock["afterUnlockStored"] == "0", "which unlocking is what clears"
 
 
 def test_a_busy_page_does_slide_the_session(lock):
@@ -408,7 +435,11 @@ global.location = { assigned: [], assign(url) { this.assigned.push(url); } };
 global.setInterval = () => 1;
 global.clearInterval = () => {};
 global.addEventListener = () => {};
-global.localStorage = { store: {}, setItem() {}, getItem() { return undefined; } };
+const storage = {};
+global.localStorage = {
+  setItem: (key, value) => { storage[key] = String(value); },
+  getItem: (key) => (key in storage ? storage[key] : undefined),
+};
 
 const out = {};
 
@@ -469,6 +500,21 @@ status = { enabled: true, signed_in: true };
 page = world(true);
 await Auth.start();
 out.withTheLock = find(page.body, "[data-sign-out]") !== null;
+
+// 7. A REFRESH after this browser locked: the card comes up even though the session it is holding
+//    still works on the server. The revoke is a request like any other and a reload can beat it,
+//    so the browser's own memory is the tie-breaker — and all it does is ASK for the PIN.
+storage["traider.lock"] = "1";
+page = world(true);
+await Auth.start();
+out.validSessionButLockedHere = { locked: Auth.isLocked(), reason: Auth.state.reason };
+
+// 8. ...and with nothing recorded, a valid session loads as it always did.
+Auth.unlock();
+storage["traider.lock"] = "0";
+page = world(true);
+await Auth.start();
+out.unlockedInThisBrowser = { locked: Auth.isLocked() };
 
 process.stdout.write(JSON.stringify(out));
 """
@@ -1056,3 +1102,19 @@ def test_a_page_that_does_not_start_itself_is_still_booted(modes):
 def test_it_is_offered_only_when_there_is_a_lock(signout):
     assert signout["withoutTheLock"] is False, "no PIN, no sign-out, no dead button"
     assert signout["withTheLock"] is True
+
+
+def test_a_refresh_after_locking_asks_for_the_pin(signout):
+    """The reported bug, pinned: the screen went up, the page was reloaded, and the page came back
+    — because the SERVER still considered the session valid (the idle clock is measured from the
+    last heartbeat, which is comfortably inside the window) and the lock was only an overlay drawn
+    over it.
+
+    Two things fix it and both are asserted here: locking revokes the session server-side (so the
+    next request is refused), and this browser remembers that it locked, so a reload taken in the
+    moment before the revoke lands still asks for the PIN. Nothing behind the card runs either way.
+    """
+    got = signout["validSessionButLockedHere"]
+    assert got["locked"] is True, "a lock drawn over a live session is not a lock"
+    assert "locked" in got["reason"].lower()
+    assert signout["unlockedInThisBrowser"]["locked"] is False, "and it clears when it is typed"

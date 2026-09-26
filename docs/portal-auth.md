@@ -238,6 +238,25 @@ key.
   `POST /api/v1/trading/on` from another tab, curl or devtools — a screen lock that only hides
   pixels is not a lock.
 
+**Locking revokes the session; it does not wait for the window.** The idle window alone was not
+enough, and a refresh proved it: the server's clock runs from the last HEARTBEAT — comfortably
+inside the window, because that is what keeps a working session alive — so a page locked in the
+browser could be reloaded and came back **fully signed in**, the cookie still being perfectly
+valid. So `auth.js` posts `POST /api/v1/auth/lock` the moment the card goes up: the generation and
+the signing secret are rotated (`auth_service.lock`), and **every cookie that exists stops being
+accepted** — this browser's, another tab's, another machine's. No page is served and no endpoint is
+answered until the PIN is typed again, and the answer to that PIN is the only thing that hands out
+a new cookie.
+
+Three details matter. The endpoint needs a session of its own (the page that locks holds one), and
+that is the whole of its protection: without it this would be a public "sign the operator out"
+button for anybody who can reach the port. A page whose session has ALREADY expired is answered
+`already` rather than refused — there is nothing left to revoke. And the browser records the lock
+under `traider.lock`, which is read **on load** as well as written: the revoke is a request like any
+other and a reload can beat it, so a refresh taken in that moment still raises the card. That memory
+is only ever a reason to ASK — the PIN is checked by the server, and nothing behind the card runs
+until it answers.
+
 **The idle window is a SETTING.** `Account Settings → Security → Sign Out User Inactivity
 Minutes`, 1-30 whole minutes, default 15. It lives in `data/account/account.json` as
 `AUTH_IDLE_MINUTES` and is read per request. One reader — `auth_service.idle_seconds` — serves the
@@ -292,9 +311,11 @@ session even when activity is continuous.
 **Tests.** The detector is a node harness in the style the other page tests use — a faked document
 and clock — asserting that a fetch, a re-render and `visibilitychange → hidden` do **not** reset the
 clock, that `keydown` / `pointerdown` / `wheel` / `visibilitychange → visible` do, that the lock
-fires at exactly the window and fires **once**, and that returning to a hidden tab past the window
-locks immediately. Server side: a cookie whose idle window has lapsed is refused, the heartbeat
-slides it, a poll-shaped request does **not**, and the machine token is unaffected.
+fires at exactly the window and fires **once**, that returning to a hidden tab past the window
+locks immediately, and that locking POSTs the revoke while remembering it across a refresh. Server
+side: a cookie whose idle window has lapsed is refused, the heartbeat slides it, a poll-shaped
+request does **not**, the machine token is unaffected — and after `POST /api/v1/auth/lock` every
+page redirects and every endpoint is 401 until a PIN opens a new session.
 
 **The loop still does not know.** Same invariant as stage 1: this is browser and web-app code, and
 no part of it reads or writes `data/trading/trading.json`.

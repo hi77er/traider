@@ -529,6 +529,12 @@
 
   function lock(reason, options) {
     if (state.locked && state.overlay) return;
+    // Tell the SERVER, first and without waiting for it: the lock is the session ENDING, not an
+    // overlay drawn over a live one. It revokes every cookie that exists, so a refresh finds the
+    // lock screen instead of the page it left behind, and this tab's own polls start being refused
+    // — which is what makes this a lock rather than a curtain. Best effort on purpose: a portal
+    // that cannot be reached must still lock itself here.
+    post("/api/v1/auth/lock").catch(() => { /* the local lock stands on its own */ });
     show(state.hasPin ? "unlock" : "create", {
       reason: reason || "Your session ended. Enter your PIN to continue.",
       focus: !(options && options.focus === false),
@@ -560,6 +566,20 @@
     try {
       if (root.localStorage) root.localStorage.setItem(STORAGE_KEY, locked ? "1" : "0");
     } catch (_) { /* a browser with storage switched off: this tab still locks on its own */ }
+  }
+
+  /* Does this browser's own record say the portal is locked?
+   *
+   * It is what makes a REFRESH honest. The revoke above is a request like any other, and a reload
+   * can beat it; the tab that locked is also the only place that definitely knows the screen went
+   * up. So a page that loads with this set asks for the PIN — and it is only ever a reason to ASK:
+   * the PIN is checked by the server, and nothing behind the card runs until it answers. */
+  function remembered() {
+    try {
+      return Boolean(root.localStorage && root.localStorage.getItem(STORAGE_KEY) === "1");
+    } catch (_) {
+      return false; // storage switched off: the server's answer is the only one there is
+    }
   }
 
   function watchStorage() {
@@ -836,11 +856,16 @@
 
     const signedIn = Boolean(status && status.signed_in);
     const lockedUntil = status && status.locked_until;
-    if (!signedIn || lockedUntil) {
+    // The browser's own memory of a lock, which outlives the tab that set it: without it, a reload
+    // taken in the moment between the screen going up and the revoke landing came back unlocked.
+    const lockedHere = state.hasPin && remembered();
+    if (!signedIn || lockedUntil || lockedHere) {
       // No reason line unless there is one worth giving: the card's own sentence already says to
       // enter the PIN, and printing the same words twice reads like two different instructions.
       show("unlock", {
-        reason: lockedUntil ? "Too many wrong PINs. Try again in a few minutes." : "",
+        reason: lockedUntil
+          ? "Too many wrong PINs. Try again in a few minutes."
+          : (lockedHere && signedIn ? "The portal was locked. Enter your PIN to continue." : ""),
       });
       remember(true);
       return state.status;
