@@ -208,6 +208,7 @@ def test_the_same_instrument_is_said_to_be_taken_over(switch_results):
     assert "becomes ITS position" in dialog["messageHtml"]
     assert "closes it when its own rules say so" in dialog["messageHtml"]
     assert dialog["confirmText"] == "Switch strategy"
+    assert dialog["kind"] == "warn", "a switch that leaves a position open is a warning"
     assert writes == [{"path": "/api/v1/rules/select", "body": {"name": "beta"}}]
     assert got["reloads"] == 1
 

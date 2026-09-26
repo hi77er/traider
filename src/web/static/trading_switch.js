@@ -88,6 +88,8 @@ const TraiderSwitch = (function () {
             "<b>Stop trading &amp; flatten</b> instead if you want it closed, or confirm to stop " +
             "and keep it.",
           confirmText: "Turn trading off",
+          // Off leaves the position behind, so this is a warning rather than a question.
+          kind: "warn",
         });
         if (!ok) return { wrote: false };
       }
@@ -100,6 +102,8 @@ const TraiderSwitch = (function () {
               `Orders will go to your live Alpaca account (<code>${target}</code>). ` +
               "You can stop at any time with <b>Turn trading off</b>.",
             confirmText: "Start live trading",
+            // Real money: the one dialog that is a danger rather than a question.
+            kind: "danger",
           }
         : {
             title: "Start trading on the paper account?",
@@ -324,6 +328,7 @@ async function flipEnv(deps) {
           "Every order for this strategy will go to your <b>real</b> Alpaca account. " +
           "Nothing is sent until you turn trading on.",
         confirmText: "Use the live account",
+        kind: "danger",
       });
       if (!ok) return false;
     }

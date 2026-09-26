@@ -395,9 +395,10 @@
     </div>
   </div>
 
-  <!-- Strategy delete confirmation dialog -->
+  <!-- Strategy delete confirmation dialog. It carries the danger skin from the start: the box
+       itself is the warning (the typed name and the disabled button are the rest of it). -->
   <div id="delete-modal-backdrop" class="modal-backdrop" hidden>
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="delete-modal-title">
+    <div class="modal danger" data-icon="🗑" role="dialog" aria-modal="true" aria-labelledby="delete-modal-title">
       <h3 id="delete-modal-title">Delete strategy?</h3>
       <div id="delete-modal-message" class="modal-message"></div>
       <label class="delete-confirm-label" for="delete-confirm-name">

@@ -88,17 +88,27 @@
   }
 
   /* Promise-based confirmation dialog (same contract as the Strategy lab's). The master switch
-   * cannot be taken without one, because on a LIVE account the click spends real money. */
+   * cannot be taken without one, because on a LIVE account the click spends real money — and
+   * `opts.kind` is what makes that one LOOK different from an ordinary question:
+   * ``.modal.warn``/``.modal.danger`` in style.css, with the icon it sets. */
   function confirmDialog(opts) {
     return new Promise((resolve) => {
       const backdrop = $("lg-confirm-backdrop");
+      const box = backdrop ? backdrop.querySelector(".modal") : null;
       const title = $("lg-confirm-title");
       const message = $("lg-confirm-message");
       const okBtn = $("lg-confirm-ok");
       const cancelBtn = $("lg-confirm-cancel");
+      const kind = opts.kind || "";
+      if (box) {
+        box.className = kind ? `modal ${kind}` : "modal";
+        if (kind) box.setAttribute("data-icon", opts.icon || (kind === "danger" ? "🛑" : "⚠️"));
+        else box.removeAttribute("data-icon");
+      }
       title.textContent = opts.title || "Are you sure?";
       message.innerHTML = opts.messageHtml || "";
       okBtn.textContent = opts.confirmText || "Yes";
+      okBtn.className = kind === "danger" ? "danger" : kind === "warn" ? "caution" : "primary";
       cancelBtn.textContent = opts.cancelText || "No";
 
       const close = (result) => {

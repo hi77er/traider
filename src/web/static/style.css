@@ -625,6 +625,55 @@ input[type="checkbox"].switch:checked::before { left: 20px; }
 
 .modal-actions button { min-width: 100px; }
 
+/* ---------- A warning is not a question ----------
+ * Every confirmation was the same grey card, so the two that carry a consequence — real money
+ * leaving the account, a position left with nothing managing it — read exactly like "are you
+ * sure?". They get their own skin instead: an icon, a coloured edge and title, and a confirm
+ * button in the colour of the thing it is about, so the shape of the box says "read me" before a
+ * word of it is. `warn` (amber) is "this changes something you may not have meant"; `danger`
+ * (red) is "this spends real money, or ends something". The icon is content rather than
+ * decoration: it is the first thing read. */
+.modal.warn, .modal.danger {
+  border-left-width: 4px;
+  padding-left: 21px;
+}
+
+.modal.warn::before, .modal.danger::before {
+  content: attr(data-icon);
+  display: block;
+  font-size: 26px;
+  line-height: 1.1;
+  margin-bottom: 8px;
+}
+
+.modal.warn {
+  border-color: rgba(240, 180, 41, 0.55);
+  border-left-color: #f0b429;
+  background: linear-gradient(180deg, rgba(240, 180, 41, 0.13), rgba(240, 180, 41, 0.03) 46%, var(--card) 46%);
+  box-shadow: 0 0 0 1px rgba(240, 180, 41, 0.16), 0 18px 48px rgba(0, 0, 0, 0.6);
+}
+
+.modal.warn h3 { color: #ffd28a; }
+
+.modal.danger {
+  border-color: rgba(239, 83, 80, 0.55);
+  border-left-color: #ef5350;
+  background: linear-gradient(180deg, rgba(239, 83, 80, 0.15), rgba(239, 83, 80, 0.04) 46%, var(--card) 46%);
+  box-shadow: 0 0 0 1px rgba(239, 83, 80, 0.2), 0 18px 48px rgba(0, 0, 0, 0.6);
+}
+
+.modal.danger h3 { color: #ff8a85; }
+
+/* The confirmation itself wears the colour: amber for "go ahead, knowing this", red for the one
+ * that spends money. `caution` sits beside the existing `primary`/`danger` rather than replacing
+ * them, so a neutral dialog is still the plain accent button it always was. */
+button.caution {
+  color: #ffd28a;
+  border: 1px solid rgba(240, 180, 41, 0.55);
+  background: rgba(240, 180, 41, 0.12);
+}
+button.caution:hover { border-color: #f0b429; background: rgba(240, 180, 41, 0.22); }
+
 /* danger (delete) buttons */
 button.danger {
   color: #ff8a85;

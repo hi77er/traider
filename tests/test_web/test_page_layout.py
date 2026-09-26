@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parents[2]
 HTML = (ROOT / "src" / "web" / "templates" / "index.html").read_text(encoding="utf-8")
 APP_JS = (ROOT / "src" / "web" / "static" / "app.js").read_text(encoding="utf-8")
 LOG_JS = (ROOT / "src" / "web" / "static" / "log.js").read_text(encoding="utf-8")
+REPORT_JS = (ROOT / "src" / "web" / "static" / "report.js").read_text(encoding="utf-8")
 CSS = (ROOT / "src" / "web" / "static" / "style.css").read_text(encoding="utf-8")
 
 
@@ -304,3 +305,27 @@ def test_a_missing_endpoint_explains_that_the_server_is_old():
     for source in (APP_JS, LOG_JS):
         assert "res.status === 404" in source
         assert "the server is running older code than" in source
+
+
+# ---------------------------------------------------------------------------
+# a warning does not look like a question
+# ---------------------------------------------------------------------------
+def test_a_warning_dialog_wears_its_own_skin():
+    """The icon, the coloured edge and title, and a confirm button in the colour of the thing it is
+    about — the difference between a warning and the eight other grey cards.
+
+    Asserted here rather than trusted because losing it is silent in the way that matters most: the
+    dialog still asks the right question in the right words, and simply reads like every other
+    pop-up. That was the state this replaced — the two clicks carrying a consequence (real money,
+    or a position left with nothing managing it) looked exactly like "are you sure?".
+    """
+    assert ".modal.warn" in CSS and ".modal.danger" in CSS, "both skins are in the stylesheet"
+    assert "button.caution" in CSS, "and the amber confirm button with them"
+    assert "content: attr(data-icon)" in CSS, "the icon is rendered from the attribute it sets"
+
+    for source, name in ((APP_JS, "app.js"), (LOG_JS, "log.js"), (REPORT_JS, "report.js")):
+        dialog = _function_of(source, "confirmDialog")
+        assert '"data-icon"' in dialog, f"{name}: the icon is never set"
+        assert '? "caution"' in dialog and '"danger"' in dialog, (
+            f"{name}: the confirm button keeps its neutral class, so a warning is only words"
+        )

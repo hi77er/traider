@@ -68,17 +68,26 @@
     flashToast._timer = setTimeout(() => { el.hidden = true; }, 4000);
   }
 
-  /* Promise-based confirmation dialog (same contract as the Strategy lab's). */
+  /* Promise-based confirmation dialog (same contract as the Strategy lab's, `kind` included: a
+   * delete is a `danger`, and looks like one — see ``.modal.danger`` in style.css). */
   function confirmDialog(opts) {
     return new Promise((resolve) => {
       const backdrop = $("rp-confirm-backdrop");
+      const box = backdrop ? backdrop.querySelector(".modal") : null;
       const title = $("rp-confirm-title");
       const message = $("rp-confirm-message");
       const okBtn = $("rp-confirm-ok");
       const cancelBtn = $("rp-confirm-cancel");
+      const kind = opts.kind || "";
+      if (box) {
+        box.className = kind ? `modal ${kind}` : "modal";
+        if (kind) box.setAttribute("data-icon", opts.icon || (kind === "danger" ? "🛑" : "⚠️"));
+        else box.removeAttribute("data-icon");
+      }
       title.textContent = opts.title || "Are you sure?";
       message.innerHTML = opts.messageHtml || "";
       okBtn.textContent = opts.confirmText || "Yes";
+      okBtn.className = kind === "danger" ? "danger" : kind === "warn" ? "caution" : "primary";
       cancelBtn.textContent = opts.cancelText || "No";
 
       const close = (result) => {
@@ -118,6 +127,8 @@
         `the stored numbers are gone.</p>`,
       confirmText: "Delete report",
       cancelText: "Cancel",
+      kind: "danger",
+      icon: "🗑",
     });
     if (!ok) return;
 

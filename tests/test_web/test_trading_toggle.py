@@ -83,7 +83,8 @@ function api(path, opts) {
   return Promise.resolve({ ok: true, message: "done" });
 }
 function confirmDialog(opts) {
-  log.dialogs.push({ title: opts.title, confirmText: opts.confirmText, messageHtml: opts.messageHtml });
+  log.dialogs.push({ title: opts.title, confirmText: opts.confirmText, messageHtml: opts.messageHtml,
+                     kind: opts.kind || "" });
   return Promise.resolve(confirmAnswer);
 }
 
@@ -184,6 +185,7 @@ def test_starting_on_the_paper_account_asks_too(toggle_results):
     assert dialog["title"] == "Start trading on the paper account?"
     assert "simulated" in dialog["messageHtml"]
     assert "REAL money" not in dialog["messageHtml"], "paper must not be dressed up as live"
+    assert dialog["kind"] == "", "and a paper start is an ordinary question, not a warning"
     # ...and only after the confirmation does it actually start.
     assert got["api"] == [{"path": "/api/v1/trading/on", "body": {"confirm_live": False}}]
     assert got["loads"] == 1, "the UI must re-read the state it just changed"
@@ -201,6 +203,7 @@ def test_starting_on_the_live_account_says_what_is_at_stake(toggle_results):
     dialog = got["dialogs"][0]
     assert dialog["title"] == "Start trading with REAL money?"
     assert dialog["confirmText"] == "Start live trading"
+    assert dialog["kind"] == "danger", "real money is the one dialog that is not a question"
     # The live flag is what makes the SERVER require the acknowledgement too.
     assert got["api"] == [{"path": "/api/v1/trading/on", "body": {"confirm_live": True}}]
 
@@ -223,6 +226,7 @@ def test_stopping_with_a_position_open_asks_first(toggle_results):
     assert "4 NVDA in the paper account" in dialog["messageHtml"], "what is left is named"
     assert "Stop trading &amp; flatten" in dialog["messageHtml"], "and the way to close it is given"
     assert dialog["confirmText"] == "Turn trading off"
+    assert dialog["kind"] == "warn", "it has to LOOK like the warning it is"
     # ...and only after the confirmation does it actually stop.
     assert got["api"] == [{"path": "/api/v1/trading/off", "body": {}}]
 

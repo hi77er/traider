@@ -1137,14 +1137,27 @@ function switchDataset(symbol) {
 function confirmDialog(opts) {
   return new Promise((resolve) => {
     const backdrop = $("modal-backdrop");
+    const box = backdrop ? backdrop.querySelector(".modal") : null;
     const title = $("modal-title");
     const message = $("modal-message");
     const confirmBtn = $("modal-confirm");
     const cancelBtn = $("modal-cancel");
 
+    // `kind` is what makes a WARNING look like one: see the ``.modal.warn``/``.modal.danger``
+    // block in style.css. The icon comes from the markup attribute so the styling needs no second
+    // copy of the wording, and a dialog with no kind is left exactly as it was — the contrast is
+    // the point.
+    const kind = opts.kind || "";
+    if (box) {
+      box.className = kind ? `modal ${kind}` : "modal";
+      if (kind) box.setAttribute("data-icon", opts.icon || (kind === "danger" ? "🛑" : "⚠️"));
+      else box.removeAttribute("data-icon");
+    }
+
     title.textContent = opts.title || "Are you sure?";
     message.innerHTML = opts.messageHtml || "";
     confirmBtn.textContent = opts.confirmText || "Yes";
+    confirmBtn.className = kind === "danger" ? "danger" : kind === "warn" ? "caution" : "primary";
     cancelBtn.textContent = opts.cancelText || "No";
 
     const close = (result) => {
@@ -2558,6 +2571,7 @@ async function onStrategySelect() {
         : `Switch to “${wanted}” with ${held.count} positions still open?`,
       messageHtml: switchMessage(wanted, held),
       confirmText: "Switch strategy",
+      kind: "warn",
     });
     if (!ok) {
       setStrategyMsg("Strategy not changed.");
