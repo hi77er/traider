@@ -279,19 +279,18 @@ def wired(tmp_path, state_file):
 
 
 def test_the_orphan_prone_endpoints_refuse_while_a_position_is_open(wired, account):
-    """A position in a symbol none of these actions trades: refused, loudly, by name.
+    """The two actions that still refuse are the ones that can move orders to another ACCOUNT.
 
-    The select case is the interesting one now. The rule is not "nothing may change while
-    anything is open" but "nothing may change that would leave the position unmanaged" — so a
-    position in a symbol the strategy being selected does NOT trade still refuses, and the
-    message says which symbol it is, because "flatten first" is the right instruction only when
-    the thing in the way is yours to close.
+    A position in a symbol none of these actions trades: refused, loudly, by name. Deleting a
+    strategy while anything is open is refused because a delete is the one edit that can take the
+    instrument and the account away with it, and the environment switch because the account it is
+    switching TO is the one whose contents are unknown. A strategy SWITCH is not here: it is
+    allowed with a position open, and warns instead (see ``test_switching_...`` below).
     """
     client, _ = wired
     account["paper"] = [_position("TSLA", qty="3")]
 
     for path, body in (
-        ("/api/v1/rules/select", {"name": "beta"}),
         ("/api/v1/rules/delete", {"name": "beta", "delete_data": False}),
         ("/api/v1/execution/env", {"env": "live"}),
     ):
@@ -302,34 +301,36 @@ def test_the_orphan_prone_endpoints_refuse_while_a_position_is_open(wired, accou
         assert "Flatten first" in detail, path
 
 
-def test_the_strategy_that_owns_the_position_can_be_selected(wired, account):
-    """The way out that KEEPS the position: hand the run to its own owner.
+def test_a_position_does_not_refuse_a_strategy_switch(wired, account):
+    """The decision REVERSED, for the same reason arming was: refusing had no way out of it.
 
-    Without this, arming and selecting were both refused while anything was open, so an operator
-    whose position belonged to a strategy that was no longer active had exactly two options —
-    close it by hand, or leave it open with nothing managing it. Selecting the strategy that
-    trades the held symbol is not the accident the old rule was guarding against: that strategy
-    takes the position over on its next tick and can then only close it.
+    Every strategy trades the instrument its OWN configuration names — the broker is built for it,
+    ``position()`` reads that symbol and nothing else, and the state file is its own — so an open
+    position is never in the way of handing the run to another strategy. A position in a symbol the
+    new strategy does not trade is left exactly as it is (scenario one), and one in the symbol it
+    DOES trade is adopted and closed by its own rules (scenario two). Either way the operator is
+    told which of the two is about to happen — by the lab, before it sends this, which is why this
+    endpoint no longer has an opinion.
     """
+    client, _ = wired
+    account["paper"] = [_position("TSLA", qty="3")]
+
+    response = client.post("/api/v1/rules/select", json={"name": "beta"})
+
+    assert response.status_code == 200, response.text
+    assert response.json().get("ok") is True
+
+
+def test_switching_to_a_strategy_that_trades_the_held_symbol_is_allowed(wired, account):
+    """Scenario two, at the gate: the position's own instrument is what the new strategy trades,
+    so it takes the position over rather than leaving it behind (``LiveDriver
+    .adopt_broker_position``), and the gate has nothing to refuse."""
     client, _ = wired
     account["paper"] = [_position("AAPL", qty="90")]  # what these settings trade
 
     response = client.post("/api/v1/rules/select", json={"name": "beta"})
 
     assert response.status_code == 200, response.text
-
-
-def test_selecting_another_symbol_still_refuses_with_the_owners_name(wired, account):
-    """And the refusal points at the way through rather than only at the flatten button."""
-    client, _ = wired
-    account["paper"] = [_position("TSLA", qty="3")]
-
-    response = client.post("/api/v1/rules/select", json={"name": "beta"})
-
-    assert response.status_code == 409
-    detail = response.json()["detail"]
-    assert "not AAPL" in detail, "the instrument this strategy trades is named"
-    assert "select the strategy that owns it" in detail, "and what to do instead"
 
 
 def test_the_same_endpoints_go_through_when_nothing_is_open(wired, account):
@@ -353,7 +354,7 @@ def test_a_live_position_blocks_an_action_on_a_paper_strategy(wired, account):
     )
     account["live"] = [_position("TSLA", qty="7")]
 
-    response = client.post("/api/v1/rules/select", json={"name": "beta"})
+    response = client.post("/api/v1/rules/delete", json={"name": "beta", "delete_data": False})
 
     assert response.status_code == 409
     assert "the live account holds 7 TSLA" in response.json()["detail"]

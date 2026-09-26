@@ -2545,13 +2545,32 @@ function renderStrategyBar() {
 async function onStrategySelect() {
   const sel = $("strategy-select");
   if (!sel || !sel.value) return;
-  if (sel.value === (state.rulesPayload && state.rulesPayload.active)) return;
+  const wanted = sel.value;
+  if (wanted === (state.rulesPayload && state.rulesPayload.active)) return;
   setStrategyMsg("Switching strategy…");
+  // What is open, read NOW rather than trusting the page's sixty-second-old copy: this is the
+  // number the warning quotes, and the click it guards is the one that cannot be taken back.
+  const held = TraiderSwitch.held(await readOpenPositions());
+  if (held.count > 0) {
+    const ok = await confirmDialog({
+      title: held.count === 1
+        ? `Switch to “${wanted}” with a position still open?`
+        : `Switch to “${wanted}” with ${held.count} positions still open?`,
+      messageHtml: switchMessage(wanted, held),
+      confirmText: "Switch strategy",
+    });
+    if (!ok) {
+      setStrategyMsg("Strategy not changed.");
+      renderStrategyBar();
+      return;
+    }
+    setStrategyMsg("Switching strategy…");
+  }
   try {
     const r = await api("/api/v1/rules/select", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: sel.value }),
+      body: JSON.stringify({ name: wanted }),
     });
     if (r.ok) {
       // Full reload: every panel re-renders in the new strategy's context.
@@ -2564,6 +2583,61 @@ async function onStrategySelect() {
     renderStrategyBar();
     strategyRefused("Could not switch strategy", err);
   }
+}
+
+/* What the accounts hold right now, or ``null`` when they could not be read.
+
+ * The one click on this page that has to be taken knowingly is the switch, and it is the only
+ * reason to ask the broker from here. ``null`` is passed on as "nothing known" rather than as
+ * "nothing open": a page that cannot see an account must not invent a warning out of it, and
+ * changing a strategy is not itself something that spends money. */
+async function readOpenPositions() {
+  try {
+    return await api("/api/v1/trading");
+  } catch (_) {
+    return null;
+  }
+}
+
+/* The instrument and account a named strategy would trade, as its own stored configuration
+ * declares them — the resolution the server makes too (its own value, else the settings', which
+ * are the ACTIVE strategy's). This is what decides what a switch does to a position that is
+ * already open, so the warning has to read it from the same place. */
+function strategyTarget(name) {
+  const all = (state.rulesPayload && state.rulesPayload.strategies) || {};
+  const active = all[(state.rulesPayload || {}).active] || {};
+  const cfg = (all[name] || {}).config || {};
+  const fallback = active.config || {};
+  const live = (state.trading || {}).execution || {};
+  return {
+    instrument: String(cfg.INSTRUMENT || fallback.INSTRUMENT || "").trim().toUpperCase(),
+    env: String(cfg.EXECUTION_ENV || fallback.EXECUTION_ENV || live.env || "").trim().toLowerCase(),
+  };
+}
+
+/* What a switch does to a position that is already open, in the two cases that exist (see
+ * ``/rules/select``). A strategy trades the instrument its own configuration names, and nothing
+ * else, so a position in that symbol becomes ITS position — taken over and closed by its own rules
+ * — while a position in any other symbol is invisible to it and stays exactly where it is. Which
+ * of the two this is, before the click, is the whole of the warning. */
+function switchMessage(wanted, held) {
+  const next = strategyTarget(wanted);
+  const mine = held.symbols.filter((symbol) => symbol === next.instrument);
+  const theirs = held.symbols.filter((symbol) => symbol !== next.instrument);
+  let html = `You hold ${escapeHtml(held.said)}. “${escapeHtml(wanted)}” trades `
+    + `<b>${escapeHtml(next.instrument || "one instrument")}</b>`
+    + (next.env ? ` on the ${escapeHtml(next.env)} account` : "") + ". ";
+  if (mine.length) {
+    html += `${escapeHtml(mine.join(", "))} is that instrument, so the position becomes ITS `
+      + "position on its next tick: it closes it when its own rules say so, and opens nothing "
+      + "new until it is gone. ";
+  }
+  if (theirs.length) {
+    html += `${escapeHtml(theirs.join(", "))} is not the instrument it trades, so it will ignore `
+      + "it: that position stays open and untouched until you flatten it from the Session "
+      + "monitor. ";
+  }
+  return html + "Nothing is done to either of them until trading is on again.";
 }
 
 function toggleTopNew() {

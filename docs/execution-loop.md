@@ -158,10 +158,10 @@ new one.
 | Gate | Behaviour |
 | --- | --- |
 | `turn_on` | **Allowed with a position open in the account it trades** — the run ADOPTS it when it is the instrument the run trades, and leaves it (naming its owner) when it is not. Refuses a position in another account. **Stamps the strategy name** into the ON state |
-| `POST /rules/select` | **Allowed when the strategy being selected trades the held symbol** (it takes the position over). Refuses otherwise |
+| `POST /rules/select` | **Allowed with any position open** — a strategy trades the instrument its OWN config names and nothing else, so the position is either adopted (the same instrument) or untouched (another). The lab WARNS first, naming which of the two is about to happen |
 | `POST /rules/delete` | **Refuse while any position is open** — deleting the owner leaves nothing that knows how to close it |
 | `POST /execution/env` (paper↔live) | **Refuse while any position is open** — otherwise the position is orphaned in the other account |
-| `turn_off` | **ALWAYS allowed.** Never require flat, never require the network |
+| `turn_off` | **ALWAYS allowed.** Never require flat, never require the network. The page asks first when a position would be left open — nothing is refused, and the ask is skipped when the count cannot be read |
 | "Stop trading & flatten" | One deliberate action: OFF + `AlpacaExecutor.flatten()` |
 
 **"Arming may start on top of a position it trades, and then only close it"** is the current
@@ -197,13 +197,25 @@ with it. So the switch starts, and the loop takes the position over:
   here only stopped the operator from running the strategy they had chosen.
 - **`trading_service.adoptable_account` decides ADOPTION, not permission.** It is the test the
   arming message uses to split what is held into adopted / left alone, and `flat_blocker`'s
-  `held_ok_in_account` (any symbol, arming) and `held_ok_symbol` (that symbol only, the switch) are
-  what the two gates pass.
-- **`/rules/select` may hand the run to the position's OWNER**, and only to it. Without that an
-  operator whose position belonged to a strategy that was no longer active could neither arm nor
-  select it — their only options were to close the position by hand or leave it unmanaged, which
-  is the state this whole section exists to avoid. `/rules/delete` still requires flat: deleting
-  the owner leaves nothing that knows how to close it.
+  `held_ok_in_account` is what the remaining gates pass.
+- **A strategy SWITCH is allowed with any position open, and warns instead of refusing.** Every
+  strategy is scoped to the instrument its own configuration names — `AlpacaBroker` is built for
+  `settings.instrument`, `position()` reads that symbol alone, and the dataset, the orders and the
+  state file follow it — so what a switch does to a position already open is decided by the two
+  instruments, and both cases are states the machine lives with:
+
+  * **a different instrument** — the new run never sees the old position. It opens and closes only
+    its own symbol and the other one stays exactly as it was (the monitor's *Stop trading &
+    flatten* closes it, and nothing else does);
+  * **the same instrument** — the new strategy adopts it on its next tick and continues normally:
+    the position is closed by the signal or the level its own rules produce, and entries resume
+    once it is flat.
+
+  What replaced the refusal is the lab's warning, which says which of the two is about to happen.
+  It used to be `held_ok_symbol` — "the position's OWNER and nothing else" — and that left the
+  operator with no way to move the run off a strategy whose position they wanted to keep.
+  `/rules/delete` still requires flat: deleting the owner leaves nothing that knows how to close
+  it, and the instrument and the account go with the strategy.
 
 Consequences:
 
@@ -219,11 +231,13 @@ Consequences:
 - **"Or wait" needs no cleanup**, because the gate reads the **broker**. A position
   closed by its bracket is simply gone by the next attempt; nothing has to tick while
   trading is OFF for that to be true.
-- **`require_flat` guards the three orphan-prone actions** — `/execution/env`,
-  `/rules/select`, `/rules/delete` — with a 5–10s positions cache.
-- **A seen position blocks all three, in either account.** A position that can be seen is
-  what would be orphaned; which account it sits in does not change that, and it is reported
-  first because it is the actionable one.
+- **`require_flat` guards the two orphan-prone actions** — `/execution/env` and
+  `/rules/delete` — with a 5–10s positions cache. A strategy switch is not one of them any
+  more, and neither is the master switch.
+- **A seen position blocks both, in either account.** A position that can be seen is what
+  would be orphaned; which account it sits in does not change that, and it is reported first
+  because it is the actionable one. The strategy switch is the one edit that does NOT orphan
+  anything, which is why it left this list.
 - **A 401 is a verdict about a key, not about a position, and it does not block a strategy
   change.** `/rules/select` and `/rules/delete` pass `unreadable_blocks=False`: they place
   no orders in any account, so "we could not look" is not the hazard there that it is for
@@ -475,11 +489,13 @@ whatever is held, fraction included.
 | --- | --- | --- |
 | 2.1 | `src/execution/positions.py`: a cached, both-accounts positions reader, with the three-ways-to-be-flat rule above | ✅ |
 | 2.2 | `trading_service.require_flat(action)` — a factory, so each route says what it is refusing | ✅ |
-| 2.3–2.5 | `require_flat` on `/execution/env`, `/rules/select`, `/rules/delete` | ✅ |
+| 2.3–2.5 | `require_flat` on `/execution/env`, `/rules/select`, `/rules/delete` | ✅ (`/rules/select` **un-`require_flat`ed 2026-09-26** — see 2.7d) |
 | 2.6 | `turn_on` stamps the active strategy name into `trading.json` | ✅ |
 | 2.7 | ~~`turn_on` refuses while any position is open, naming it and giving both ways out~~ → **reversed 2026-09-24**: arming is allowed for a position in the instrument it trades, which the loop ADOPTS and can then only close (`adopt_broker_position`); a position in another instrument or account still refuses | ✅ |
 | 2.7b | `flat_blocker(adoptable_instrument=…)` + `trading_service.adoptable_account` — one test of "would this run take the position over", shared by the gate and by arming's own message | ✅ |
-| 2.7c | `/rules/select` may hand the run to the position's OWNER (the strategy trading the held symbol); anything else still refuses | ✅ |
+| 2.7c | ~~`/rules/select` may hand the run to the position's OWNER (the strategy trading the held symbol); anything else still refuses~~ → **superseded 2026-09-26** by 2.7d | ✅ |
+| 2.7d | **A strategy switch is allowed with any position open, and the lab confirms instead of the server refusing**: the new strategy either trades the held instrument (it adopts the position and closes it by its own rules) or trades another one (the position is untouched). `held_ok_symbol` went with the refusal | ✅ |
+| 2.7e | **Stopping with a position open asks for confirmation** on the monitor (it was one click regardless), built from the same payload the Open box is drawn from; a count that could not be read does not ask, so an outage cannot hold the switch ON | ✅ |
 | 2.8 | `POST /trading/off-flatten` + the panel button: OFF first, then `flatten()` | ✅ |
 | 2.9 | `turn_off` reports what it left behind — nothing / open and protected / open with **no** exit | ✅ |
 

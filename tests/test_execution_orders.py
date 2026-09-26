@@ -459,6 +459,31 @@ def test_a_long_position_maps_with_a_positive_quantity_and_a_short_with_a_negati
     assert broker_position(None).is_flat is True
 
 
+def test_the_position_a_strategy_sees_is_only_its_own_instrument():
+    """One symbol, asked for by name — which is what makes a strategy switch safe with a position
+    open.
+
+    A strategy must trade the instrument its own configuration names and nothing else, so its
+    view of the account has to be that symbol's position rather than the account's whole list:
+    a broker-wide read would report a position another strategy left in the account as drift and
+    refuse every tick over it, and the position the run DOES own would be indistinguishable from
+    a foreign one. Asked for by symbol, the other position is invisible here and stays exactly
+    where it is.
+    """
+    executor = _executor()
+    executor.client._session.queue(
+        "GET", "/v2/positions/AAPL",
+        StubResponse(200, {"symbol": "AAPL", "qty": "10", "side": "long", "avg_entry_price": "101.5"}),
+    )
+
+    position = AlpacaBroker(_settings(instrument="AAPL"), executor=executor).position()
+
+    assert position.quantity == 10 and position.short is False
+    assert executor.client._session.requests[0]["path"] == "/v2/positions/AAPL", (
+        "the read is scoped to the instrument this strategy trades, not to the account"
+    )
+
+
 def test_the_broker_opens_the_position_the_intent_describes():
     settings = _settings()
     session = StubSession()

@@ -1,13 +1,18 @@
 """Behavioural tests for the master switch's confirmation.
 
 Turning trading ON always asks first — on the paper account as well as the live
-one. Two things matter and neither is visible in a string assertion:
+one. Turning trading OFF asks in exactly one case: a position that stopping would
+leave open, because OFF closes nothing and the loop stops, so a click here is the
+one way an operator quietly strands a position. Three things matter and none of
+them is visible in a string assertion:
 
 * it asks in BOTH environments (the paper prompt used to be skipped entirely), and
   the wording differs, because "this spends real money" and "this bot starts acting
   on the next signal" are different decisions;
-* declining really writes nothing, and turning trading OFF never asks at all —
-  stopping must always take one click.
+* declining really writes nothing, for the stop prompt as well as the start one;
+* stopping with nothing open — and stopping while an account could not be READ —
+  never asks, because a switch that needs the network to be released is one an
+  outage can hold ON.
 
 The decision itself lives in ``trading_switch.js`` — the confirmation that stands between a
 click and real orders, and the only one there is. The Session monitor's handler is lifted into
@@ -82,8 +87,12 @@ function confirmDialog(opts) {
   return Promise.resolve(confirmAnswer);
 }
 
-const state = { trading: { trading: {}, execution: PAPER } };
+const state = { trading: { trading: {}, execution: PAPER, positions: [], open_count: 0 } };
 function reset() { log.api = []; log.dialogs = []; log.loads = 0; log.boxes = 0; }
+
+// One open position, in the shape the switch payload carries it.
+const OPEN = [{ env: "paper", count: 1, known: true, flat: false,
+                positions: [{ symbol: "NVDA", qty: "4", side: "long" }] }];
 
 (async function () {
   const out = {};
@@ -109,11 +118,37 @@ function reset() { log.api = []; log.dialogs = []; log.loads = 0; log.boxes = 0;
   await toggleTrading();
   out.liveOn = { dialogs: log.dialogs, api: log.api, loads: log.loads };
 
-  // 4. Turning OFF never asks — stopping is always one click.
+  // 4. Turning OFF with nothing open never asks — that case stays one click.
   state.trading.trading = { on: true };
+  state.trading.positions = [];
+  state.trading.open_count = 0;
   reset();
   await toggleTrading();
   out.turningOff = { dialogs: log.dialogs.length, api: log.api, loads: log.loads };
+
+  // 5. Turning OFF with a position open DOES ask, and says what would be left behind.
+  state.trading.positions = OPEN;
+  state.trading.open_count = 1;
+  reset();
+  confirmAnswer = true;
+  await toggleTrading();
+  out.offWithPosition = { dialogs: log.dialogs, api: log.api, loads: log.loads };
+
+  // 6. Declining it writes nothing: no stop, no re-read.
+  reset();
+  confirmAnswer = false;
+  await toggleTrading();
+  out.offDeclined = { dialogs: log.dialogs.length, api: log.api.length, loads: log.loads };
+
+  // 7. An account that could not be READ is not a position: the stop must still be one click,
+  //    or a broker outage could hold the switch ON.
+  state.trading.positions = [{ env: "paper", count: 0, known: false, reason: "unauthorized" }];
+  state.trading.open_count = 0;
+  state.trading.unknown_count = 1;
+  reset();
+  confirmAnswer = true;
+  await toggleTrading();
+  out.offUnknown = { dialogs: log.dialogs.length, api: log.api, loads: log.loads };
 
   process.stdout.write(JSON.stringify(out));
   process.exit(0); // the handler leaves a timer behind for the first tick; do not wait it out
@@ -170,10 +205,40 @@ def test_starting_on_the_live_account_says_what_is_at_stake(toggle_results):
     assert got["api"] == [{"path": "/api/v1/trading/on", "body": {"confirm_live": True}}]
 
 
-def test_stopping_never_asks(toggle_results):
+def test_stopping_with_nothing_open_never_asks(toggle_results):
     got = toggle_results["turningOff"]
     assert got["dialogs"] == 0
     # No acknowledgement either: stopping is not something to consent to.
+    assert got["api"] == [{"path": "/api/v1/trading/off", "body": {}}]
+
+
+def test_stopping_with_a_position_open_asks_first(toggle_results):
+    """The one case stopping must not be silent about: OFF closes nothing and the loop stops, so
+    the position it leaves behind is one nobody is managing until trading is on again."""
+    got = toggle_results["offWithPosition"]
+    assert len(got["dialogs"]) == 1
+    dialog = got["dialogs"][0]
+    assert dialog["title"] == "Turn trading off with a position still open?"
+    assert "does <b>not</b> close anything" in dialog["messageHtml"]
+    assert "4 NVDA in the paper account" in dialog["messageHtml"], "what is left is named"
+    assert "Stop trading &amp; flatten" in dialog["messageHtml"], "and the way to close it is given"
+    assert dialog["confirmText"] == "Turn trading off"
+    # ...and only after the confirmation does it actually stop.
+    assert got["api"] == [{"path": "/api/v1/trading/off", "body": {}}]
+
+
+def test_declining_the_stop_prompt_stops_nothing(toggle_results):
+    got = toggle_results["offDeclined"]
+    assert got["dialogs"] == 1
+    assert got["api"] == 0 and got["loads"] == 0
+
+
+def test_an_unreadable_account_does_not_make_the_stop_ask(toggle_results):
+    """A floor is not a count. An account that could not be read says nothing about what is open,
+    and the stop button has to stay releasable while the broker is unreachable — that is exactly
+    when an operator needs it."""
+    got = toggle_results["offUnknown"]
+    assert got["dialogs"] == 0
     assert got["api"] == [{"path": "/api/v1/trading/off", "body": {}}]
 
 

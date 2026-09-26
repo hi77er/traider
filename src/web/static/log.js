@@ -602,6 +602,9 @@
       flashToast,
       trading: (state.trading || {}).trading,
       execution: (state.trading || {}).execution,
+      // What is open, from the SAME read the Open box is drawn from: stopping asks about it, and a
+      // dialog quoting a different number than the box beside it would be worse than no dialog.
+      open: state.trading || {},
     });
     if (!result.wrote) return;
     await loadStatus();

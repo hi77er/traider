@@ -9,8 +9,12 @@
  * file owns the DECISION: ask or not, which endpoint, and what the acknowledgement means.
  *
  * Turning ON always asks, in both environments — the wording differs, the asking does not,
- * because a confirmation that only appears sometimes is one nobody reads. Turning OFF never
- * asks and never needs an acknowledgement: stopping has to stay one click.
+ * because a confirmation that only appears sometimes is one nobody reads. Turning OFF asks in ONE
+ * case and no other: a position that stopping would leave open (see ``flip``). OFF closes nothing
+ * and the loop stops, so the position it leaves behind is the one thing a click here can quietly
+ * strand — while an OFFLINE broker, where the count cannot be known, must never be able to make the
+ * stop button ask for anything: a switch that needs the network to release it is a switch that an
+ * outage can hold ON. On top of that the server never requires an acknowledgement for stopping.
  */
 const TraiderSwitch = (function () {
   "use strict";
@@ -67,7 +71,27 @@ const TraiderSwitch = (function () {
     const exec = deps.execution || {};
     const stopping = !!tr.on;
 
-    if (!stopping) {
+    if (stopping) {
+      // The ONE case stopping asks about. It reads the same payload the Open box is drawn from,
+      // so the dialog cannot disagree with what the operator is looking at — and a count that
+      // could not be read contributes nothing, deliberately: the stop must stay reachable while
+      // an account is unreachable, because that is exactly when an operator needs it.
+      const held = heldFrom(deps.open);
+      if (held.count > 0) {
+        const ok = await confirmDialog({
+          title: held.count === 1
+            ? "Turn trading off with a position still open?"
+            : `Turn trading off with ${held.count} positions still open?`,
+          messageHtml:
+            `Turning trading off does <b>not</b> close anything: ${esc(held.said)}. The loop ` +
+            "stops, so nothing manages it until trading is on again — use " +
+            "<b>Stop trading &amp; flatten</b> instead if you want it closed, or confirm to stop " +
+            "and keep it.",
+          confirmText: "Turn trading off",
+        });
+        if (!ok) return { wrote: false };
+      }
+    } else {
       const target = esc(exec.base_url || "");
       const ok = await confirmDialog(exec.live
         ? {
@@ -184,6 +208,39 @@ function tradeTile(payload, click) {
     click, !payload);
 }
 
+/* What an account payload says is OPEN, as a count and one sentence naming it.
+ *
+ * The count is the gate for the two clicks in this app that must not be taken blind — stopping
+ * with a position left behind, and handing the run to another strategy — so the sentence is built
+ * once here rather than twice on two pages. Only accounts that HELD something are named: an
+ * account that could not be read has no positions to list, and a warning must not be invented out
+ * of a floor (``openTile`` prints "?" for that account for the same reason). */
+function heldFrom(payload) {
+  const held = ((payload && payload.positions) || [])
+    .map((account) => ({
+      env: String((account && account.env) || ""),
+      positions: (account && account.positions) || [],
+    }))
+    .filter((account) => account.positions.length);
+  const symbols = held.reduce(
+    (all, account) => all.concat(
+      account.positions.map((p) => String((p && p.symbol) || "").toUpperCase())
+    ),
+    []
+  );
+  return {
+    count: held.reduce((total, account) => total + account.positions.length, 0),
+    said: held
+      .map((account) => `${account.positions.map((p) => `${p.qty} ${p.symbol}`).join(", ")} `
+        + `in the ${account.env} account`)
+      .join(", and "),
+    // The symbols alone, and the accounts they are in: a strategy switch says what will happen to
+    // each of them, which it can only do from these rather than from the sentence.
+    symbols: symbols,
+    envs: held.map((account) => account.env),
+  };
+}
+
 /* How much is OPEN. Counted per account from the switch's own payload: what is held in the OTHER
  * account is real whatever mode this run is in, and it is what refuses an arming, so the tip names
  * it rather than hiding it. An account that could not be READ is not a count of zero, so the box
@@ -297,6 +354,7 @@ async function flipEnv(deps) {
     envTile,
     tradeTile,
     openTile,
+    held: heldFrom,
     switchTip,
     flipEnv,
   };

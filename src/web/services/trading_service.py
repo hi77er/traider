@@ -116,11 +116,10 @@ def flat_blocker(
     unreadable_blocks: bool = True,
     trade_env: Optional[str] = None,
     held_ok_in_account: Optional[str] = None,
-    held_ok_symbol: Optional[str] = None,
 ) -> Optional[str]:
     """Why this action must not proceed, or ``None`` when nothing is in the way.
 
-    ``action`` leads the message because the same check guards four different things, and
+    ``action`` leads the message because the same check guards several different things, and
     "Trading cannot start" is the wrong sentence for a strategy switch.
 
     It refuses on two things: a position that is open, and — for the actions that can
@@ -134,13 +133,12 @@ def flat_blocker(
     positive that never clears, because a rejected key does not heal by itself. That state
     stays on screen (the header pill and the log both report it), and the account about to be
     traded is still proven flat first. ``None`` means every account must answer, which is what
-    switching the ENVIRONMENT keeps: the account being switched TO is exactly the one whose
+    switching the ENVIRONMENT keeps: the account being switched to is exactly the one whose
     contents are unknown.
 
-    ``unreadable_blocks=False`` drops the second rule and keeps only the first. Two
-    actions use it — changing the active strategy and deleting one — because **a 401 is a
-    verdict about a key, not about a position**, and those two actions place no orders in
-    any account:
+    ``unreadable_blocks=False`` drops the second rule and keeps only the first. Changing the
+    active strategy and deleting one both use it, because **a 401 is a verdict about a key, not
+    about a position**, and neither action places an order in any account:
 
     * they cannot be the reason an order goes somewhere unreadable, so "we could not look"
       is not the hazard it is for arming;
@@ -152,19 +150,20 @@ def flat_blocker(
     * and refusing is permanent until someone edits credentials: a rejected key never fixes
       itself, so a false positive here does not clear on retry.
 
-    The honest cost: if a position really is sitting in an account whose key is dead, a
-    switch leaves it unmanaged. It was already unmanaged the moment the key stopped
-    working, and the pill says ``… unreadable`` so the condition stays on screen.
+    ``held_ok_in_account`` narrows the FIRST rule, and only ever for positions in the ONE account
+    named: that account is the one the action trades, so what is held there is reachable — by the
+    run itself when it is the instrument the run trades (the loop ADOPTS it, and can then only
+    CLOSE it: ``StrategyEngine.step`` opens nothing while a position is held), or by the flatten
+    button, which closes whatever the account holds. ARMING therefore passes the account in play
+    and tolerates any symbol in it: running is the operator's decision, the position is not made
+    less reachable by being left open, and the message says which of the two will happen.
 
-    ``held_ok_in_account`` narrows the FIRST rule, and only ever for a position in the ONE
-    account named: that account is the one the action trades, so what is held there is reachable
-    — by the run itself when it is the instrument the run trades (the loop ADOPTS it, and can then
-    only CLOSE it: ``StrategyEngine.step`` opens nothing while a position is held), or by the
-    flatten button, which closes whatever the account holds. ARMING therefore passes the account
-    in play and tolerates any symbol in it: running is the operator's decision, the position is
-    not made less reachable by being left open, and the message says which of the two will happen.
-    ``held_ok_symbol`` adds the instrument condition on top, which is what `/rules/select` uses — a
-    switch may hand the run to the position's OWNER and nothing else.
+    **A strategy SWITCH does not come through here at all** (``/rules/select``). Handing the run
+    to another strategy is safe with a position open for the same reason arming is — every
+    strategy is scoped to the instrument its own configuration names, so the position is either
+    adopted by the new one or left untouched by it — and what replaced the refusal there is a
+    warning in the lab, not a gate. ``held_ok_symbol`` used to express the narrower rule ("the
+    position's owner and nothing else"); with the switch ungated, nothing needs it.
 
     Before this, arming while anything was open was the one state with no way out of it: the
     operator could not arm, could not be told anything new by waiting, and the flatten button
@@ -181,21 +180,7 @@ def flat_blocker(
     held = positions.held(states)
 
     if held and held_ok_in_account is not None:
-        wanted = str(held_ok_symbol or "").strip().upper()
-        held = [
-            state
-            for state in held
-            if not (
-                state.env == held_ok_in_account
-                and (
-                    not wanted
-                    or all(
-                        str(payload.get("symbol") or "").strip().upper() == wanted
-                        for payload in state.payloads
-                    )
-                )
-            )
-        ]
+        held = [state for state in held if state.env != held_ok_in_account]
 
     if held:
         # The tail gives the operator both ways out, and both are real: flattening is
@@ -206,7 +191,7 @@ def flat_blocker(
         # anyway (another symbol), "flatten first" is only half the answer: the owner of that
         # position is a strategy, and handing the run to it is the way through that keeps the
         # position. Saying so is the difference between an instruction and a dead end.
-        wanted = str(held_ok_symbol or getattr(settings, "instrument", "") or "").strip().upper()
+        wanted = str(getattr(settings, "instrument", "") or "").strip().upper()
         foreign = [
             payload
             for state in held

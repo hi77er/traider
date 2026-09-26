@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Dict
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from src.config import effective
@@ -68,39 +68,34 @@ def create_strategy(body: StrategyCreate, settings: Settings = Depends(get_effec
     return rules_service.create_strategy(settings, body.name)
 
 
-@router.post(
-    "/select",
-    dependencies=[
-        Depends(require_trading_off),
-        # Selecting a DIFFERENT strategy while a position is open used to be refused outright,
-        # because the flatten that follows would run against the NEW strategy's instrument and
-        # environment and miss the position entirely.
-        #
-        # The check now lives in the handler instead, because the answer depends on WHICH
-        # strategy is being selected: handing the run to the position's OWNER — the strategy
-        # whose instrument the open position is in, in the account this run trades — is the one
-        # way through that keeps the position, and it has to be reachable. Without it the
-        # operator could neither arm the strategy holding the position nor select it, so their
-        # only options were to close the position by hand or to leave it open with nothing
-        # managing it. Selecting anything else still refuses; the position's owner takes it over
-        # and can then only close it (see ``LiveDriver.adopt_broker_position``).
-    ],
-)
+@router.post("/select", dependencies=[Depends(require_trading_off)])
 def select_strategy(body: StrategyCreate, settings: Settings = Depends(get_effective_settings_dep)) -> dict:
-    """Switch the active strategy to an existing one (same as create-if-exists)."""
-    # The strategy being selected, resolved to the instrument IT trades: that is what decides
-    # whether the open position is one it could take over.
-    environment = str(getattr(settings, "execution_env", "paper") or "paper").lower()
-    blocker = trading_service.flat_blocker(
-        settings,
-        action="The active strategy cannot be changed while a position is open",
-        unreadable_blocks=False,
-        trade_env=environment,
-        held_ok_in_account=environment,
-        held_ok_symbol=trading_service.instrument_of(settings, body.name),
-    )
-    if blocker:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=blocker)
+    """Switch the active strategy to an existing one (same as create-if-exists).
+
+    **An open position does not refuse this.** A position belongs to the ACCOUNT, not to the
+    strategy that happened to open it, and every strategy is scoped to the instrument its own
+    configuration names: ``AlpacaBroker`` is built for ``settings.instrument``, ``position()``
+    reads that symbol alone, and the dataset, the orders and the state file follow it. So what
+    a switch does to a position already open is decided by the two instruments, and in both
+    cases the machine needs no permission to proceed:
+
+    * **a different instrument** — the new run never sees the old position. It opens and closes
+      only its own symbol, and the other one stays exactly as it was until something else
+      closes it (the Session monitor's *Stop trading & flatten*, or the operator);
+    * **the same instrument** — the new strategy ADOPTS it on its next tick (``LiveDriver
+      .adopt_broker_position``: the levels come from the broker's resting exits where they
+      exist, and from the configuration otherwise) and then continues normally: the position
+      is closed by the signal or the level that its own rules produce, and entries resume once
+      it is flat.
+
+    This used to refuse while anything was open, which left the operator no way to move the run
+    off a strategy whose position they wanted kept. What replaced the refusal is a WARNING: the
+    lab asks before it sends this, quoting what is open and which of the two cases above is
+    about to happen, because that difference is the whole of the decision. The ask lives in the
+    page rather than in a ``confirm`` flag here because nothing is spent by switching — the
+    consent worth capturing is the operator's understanding of what happens to the position,
+    and that is best said in front of them.
+    """
     return rules_service.create_strategy(settings, body.name)
 
 
